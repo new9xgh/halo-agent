@@ -473,11 +473,11 @@
   coreX = cx; coreY = cy; mouse.x = cx; mouse.y = cy
   requestAnimationFrame(frame)
 
-  // Greet whoever just opened this. The first time a human meets the face it
-  // shouldn't sit in silence until they happen to know an API exists — it
-  // introduces itself, once, a beat after load (so the field has settled and
-  // the gather-from-scatter reads). After that it rests and watches.
-  setTimeout(() => self.intro(), 600)
+  // The opening greeting is driven by whoever opens the face (the admin Face
+  // button posts `self.intro()` on open — see message-input.tsx), NOT self-
+  // fired here. A self-fired intro on load raced that post on first open and
+  // played the greeting twice; leaving the single external trigger as the one
+  // door means exactly one hello, on both first and subsequent opens.
 })()
 </script>
 </body>
