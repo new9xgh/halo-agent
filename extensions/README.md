@@ -54,4 +54,3 @@ _None currently._
 |----|---------|
 | [canvas-pptx](skills/canvas-pptx/) | Create, edit, and inspect PowerPoint (.pptx) files — Halo-adapted port of Anthropic's canvas_pptx |
 | [nova-web-search](skills/nova-web-search/) | Real-time web search via Amazon Nova 2 Lite's `nova_grounding` — replacement for `web_search` |
-| [send-file](skills/send-file/) | Send images, videos, or files as attachments to the current user across all channels |
