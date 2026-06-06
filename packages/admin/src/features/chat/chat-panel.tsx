@@ -36,7 +36,9 @@ function AgentSelector() {
     if (!activeProject?.path) return
     api.agentConfigs.list(activeProject.path).then((res) => {
       const opts: AgentOption[] = res.agents
-        .filter((a) => !(a as AgentOption & { overridden?: boolean; disabled?: boolean }).overridden && !(a as AgentOption & { disabled?: boolean }).disabled)
+        // Internal agents (self-evolution etc.) aren't selectable for a chat
+        // session — they're delegated to by other agents, never driven directly.
+        .filter((a) => !a.overridden && !a.disabled && !a.internal)
         .map((a) => ({ id: a.id, name: a.name, scope: a.scope, priority: a.priority ?? 0 }))
         .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name))
       setAgents(opts)

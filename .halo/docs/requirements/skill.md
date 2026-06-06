@@ -84,16 +84,16 @@ A skill can declare a minimum session access level in frontmatter:
 
 ```yaml
 ---
-name: Manage Cron Jobs
+name: Organize Workspace
 description: ...
-command: /manage-cron-jobs
-requiresAccess: full
+command: /organize-workspace
+requiresAccess: workspace
 ---
 ```
 
-When set, the skill is hidden from agents whose session access level is more restricted (e.g. a `readonly` Telegram channel can't see or invoke a `requiresAccess: full` skill). The check runs both at metadata-load time (so it never enters the system prompt's `<available_skills>` block) and at slash-command execution time (server-side gate, so a user typing the slash manually still hits it).
+When set, the skill is hidden from agents whose session access level is more restricted (e.g. a `readonly` Telegram channel can't see or invoke a `requiresAccess: full` skill). The check runs both at metadata-load time (so it never enters the system prompt's `<available_skills>` block) and at slash-command execution time (server-side gate, so a user typing the slash manually still hits it). `requiresAccess` is independent of `command`: an agent-activated-only skill (no `command`) is still hidden from too-restricted sessions.
 
-Default is unset → the skill is visible to all access levels. `full` is the standard "admin-only" marker for skills that mutate global state (cron, share-workspace, etc.).
+Default is unset → the skill is visible to all access levels. `full` is the standard "admin-only" marker for skills that mutate global state (cron, share-workspace, etc. — these are agent-activated only, no slash command).
 
 ### Settings integration
 

@@ -113,12 +113,14 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
   // in the admin UI wouldn't take effect for `/help` until the next time
   // a real chat message updated the row — confusingly hiding skills the
   // user just gave themselves permission for.
-  const skills = active
-    ? await ctx.sm.listAvailableSkillCommandsForAgent(
-        ctx.sm.getSessionById(active)?.agentId ?? 'default',
-        ctx.accessLevel,
-      )
-    : []
+  // Resolve which agent's skills to list. With an active session, use its
+  // agent. Without one (e.g. right after a `/ws` switch — the channel
+  // restarts with no session yet in the new workspace), fall back to
+  // `default` so skill commands still show in /help instead of vanishing
+  // until the user sends a first message. Mirrors the cold-start fallback
+  // in listAvailableSkillCommands.
+  const helpAgentId = (active && ctx.sm.getSessionById(active)?.agentId) || 'default'
+  const skills = await ctx.sm.listAvailableSkillCommandsForAgent(helpAgentId, ctx.accessLevel)
 
   // Two-pass render so descriptions align: first compute each command's
   // "head" (slashName + argHint), then pad to the longest head before
@@ -195,7 +197,9 @@ export function execCompact(ctx: CommandContext, logPrefix: string): CommandResu
 export async function execNew(ctx: CommandContext): Promise<CommandResult> {
   const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
   const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
-  const top = all.filter((a) => !a.disabled).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]
+  // Internal agents (self-evolution etc.) are delegated to by other agents,
+  // never started directly by a channel user — skip them when picking a default.
+  const top = all.filter((a) => !a.disabled && !a.internal).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]
   const agentId = top?.id ?? 'default'
   const agentName = top?.name ?? 'default'
   const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
@@ -289,7 +293,9 @@ export async function execAgents(ctx: CommandContext): Promise<CommandResult> {
   const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
   const seen = new Map<string, typeof all[0]>()
   for (const a of all) {
-    if (a.disabled) continue
+    // Internal agents (self-evolution etc.) aren't user-selectable — they're
+    // delegated to by other agents, never started directly from a channel.
+    if (a.disabled || a.internal) continue
     if (!seen.has(a.id) || a.scope === 'workspace') seen.set(a.id, a)
   }
   const agents = [...seen.values()]
@@ -315,7 +321,9 @@ export async function execAgent(ctx: CommandContext, arg: string): Promise<Comma
   const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
   const seen = new Map<string, typeof all[0]>()
   for (const a of all) {
-    if (a.disabled) continue
+    // Internal agents (self-evolution etc.) aren't user-selectable — they're
+    // delegated to by other agents, never started directly from a channel.
+    if (a.disabled || a.internal) continue
     if (!seen.has(a.id) || a.scope === 'workspace') seen.set(a.id, a)
   }
   const agents = [...seen.values()]

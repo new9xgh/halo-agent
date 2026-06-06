@@ -1,7 +1,6 @@
 ---
 name: Share Workspace
 description: Package the current workspace's prompt environment (.halo/ config) into a shareable zip — receiver gets the same agents/skills/prompts setup. Activate when the user asks to "share / package / bundle / export" the workspace.
-command: /share-workspace
 requiresAccess: full
 ---
 

@@ -41,11 +41,7 @@ Claude Code on a developer's laptop wants to talk to a halo agent running in an 
 
 ## Halo-to-halo bindings via `create-halo-acp`
 
-The most common use of this adapter isn't a third-party ACP client — it's *another halo agent* calling out to a remote halo workspace. To make that ergonomic, halo ships a meta-skill:
-
-```
-/create-halo-acp
-```
+The most common use of this adapter isn't a third-party ACP client — it's *another halo agent* calling out to a remote halo workspace. To make that ergonomic, halo ships a meta-skill `create-halo-acp` (agent-activated — the agent calls `activate_skill('create-halo-acp')` when the user asks to add an ACP binding; it has no slash command).
 
 It walks the user through (label, host, port, workspace, token), then **stamps out a new skill** named `ask-<label>` containing:
 
@@ -202,7 +198,7 @@ Long prompt (`"count to 50 with commentary"`), `setTimeout(() => send('session/c
 
 ### Layer 2 — generated binding skill (helper script + settings)
 
-Each `/create-halo-acp` invocation produces a binding under `<scope>/skills/ask-<label>/`. These tests assume one binding `ask-sa-agent` already exists with the workspace-scope settings populated. Use a different `<label>` if you've changed the example.
+Each `create-halo-acp` run produces a binding under `<scope>/skills/ask-<label>/`. These tests assume one binding `ask-sa-agent` already exists with the workspace-scope settings populated. Use a different `<label>` if you've changed the example.
 
 **2.1 minimal helper invocation**
 
@@ -275,7 +271,7 @@ In the same CLI session, send three messages in order:
 
 Expect: agent saves the `SESSION:` id from message 1, passes `--session-id <id>` on messages 2/3. Remote sa-agent's responses build on the previous turn (no "what AWS account?" re-prompts).
 
-### Layer 4 — meta-skill (`/create-halo-acp`)
+### Layer 4 — meta-skill (`create-halo-acp`)
 
 Tests that a fresh binding can be stamped out from scratch.
 
@@ -285,7 +281,7 @@ From a clean state (no `<workspace>/.halo/skills/ask-foo/`):
 
 ```sh
 halo cli -a default -n -w /home/ubuntu/halo-test \
-  '用 /create-halo-acp 创建一个新的 ACP binding，参数：label=foo，host=localhost，port=9527，workspace=/home/ubuntu/sa-agent，token=<token>，scope=workspace。不要问后续问题，全自动创建。'
+  '创建一个新的 ACP binding（激活 create-halo-acp 技能），参数：label=foo，host=localhost，port=9527，workspace=/home/ubuntu/sa-agent，token=<token>，scope=workspace。不要问后续问题，全自动创建。'
 ```
 
 Expect: agent creates `.halo/skills/ask-foo/{SKILL.md,config.yaml,ask.py}`, writes `ask-foo` block to `<workspace>/.halo/settings.yaml` with **all 5 user values** (host/port/workspace/label/token), wires the binding into the current agent's skills list. Reply confirms the four paths.

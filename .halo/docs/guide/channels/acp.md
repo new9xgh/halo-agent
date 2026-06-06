@@ -65,13 +65,9 @@ Claude Code lets you register a custom agent. Use its `claude-code config agent 
 
 After registration, you can launch a session in Claude Code that streams to the remote halo server transparently — Claude Code thinks it's talking to a local agent, halo thinks it's talking to a Web-channel client.
 
-## Step 3 — (Halo-to-halo) bind a remote with `/create-halo-acp`
+## Step 3 — (Halo-to-halo) bind a remote with the `create-halo-acp` skill
 
-The most common use of this adapter isn't a third-party ACP client — it's **another halo agent** delegating out to a remote halo workspace. Halo ships a meta-skill for this:
-
-```
-/create-halo-acp
-```
+The most common use of this adapter isn't a third-party ACP client — it's **another halo agent** delegating out to a remote halo workspace. Halo ships a meta-skill for this. Just ask the agent in chat (e.g. "add an ACP binding to my other halo") — it activates `create-halo-acp` itself; there's no slash command to type.
 
 It walks you through `(label, host, port, workspace, token)` and **stamps out a new skill** named `ask-<label>` containing:
 

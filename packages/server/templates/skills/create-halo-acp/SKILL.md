@@ -1,7 +1,6 @@
 ---
 name: Create Halo ACP Binding
 description: Generate a new halo-to-halo ACP bridge skill. The user gives connection details (label, host, port, token, workspace) for a remote halo agent; this command stamps out a fresh `ask-<label>` skill that the local agent can call to relay questions to that remote. Activate when the user says "add an ACP binding", "let me talk to <other halo>", "set up halo-to-halo", "create an ACP connection", or asks to wire a new remote halo workspace.
-command: /create-halo-acp
 ---
 
 # Create Halo ACP Binding

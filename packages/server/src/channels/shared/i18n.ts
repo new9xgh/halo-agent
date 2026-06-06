@@ -12,6 +12,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.list':    { zh: '列出最近会话', en: 'List recent sessions' },
   'cmd.switch':  { zh: '按编号切换会话', en: 'Switch to a session by index' },
   'cmd.stop':    { zh: '中断当前任务', en: 'Stop the running agent task' },
+  'cmd.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
   'cmd.compact': { zh: '压缩上下文', en: 'Compress conversation context' },
   'cmd.context': { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
   'cmd.agents':  { zh: '列出可用 agent', en: 'List available agents' },

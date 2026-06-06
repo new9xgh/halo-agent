@@ -76,5 +76,9 @@ API: `GET/PUT /api/agent-configs/:id/md/:fileType`
 - Sets `selectedAgentId` in the chat store
 - Dispatches a `halo:navigate` event to switch to explorer/chat
 - The user chats with the selected agent in the main chat panel
+- **Not rendered for internal agents** (`internal: true`) — they're delegated to by other agents, never driven directly
+
+### Internal agents
+Agents flagged `internal: true` in agent.yaml (e.g. `__evo_agent__`, `__apply_agent__`, `__score__`) are platform tooling. They are hidden from every user-facing surface: `list_agents` tool, `/agents` / `/agent` channel commands, `/new` default pick, and the chat agent selector — and have no Test button. They stay editable in the management sidebar's collapsed **Internal** group.
 
 Replaces the old built-in test chat panel, giving a more realistic environment (full workspace tools + session persistence).

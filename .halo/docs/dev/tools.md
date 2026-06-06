@@ -250,7 +250,7 @@ Implementation: in-memory sessions return `session.output` (cleared at the start
 
 ### list_agents
 
-List every available agent (global + workspace). Disabled agents (per workspace DB `disabled_items` table) are excluded. No arguments, returns JSON.
+List every available agent (global + workspace). Disabled agents (per workspace DB `disabled_items` table) and internal agents (`internal: true` in agent.yaml — e.g. self-evolution agents) are excluded. No arguments, returns JSON.
 
 ### query_agent
 

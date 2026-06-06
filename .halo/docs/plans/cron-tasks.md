@@ -88,7 +88,7 @@ recent inbound was rarely the cron creator, and the result kept landing
 in a stranger's chat). For **wechat** it stays optional — wechat has a
 QR-bound owner so single-recipient delivery has an obvious target.
 
-Cron jobs created from inside a chat via `/manage-cron-jobs` auto-pin
+Cron jobs created from inside a chat via the `manage-cron-jobs` skill auto-pin
 the originating `chatId` (the channel context exposes it as
 `{{channel.chat_id}}`). Admin-UI cron jobs that don't specify a chatId
 for tg/slack/feishu run silently — the result shows in the cron log,
@@ -296,8 +296,8 @@ The skill walks the agent through:
    readiness warnings (currently only wechat can be `ready=false`).
 5. Writing the appropriate INSERT/UPDATE/DELETE.
 
-**Channel context at skill invocation.** When the user runs
-`/manage-cron-jobs` from inside a telegram / wechat / slack / feishu
+**Channel context at skill invocation.** When the user triggers the
+`manage-cron-jobs` skill from inside a telegram / wechat / slack / feishu
 chat, the channel handler injects structured origin into the skill's
 render context as built-in placeholders: `{{channel.type}}`,
 `{{channel.account_id}}`, `{{channel.chat_id}}`. The skill body uses

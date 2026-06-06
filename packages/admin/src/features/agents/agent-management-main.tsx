@@ -468,13 +468,17 @@ function AgentEditorWithChat({ agent, modelsRegistry, onSaved }: { agent: AgentM
           {view === 'form' && saving && <span className="text-[9px] text-[var(--muted-foreground)]">{t('agent.saving')}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => testAgent(agent.id, activeProject?.id)}
-            className="flex items-center gap-1.5 rounded bg-[var(--secondary)] px-2.5 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]/80"
-          >
-            <Play className="h-3 w-3" />
-            {t('agent.test')}
-          </button>
+          {/* Internal agents (self-evolution etc.) can't be driven directly —
+              they're delegated to by other agents, not chatted with. */}
+          {!agent.internal && (
+            <button
+              onClick={() => testAgent(agent.id, activeProject?.id)}
+              className="flex items-center gap-1.5 rounded bg-[var(--secondary)] px-2.5 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--secondary)]/80"
+            >
+              <Play className="h-3 w-3" />
+              {t('agent.test')}
+            </button>
+          )}
           {view === 'form' && (
             <button
               onClick={() => setView('edit')}

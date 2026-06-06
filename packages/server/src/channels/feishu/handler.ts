@@ -34,6 +34,7 @@ import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
+import { getLang } from '../shared/i18n.js'
 
 function isPathAllowed(filePath: string, workspacePath: string): boolean {
   const resolved = path.resolve(filePath)
@@ -543,7 +544,7 @@ function buildCmdCtx(args: {
     channelLabel: `Feishu: ${chatId}`,
     activeOverrides: state.activeOverrides,
     workspacePath: account.workspacePath,
-    lang: 'zh',
+    lang: getLang(account),
     channel: {
       type: 'feishu',
       accountId: account.accountId,

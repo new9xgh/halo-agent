@@ -255,7 +255,7 @@ export const api = {
   agentConfigs: {
     list(projectId?: string) {
       const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
-      return request<{ agents: Array<{ id: string; name: string; description: string; model: string; path: string; scope: 'global' | 'workspace'; priority: number; overridden?: boolean }> }>(`/agent-configs${qs}`)
+      return request<{ agents: Array<{ id: string; name: string; description: string; model: string; path: string; scope: 'global' | 'workspace'; priority: number; overridden?: boolean; disabled?: boolean; internal?: boolean }> }>(`/agent-configs${qs}`)
     },
     create(data: { name: string; description?: string; scope?: 'global' | 'workspace'; projectId?: string }) {
       return request<{ agent: { id: string; name: string; description: string; model: string; path: string; scope: 'global' | 'workspace' } }>('/agent-configs', { method: 'POST', body: JSON.stringify(data) })

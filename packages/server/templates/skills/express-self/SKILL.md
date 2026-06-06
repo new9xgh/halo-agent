@@ -1,7 +1,6 @@
 ---
 name: Express Self
 description: You have a visual space of your own — a living face at .halo/canvas/self.html that you can drive in real time. Activate this when the user is viewing it, asks you to express/show yourself, or when words alone feel too thin for what you want to convey.
-command: /self
 ---
 
 # Express Self

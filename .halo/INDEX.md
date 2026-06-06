@@ -52,7 +52,7 @@ Halo currently supports these input channels — onboarding guides at [guide/cha
 
 Separate from the channel system: a stdio bridge (`halo acp`, package `@turmind/halo-acp-adapter`) that lets ACP clients — most notably Claude Code — drive a halo server as if it were a native ACP agent. Internally it just translates ACP JSON-RPC into the existing web channel HTTP + SSE, reusing the same web-channel tokens. ACP sessionId === halo sessionId, so `session/load` works without adapter-side persistence (client owns ids). v1 covers `initialize` / `session/new` / `session/load` / `session/prompt` / `session/cancel`; reverse fs and `requestPermission` are intentionally out of scope.
 
-For **halo-to-halo** delegation (one workspace's agent calling out to another's), halo ships a `/create-halo-acp` meta-skill that stamps out per-remote `ask-<label>` bindings (each with its own slash command, settings namespace, and admin form). Multiple bindings coexist; each uses the ACP adapter under the hood. See [dev/acp-adapter.md](docs/dev/acp-adapter.md).
+For **halo-to-halo** delegation (one workspace's agent calling out to another's), halo ships a `create-halo-acp` meta-skill (agent-activated only, not a slash command) that stamps out per-remote `ask-<label>` bindings (each with its own slash command, settings namespace, and admin form). Multiple bindings coexist; each uses the ACP adapter under the hood. See [dev/acp-adapter.md](docs/dev/acp-adapter.md).
 
 ### Why both inbound and outbound ACP?
 

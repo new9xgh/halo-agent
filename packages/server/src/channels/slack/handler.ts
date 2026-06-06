@@ -29,6 +29,8 @@ import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
+import { builtinCommandNames } from '../../commands/index.js'
+import { getLang } from '../shared/i18n.js'
 
 /** Sandbox guard for outbound file references — only paths under the
  *  account's own workspace are allowed (or the temp dir, for assistant-
@@ -48,10 +50,15 @@ import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js
  * The pattern requires the slash to be preceded by start-of-line, a
  * space, or punctuation we'd see in help text (`(`/`,`/`、`).
  */
-const COMMAND_NAMES = ['help', 'stop', 'compact', 'new', 'list', 'switch', 'ws', 'agents', 'agent', 'context', 'qr']
+/** Slack-only commands not in the shared builtin registry. */
+const SLACK_EXTRA_COMMANDS = ['qr']
 
-function slashToBang(text: string): string {
-  const re = new RegExp(`(^|[\\s(\\[,，、])\\/(${COMMAND_NAMES.join('|')})\\b`, 'g')
+function slashToBang(text: string, commandNames: string[]): string {
+  if (commandNames.length === 0) return text
+  // Escape regex metacharacters in command names (skill commands can contain
+  // `-`, which is safe, but stay defensive against future names).
+  const alternation = commandNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  const re = new RegExp(`(^|[\\s(\\[,，、])\\/(${alternation})\\b`, 'g')
   return text.replace(re, '$1!$2')
 }
 
@@ -422,7 +429,15 @@ async function handleInbound(args: {
     if (ctx) {
       const result = await dispatchCommand(ctx, normalized.split(/\s+/)[0]!, normalized.split(/\s+/).slice(1).join(' '), { channelName: 'slack' })
       if (result) {
-        const rewritten = slashToBang(result.text)
+        // Rewrite set = builtins + the active session's skill slash commands
+        // (so `/organize-workspace` etc. in /help also become `!…`) + Slack
+        // extras. Derived live so it never drifts from the real command list.
+        const active = sharedFindActive(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+        const skillNames = active
+          ? (await ctx.sm.listAvailableSkillCommands(active)).map((d) => d.name)
+          : []
+        const names = [...builtinCommandNames(), ...skillNames, ...SLACK_EXTRA_COMMANDS]
+        const rewritten = slashToBang(result.text, names)
         await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: formatForSlack(rewritten) })
         return
       }
@@ -525,7 +540,7 @@ function buildCmdCtx(args: {
     channelLabel: `Slack: ${channelId}`,
     activeOverrides: state.activeOverrides,
     workspacePath: account.workspacePath,
-    lang: 'zh',
+    lang: getLang(account),
     channel: {
       type: 'slack',
       accountId: account.accountId,

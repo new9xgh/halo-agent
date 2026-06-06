@@ -10,6 +10,7 @@ import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, type CommandContext } from '../shared/commands.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
+import { builtinCommandNames } from '../../commands/index.js'
 
 interface AccountRunner {
   accountId: string
@@ -162,8 +163,9 @@ async function runBot(args: {
     await ctx.reply(t('handler.start_greeting', lang))
   })
 
-  const SHARED_COMMANDS = ['help', 'stop', 'compact', 'new', 'list', 'switch', 'ws', 'agents', 'agent', 'context'] as const
-  for (const cmd of SHARED_COMMANDS) {
+  // Derived from the builtin registry (not a hardcoded list) so a newly
+  // added command is registered as a Telegram bot command automatically.
+  for (const cmd of builtinCommandNames()) {
     bot.command(cmd, async (ctx) => {
       const cmdCtx = buildCmdCtx(ctx.from?.id ?? 0, ctx.chat?.id)
       if (!cmdCtx) { await ctx.reply(t('handler.workspace_gone', lang)); return }

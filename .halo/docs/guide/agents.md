@@ -119,6 +119,8 @@ Top-right `Test` button:
 
 Better than the old built-in test chat — it has full workspace tools + session persistence.
 
+Internal agents (`internal: true`, e.g. self-evolution agents) have no Test button and never appear in the chat agent selector or channel agent lists (`/agents`, `/agent`, `/new`) — they're delegated to by other agents, never driven directly. They remain editable in the management sidebar's collapsed **Internal** group.
+
 ## Delete
 
 Right-click → Delete. Constraints:
