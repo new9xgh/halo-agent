@@ -367,8 +367,15 @@ export const config = {
     get maxConcurrentApply(): number {
       return settingsInt('general.evolution.max_concurrent_apply', 1)
     },
+    // Heartbeat-loss threshold the ticker uses to decide a wrapper died and
+    // requeue its run. MUST stay above the wrapper's per-phase wall-clock cap
+    // (PHASE_TIMEOUT_SEC = 600s in evo-wrapper.ts): a healthy wrapper keeps
+    // heart-beating every 60s even while a phase burns its full 10min, but if
+    // this threshold were below that cap a transient DB-write hiccup could let
+    // the ticker wrongly requeue and spawn a *second* wrapper alongside the
+    // live one. 12min leaves headroom over the 10min phase cap.
     get runTimeoutMinutes(): number {
-      return settingsInt('general.evolution.run_timeout_minutes', 5)
+      return settingsInt('general.evolution.run_timeout_minutes', 12)
     },
     get applyTimeoutMinutes(): number {
       return settingsInt('general.evolution.apply_timeout_minutes', 5)

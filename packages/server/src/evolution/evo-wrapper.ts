@@ -161,11 +161,15 @@ interface CliResult {
  * pass long briefs/prompts without overflowing the OS command-line limit
  * (Windows ENAMETOOLONG).
  *
- * `timeoutSec` (optional): a Node timer kills the child with SIGTERM after the
- * limit and the result reports exit code 124 (same contract the Linux-only
- * `timeout` binary used to give — but cross-platform). The child is `halo cli`
- * running its agent in-process (it doesn't fork further), so SIGTERM on the
- * direct child is enough; nothing is orphaned.
+ * `timeoutSec` (optional): a Node timer kills the child after the limit and the
+ * result reports exit code 124 (same contract the Linux-only `timeout` binary
+ * used to give — but cross-platform). The child is `halo cli` running an agent
+ * that itself forks grandchildren via shell_exec (sqlite3, grep, npx …), so a
+ * SIGTERM to the direct child PID alone leaves those orphaned and the agent's
+ * in-flight LLM turn can run to completion in the background — the "timed out
+ * but still running" / "ran twice" bug. We instead put the child in its own
+ * process group (detached) and signal the whole group, with a SIGKILL escalation
+ * if it doesn't exit within the grace window.
  */
 function spawnProc(
   bin: string,
@@ -199,6 +203,10 @@ function spawnProc(
       // if a multi-KB brief rides as an argv element).
       stdio: [stdinInput === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: process.env,
+      // Own process group (POSIX) so the timeout can signal the whole tree —
+      // the cli plus every shell_exec grandchild — not just the direct PID.
+      // No-op contract on Windows, where we kill by PID via taskkill /T below.
+      detached: process.platform !== 'win32',
       // Suppress the console window the `cmd.exe /c` wrapper would otherwise
       // pop up on Windows (CREATE_NO_WINDOW). No-op on macOS/Linux.
       windowsHide: true,
@@ -217,8 +225,34 @@ function spawnProc(
     // (Windows has no `timeout` command with this semantic). `timedOut` lets
     // the exit handler override the code regardless of the signal-induced one.
     let timedOut = false
+    let sigkillTimer: ReturnType<typeof setTimeout> | null = null
+    // Kill the child AND everything it forked. POSIX: the child leads its own
+    // process group (detached above), so negating the pid signals the group.
+    // Windows: taskkill /T walks the child's process tree. SIGTERM first for a
+    // clean exit, then SIGKILL after a grace window if it's still alive (a wedged
+    // LLM stream or a stuck shell_exec grandchild won't honour SIGTERM).
+    const killTree = (signal: 'SIGTERM' | 'SIGKILL') => {
+      if (!child.pid) return
+      try {
+        if (process.platform === 'win32') {
+          if (signal === 'SIGKILL') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'])
+          else child.kill('SIGTERM')
+        } else {
+          process.kill(-child.pid, signal)
+        }
+      } catch { /* group already gone — nothing to kill */ }
+    }
     const killTimer = timeoutSec
-      ? setTimeout(() => { timedOut = true; child.kill('SIGTERM') }, timeoutSec * 1000)
+      ? setTimeout(() => {
+          timedOut = true
+          writeLog(logFd, `[wrapper] timeout ${timeoutSec}s — killing process group (SIGTERM)\n`)
+          killTree('SIGTERM')
+          sigkillTimer = setTimeout(() => {
+            writeLog(logFd, `[wrapper] still alive 10s after SIGTERM — SIGKILL\n`)
+            killTree('SIGKILL')
+          }, 10_000)
+          sigkillTimer.unref?.()
+        }, timeoutSec * 1000)
       : null
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
@@ -230,6 +264,7 @@ function spawnProc(
     })
     child.on('exit', (code, signal) => {
       if (killTimer) clearTimeout(killTimer)
+      if (sigkillTimer) clearTimeout(sigkillTimer)
       const exitCode = timedOut ? 124 : (code ?? 1)
       writeLog(logFd, `[wrapper] proc exit code=${code} signal=${signal}${timedOut ? ' (timed out → 124)' : ''} stdout=${stdout.length}B stderr=${stderr.length}B\n`)
       tee?.end()
@@ -237,6 +272,7 @@ function spawnProc(
     })
     child.on('error', (err) => {
       if (killTimer) clearTimeout(killTimer)
+      if (sigkillTimer) clearTimeout(sigkillTimer)
       writeLog(logFd, `[wrapper] spawn error: ${err.message}\n`)
       tee?.write(`\n[spawn error] ${err.message}\n`)
       tee?.end()
