@@ -73,10 +73,11 @@ const DRY_RUN_TIMEOUT_SEC = 180
  *  the wrapper process itself lives, so a sub-cli that wedges — a model looping
  *  over tool calls, a stalled response stream — would otherwise run unbounded
  *  without the ticker's heartbeat-timeout ever firing (the wrapper is healthy;
- *  only the inner cli is stuck). 5 minutes is generous for one pass; past it,
- *  kill and let the phase fail. Same SIGTERM→exit-124 contract as the
- *  dry-run timeout. */
-const PHASE_TIMEOUT_SEC = 300
+ *  only the inner cli is stuck). 10 minutes covers a multi-turn draft on the
+ *  default __evo_agent__ model (Opus + xhigh thinking), which legitimately
+ *  needed >5min on a long source session; past it, kill and let the phase
+ *  fail. Same SIGTERM→exit-124 contract as the dry-run timeout. */
+const PHASE_TIMEOUT_SEC = 600
 
 /** Prompt-surface entries copied into the evo sandbox (read side — every
  *  LLM phase reads these via buildEvoSandbox). This is the source of truth
