@@ -266,19 +266,97 @@ function fetchTargetArchNatives() {
 
 // Ensure the @parcel/watcher native binary for the TARGET platform/arch is
 // present in server-runtime. parcel resolves `@parcel/watcher-<plat>-<arch>`
-// (linux adds a -glibc/-musl suffix) via require; we npm-install that exact
-// package as a sibling so it's found regardless of host.
+// (linux adds a -glibc/-musl suffix) at runtime via `require(name)`, which
+// walks up node_modules from the main @parcel/watcher package — so the binary
+// package must sit in an ancestor `node_modules/@parcel/`.
+//
+// Why not `npm install @parcel/watcher-win32-x64`: that package declares
+// os:win32 / cpu:x64, so npm on a mac host SILENTLY SKIPS it (refuses to
+// install a foreign-platform package) and the target binary never lands — the
+// "no prebuild or local build found" crash on the packaged win/x64 app. We
+// instead fetch the version-matched tarball with `npm pack` (which has no
+// platform gate) and extract it ourselves. We also delete the host's binary
+// package that pnpm deploy hard-linked in, so the tree only carries the target.
 function installParcelWatcherBinary() {
-  const watcherDirs = resolvePkgDirs('@parcel/watcher')
-  if (watcherDirs.length === 0) return
-  // win32/darwin have no libc suffix; linux desktop builds aren't produced here.
-  const pkgName = `@parcel/watcher-${TARGET_PLATFORM}-${TARGET_ARCH}`
-  for (const wDir of watcherDirs) {
-    const target = path.join(wDir, 'node_modules', `@parcel`, `watcher-${TARGET_PLATFORM}-${TARGET_ARCH}`)
-    if (fs.existsSync(target)) continue
-    console.log(`[stage] installing ${pkgName} into ${wDir}`)
-    execSync(`npm install --no-save --no-audit --no-fund "${pkgName}@2.5.6"`, { cwd: wDir, stdio: 'inherit' })
+  // pnpm's isolated layout scatters @parcel across several spots — the symlink
+  // farm (node_modules/@parcel), the virtual store (.pnpm/node_modules/@parcel),
+  // and each package's own dir (.pnpm/@parcel+watcher@x/node_modules/@parcel).
+  // resolvePkgDirs misses them (symlink + `+`-vs-`@` naming), so we don't rely
+  // on it: walk node_modules for every `@parcel` dir that contains the main
+  // `watcher` package and fix the binary in each. `require('@parcel/watcher-…')`
+  // resolves from the dir holding `watcher`, so that's exactly the set to fix.
+  for (const scope of findParcelScopesWithWatcher(path.join(SERVER_RT, 'node_modules'))) {
+    fixParcelWatcherIn(scope, path.join(scope, 'watcher'))
   }
+  // pnpm also gives the host's binary its own top-level store entry
+  // (.pnpm/@parcel+watcher-darwin-arm64@x) that no symlink points at after the
+  // fix above — nothing requires it, but drop it so the tree carries no foreign
+  // binary at all (dead MBs + misleading).
+  const pnpmDir = path.join(SERVER_RT, 'node_modules', '.pnpm')
+  const want = `watcher-${TARGET_PLATFORM}-${TARGET_ARCH}`
+  if (fs.existsSync(pnpmDir)) {
+    for (const entry of fs.readdirSync(pnpmDir)) {
+      const m = /^@parcel\+(watcher-(?:darwin|win32|linux)-(?:x64|arm64))@/.exec(entry)
+      if (m && m[1] !== want) fs.rmSync(path.join(pnpmDir, entry), { recursive: true, force: true })
+    }
+  }
+}
+
+// Find every `…/@parcel` directory under `root` that contains a `watcher`
+// entry (real dir or symlink). Bounded-depth manual walk — node_modules nests,
+// but @parcel always sits one level under some node_modules.
+function findParcelScopesWithWatcher(root) {
+  const out = []
+  const stack = [root]
+  while (stack.length) {
+    const dir = stack.pop()
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.name === '@parcel' && e.isDirectory()) {
+        if (fs.existsSync(path.join(full, 'watcher'))) out.push(full)
+      } else if (e.isDirectory() && (e.name === 'node_modules' || e.name === '.pnpm' || e.name.startsWith('@'))) {
+        stack.push(full) // only descend the paths where @parcel can appear
+      }
+    }
+  }
+  return out
+}
+
+// Put the TARGET's @parcel/watcher binary package into `parcelScope` (a
+// `node_modules/@parcel` dir) and remove any other-platform binary that pnpm
+// deploy / npm dragged in. `watcherPkgDir` is the main @parcel/watcher dir,
+// used only to read the expected binary version. Shared by server-runtime
+// (pnpm layout) and cli-runtime (flat npm layout).
+function fixParcelWatcherIn(parcelScope, watcherPkgDir) {
+  if (!fs.existsSync(parcelScope)) return
+  const want = `watcher-${TARGET_PLATFORM}-${TARGET_ARCH}` // win32/darwin: no libc suffix
+  // Version must match the installed @parcel/watcher's binary dep range so we
+  // never drift from the lockfile; fall back to a pinned version.
+  let version = '2.5.6'
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(watcherPkgDir, 'package.json'), 'utf-8'))
+    version = (pkg.optionalDependencies?.[`@parcel/${want}`] || version).replace(/^[^\d]*/, '')
+  } catch { /* fall back to pinned version */ }
+
+  // Drop any non-target binary package (e.g. watcher-darwin-arm64 when staging
+  // for win32-x64) — dead weight and misleading.
+  for (const entry of fs.readdirSync(parcelScope)) {
+    if (/^watcher-(darwin|win32|linux)-(x64|arm64)/.test(entry) && entry !== want) {
+      fs.rmSync(path.join(parcelScope, entry), { recursive: true, force: true })
+    }
+  }
+  const target = path.join(parcelScope, want)
+  if (fs.existsSync(path.join(target, 'package.json'))) return
+  console.log(`[stage] fetching @parcel/${want}@${version} into ${parcelScope}`)
+  // `npm install @parcel/watcher-win32-x64` is SKIPPED by npm on a foreign host
+  // (the package declares os/cpu); `npm pack` has no platform gate, so fetch the
+  // tarball and extract it ourselves.
+  const tgz = execSync(`npm pack "@parcel/${want}@${version}" --silent`, { cwd: parcelScope }).toString().trim()
+  fs.mkdirSync(target, { recursive: true })
+  execSync(`tar -xzf "${tgz}" -C "${want}" --strip-components=1`, { cwd: parcelScope, stdio: 'inherit' })
+  fs.rmSync(path.join(parcelScope, tgz), { force: true })
 }
 
 // Stage the CLI runtime (halo tui / cli / setup / acp) as a self-contained
@@ -332,6 +410,13 @@ function stageCliRuntime() {
       if (platDir !== keepPlat) fs.rmSync(path.join(ptyPrebuilds, platDir), { recursive: true, force: true })
     }
     console.log(`[stage] trimmed cli-runtime node-pty prebuilds (kept ${keepPlat})`)
+  }
+  // @parcel/watcher binary: same cross-platform trap as server-runtime — npm
+  // installed only the host's binary package, so swap in the target's. Flat
+  // npm layout → the @parcel scope is directly under cli-runtime/node_modules.
+  const cliWatcher = path.join(CLI_RT, 'node_modules', '@parcel', 'watcher')
+  if (fs.existsSync(cliWatcher)) {
+    fixParcelWatcherIn(path.join(CLI_RT, 'node_modules', '@parcel'), cliWatcher)
   }
 }
 
