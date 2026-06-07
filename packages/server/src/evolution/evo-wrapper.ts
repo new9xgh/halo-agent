@@ -63,10 +63,11 @@ interface CliArgs {
  *  Total dry-run attempts is FIX_BUDGET + 1 = 2. */
 const FIX_BUDGET = 1
 
-/** Timeout for each dry-run sub-cli, in seconds. Wrapped via `timeout(1)`.
- *  180s gives the sub-agent room to do real LLM work + a couple of tool
- *  calls; shorter values (60s) were tripping on legitimate but slow runs. */
-const DRY_RUN_TIMEOUT_SEC = 180
+/** Timeout for each dry-run sub-cli, in seconds. The dry-run runs the user's
+ *  target agent (which may be a slow model doing several tool calls), so it
+ *  gets the same generous 600s budget as the LLM-driven phases — 180s was
+ *  tripping legitimate-but-slow runs. */
+const DRY_RUN_TIMEOUT_SEC = 600
 
 /** Wall-clock cap for the LLM-driven phases (draft / fix / score / apply-merge
  *  / apply-score), in seconds. The wrapper heartbeats the row for as long as
