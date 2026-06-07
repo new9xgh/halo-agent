@@ -290,13 +290,6 @@ function createWindow() {
   // entirely — so workspace switching (which does `location.href = ...`)
   // looks like a no-op. Auto-allow the unload.
   mainWindow.webContents.on('will-prevent-unload', (event) => { event.preventDefault() })
-  // Forward find results to the renderer's find bar (see halo:find IPC above).
-  mainWindow.webContents.on('found-in-page', (_e, result) => {
-    mainWindow?.webContents.send('halo:find-result', {
-      activeMatchOrdinal: result.activeMatchOrdinal,
-      matches: result.matches,
-    })
-  })
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`)) {
       return { action: 'allow' }
@@ -305,23 +298,6 @@ function createWindow() {
     return { action: 'deny' }
   })
 }
-
-// In-page find (Cmd/Ctrl+F) for non-Monaco surfaces — markdown preview, chat,
-// any plain DOM. Monaco files keep their own built-in find (the renderer only
-// routes Cmd+F here when focus is NOT inside a .monaco-editor). Electron's
-// findInPage does the search/highlight/scroll but ships no input UI, so the
-// admin renders its own find bar (window.haloFind) and we bridge the calls.
-// `found-in-page` carries match counts back; forward them to the renderer so
-// the bar can show "n/total".
-ipcMain.handle('halo:find', (_e, text, opts) => {
-  if (!mainWindow || !text) return
-  mainWindow.webContents.findInPage(text, opts || {})
-})
-ipcMain.handle('halo:find-stop', (_e, action) => {
-  // 'clearSelection' leaves no highlight; 'keepSelection' keeps the last match
-  // selected (used when the user closes the bar after landing on a result).
-  if (mainWindow) mainWindow.webContents.stopFindInPage(action || 'clearSelection')
-})
 
 // Always-on-top toggle, driven by a pin button in the admin UI (preload
 // exposes `window.haloPin`). Renderer can't call setAlwaysOnTop itself, so
