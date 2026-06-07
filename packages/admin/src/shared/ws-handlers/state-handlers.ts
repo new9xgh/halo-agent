@@ -1,6 +1,7 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useTaskStore } from '@/shared/stores/task-store'
+import { bumpSessionBus } from '@/shared/session-bus'
 import type { WsSnapshotMsg, ChatMessage } from '@/shared/types'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
@@ -51,6 +52,14 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
         useChatStore.getState().setMaxContextTokens(snap.maxContextTokens as number)
       }
     }),
+  )
+
+  // A root session was created server-side (channel / TUI / CLI / another web
+  // client) — bump the shared session bus so every mounted session list
+  // (chat-header dropdown, sessions sidebar, history count) re-fetches. The
+  // admin's own delete already bumps locally; this covers the push direction.
+  unsubs.push(
+    wsClient.on('session:changed', () => bumpSessionBus()),
   )
 
   return () => unsubs.forEach((fn) => fn())

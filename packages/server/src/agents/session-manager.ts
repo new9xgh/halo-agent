@@ -24,6 +24,7 @@ import {
   type AgentYamlConfig,
 } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
+import { broadcast } from '../ws/broadcast.js'
 import { createDb, getDisabledSet, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull, desc, lt, gte, inArray } from 'drizzle-orm'
@@ -1267,6 +1268,12 @@ export class SessionManager implements SessionManagerInternals {
     this.emitEvent(sessionId, { type: 'context', agentId, agentName: agentName ?? agentId, systemPrompt, taskId: parentId ? sessionId : undefined })
 
     console.debug(`[SessionManager] Created session ${sessionId} for agent "${agentId}" (parent: ${parentId ?? 'none'}, workingDir: ${workingDir ?? 'project root'})`)
+
+    // Push so admin session lists refresh live (a new root session created by a
+    // channel / TUI / CLI / web client, not just the admin's own UI). Only root
+    // sessions surface in those lists — sub-agent children would be pure noise.
+    if (parentId === null) broadcast({ type: 'session:changed' })
+
     return sessionId
   }
 
