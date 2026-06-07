@@ -19,7 +19,7 @@
  * original marker text — no thumbnail.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { X, FileText, Music, Video, Image as ImageIcon } from 'lucide-react'
 
@@ -152,6 +152,14 @@ function KindIcon({ kind }: { kind: MediaRef['kind'] }) {
 function MediaModal({ media, onClose }: { media: MediaRef; onClose: () => void }) {
   const projectPath = useProjectStore((s) => s.activeProject?.path ?? null)
   const url = buildMediaUrl(media.path, projectPath)
+
+  // Close on Esc (matches the click-on-backdrop / X-button affordances).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   if (!url) return null
 
   return (
