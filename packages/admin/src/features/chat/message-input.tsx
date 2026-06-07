@@ -380,33 +380,20 @@ function CaptureControl() {
     setCaptureSource({ id: deviceId, name: label || t('capture.cameraName'), thumb: '', kind: 'camera' })
   }
 
-  // Camera toggle: bound→unbind; otherwise request the macOS camera permission
-  // (prompts on first use; the actual device only opens momentarily per snap,
-  // so binding just arms it + injects the prompt) and bind on grant. With more
-  // than one webcam, open a picker instead of binding the default blindly;
-  // labels are only populated after the permission grant, so we list() after.
+  // Camera toggle: bound→reopen the picker (to re-aim, switch device, or turn
+  // off); otherwise request the camera permission (prompts on first use) and
+  // open the picker. The picker always shows a live preview — even with a
+  // single camera — so the user can frame the shot (e.g. aim a desk cam at
+  // homework) before binding. labels populate only after the grant, so list()
+  // runs after requestPermission.
   const toggleCamera = async () => {
-    // Already bound: with multiple cameras, reopen the picker so the user can
-    // switch device or turn it off; with one, just unbind (simple toggle).
-    if (captureSource?.kind === 'camera') {
-      if (cameraList.length > 1) { setCameraMenuOpen((v) => !v); return }
-      setCaptureSource(null)
-      return
-    }
+    if (captureSource?.kind === 'camera') { setCameraMenuOpen((v) => !v); return }
     const granted = await camera!.requestPermission()
     if (!granted) { setCameraDenied(true); return }
     const list = await camera!.list()
-    if (list.length <= 1) {
-      bindCamera(list[0]?.deviceId ?? '', list[0]?.label)
-      return
-    }
-    // Multiple cameras: prefer the remembered one if still present, else ask.
+    if (list.length === 0) { bindCamera('', undefined); return } // no enumerable device — bind default
     setCameraList(list)
-    let remembered: string | null = null
-    try { remembered = localStorage.getItem('halo.cameraId') } catch { /* ignore */ }
-    const match = remembered && list.find((c) => c.deviceId === remembered)
-    if (match) bindCamera(match.deviceId, match.label)
-    else setCameraMenuOpen(true)
+    setCameraMenuOpen(true)
   }
 
   return (
@@ -464,7 +451,7 @@ function CaptureControl() {
           </div>
         </div>
       )}
-      {cameraMenuOpen && cameraList.length > 1 && (
+      {cameraMenuOpen && cameraList.length >= 1 && (
         <CameraPicker
           cameras={cameraList}
           activeId={captureSource?.kind === 'camera' ? captureSource.id : null}
