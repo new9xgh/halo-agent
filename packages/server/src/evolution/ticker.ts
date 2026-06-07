@@ -81,11 +81,11 @@ function logTickError(err: unknown): void {
  * via the interval set up in `startEvoTicker`.
  */
 export async function runTick(): Promise<void> {
-  // Skip the work entirely when evolution isn't enabled. We still want the
-  // ticker running (so settings flips take effect without restart) — just
-  // don't churn db / spawn anything until L1.
-  if (config.evolution.level !== 'L1') return
-
+  // No level gate here: the evolution.level (L0/L1) only decides how a run gets
+  // *enqueued* (L0 = manual /note only; L1 = also auto on pre-compact). Once a
+  // row is queued, processing it is level-independent — gating the ticker on L1
+  // used to silently starve manually-queued /note runs whenever the workspace
+  // sat at L0. An empty queue makes every step below a cheap no-op.
   markTimeouts()
   startPendingRuns()
   startPendingApplies()

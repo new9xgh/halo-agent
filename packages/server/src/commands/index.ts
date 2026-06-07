@@ -30,7 +30,7 @@ commandRegistry.registerDescriptor({ name: 'context', slashName: '/context', des
 commandRegistry.registerDescriptor({ name: 'agents',  slashName: '/agents',  description: 'List available agents',                  type: 'server', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Start a session with a specific agent',  type: 'server', argHint: '<name|index>', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'note',    slashName: '/note',    description: 'Queue an evolution run on this session (requires evolution.level: L1)', type: 'server', argHint: '[hint]', source: 'builtin' })
+commandRegistry.registerDescriptor({ name: 'note',    slashName: '/note',    description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 
 /** Names (no leading slash) of every registered builtin command. Single source
  *  of truth for channels that need to enumerate commands — e.g. Telegram's

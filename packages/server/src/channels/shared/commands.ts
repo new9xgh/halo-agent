@@ -98,10 +98,10 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
     // admin browser would just route them to dispatchCommand, get a
     // cmd.unknown back, and confuse the user. Hide them from /help.
     if (d.type === 'client') return false
-    // /note only shows when self-evolution is on and the user can actually
-    // trigger it. Keeps the help list relevant to the channel's permissions.
+    // /note is the manual evo trigger — available at every level (L0 = manual
+    // only, L1 = also auto on pre-compact), so it's gated on access, not level.
+    // Readonly channel guests still can't trigger evo.
     if (d.name === 'note') {
-      if (config.evolution.level !== 'L1') return false
       if (ctx.accessLevel === 'readonly') return false
     }
     return true
@@ -393,15 +393,14 @@ export async function execContext(ctx: CommandContext): Promise<CommandResult> {
  * actual LLM work. We return a chat:system reply right away so the user
  * doesn't wait.
  *
+ * /note is the manual evo trigger and works at every level (L0 = manual only,
+ * L1 = also auto on pre-compact) — so it's not gated on level, only on access.
+ *
  * Refused when:
- *   - settings `general.evolution.level` ≠ 'L1' (off / not enabled)
  *   - the user's accessLevel is 'readonly' (channel guests can't trigger evo)
  *   - no active root session in this workspace for the user
  */
 export function execNote(ctx: CommandContext, arg: string): CommandResult {
-  if (config.evolution.level !== 'L1') {
-    return { text: t('note.disabled', ctx.lang) }
-  }
   if (ctx.accessLevel === 'readonly') {
     return { text: t('note.readonly', ctx.lang) }
   }

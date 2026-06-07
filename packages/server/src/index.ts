@@ -298,9 +298,10 @@ setCronDb(createCronDb(path.join(HALO_HOME, 'global')))
 // by the time the first scheduled fire could happen.
 
 // Ticker: every 30s, scan the evo db for pending tasks + dead heartbeats.
-// No-op when `evolution.level` is L0; turns into real work once user opts
-// into L1. Started here so any `running` rows from a previous server
-// process get cleaned up promptly.
+// Runs at every level — the level only gates how runs get *enqueued* (L0 =
+// manual /note, L1 = also auto on pre-compact), never whether a queued run
+// executes. A cheap no-op when the queue is empty. Started here so any
+// `running` rows from a previous server process get cleaned up promptly.
 setEvoSpawner(realEvoSpawner)
 startEvoTicker()
 startArchiveDaemon()

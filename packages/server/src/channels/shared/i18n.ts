@@ -95,7 +95,6 @@ const messages: Record<string, Record<Lang, string>> = {
   'context.not_loaded': { zh: '会话未加载', en: 'Session not loaded' },
 
   // ── /note (self-evolution) ──
-  'note.disabled': { zh: '自我进化未启用。在 Settings 里把 general.evolution.level 改为 L1。', en: 'Self-evolution is off. Set general.evolution.level to L1 in Settings to enable.' },
   'note.readonly': { zh: 'Readonly 用户不能触发 /note。', en: 'Readonly users cannot trigger /note.' },
   'note.no_session': { zh: '当前没有可分析的 root 会话。', en: 'No active root session to analyze.' },
   'note.queued': { zh: '📝 已加入评估队列。完成后可在 admin 的 Evolution 页查看。', en: '📝 Queued for evaluation. Results will appear under the admin Evolution tab.' },
