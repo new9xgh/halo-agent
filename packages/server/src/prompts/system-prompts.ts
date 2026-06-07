@@ -83,7 +83,7 @@ async function loadDir(dirPath: string, fallback: string): Promise<{ content: st
   try {
     entries = await fs.readdir(dirPath)
   } catch {
-    console.warn(`[SystemPrompts] Directory missing: ${dirPath} — using built-in fallback`)
+    console.log(`[SystemPrompts] Directory missing: ${dirPath} — using built-in fallback`)
     return { content: fallback, files: [] }
   }
   const mdFiles = selectForPlatform(entries.filter((n) => n.endsWith('.md')).sort())

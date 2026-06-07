@@ -136,11 +136,23 @@ clearTimeout(timer)
 console.log('[build-bundle] bundled dist/index.js')
 
 // ── 2. bin shim ────────────────────────────────────────────────────────────
-fs.writeFileSync(
-  path.join(PUB_DIR, 'bin', 'halo.js'),
-  "#!/usr/bin/env node\nimport '../dist/index.js'\n",
-  { mode: 0o755 },
-)
+// Silence two always-noise Node warnings that transitive deps trigger on
+// startup — a JSON-module ExperimentalWarning and the punycode DEP0040
+// DeprecationWarning — which otherwise print before the TUI even paints and
+// the user can do nothing about. Patch emitWarning BEFORE the app's module
+// graph loads; a static `import` is hoisted above this assignment and would
+// load (and warn from) the deps first, so we load the entry via dynamic import.
+const SHIM = `#!/usr/bin/env node
+const emit = process.emitWarning.bind(process)
+process.emitWarning = (warning, ...args) => {
+  const o = args[0]
+  const type = typeof o === 'string' ? o : o && o.type
+  if (type === 'ExperimentalWarning' || type === 'DeprecationWarning') return
+  return emit(warning, ...args)
+}
+await import('../dist/index.js')
+`
+fs.writeFileSync(path.join(PUB_DIR, 'bin', 'halo.js'), SHIM, { mode: 0o755 })
 fs.chmodSync(path.join(PUB_DIR, 'bin', 'halo.js'), 0o755)
 console.log('[build-bundle] wrote bin/halo.js')
 
