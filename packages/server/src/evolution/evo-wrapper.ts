@@ -236,12 +236,20 @@ function spawnProc(
       if (!child.pid) return
       try {
         if (process.platform === 'win32') {
-          if (signal === 'SIGKILL') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'])
-          else child.kill('SIGTERM')
+          // Windows has no process groups and child.kill() only ends the direct
+          // child — its shell_exec grandchildren (grep/sqlite3/npx) would orphan
+          // and keep running. taskkill /T walks the whole tree. /F (force) on the
+          // SIGKILL escalation; the SIGTERM pass is a polite taskkill without /F.
+          const args = signal === 'SIGKILL'
+            ? ['/PID', String(child.pid), '/T', '/F']
+            : ['/PID', String(child.pid), '/T']
+          spawn('taskkill', args)
         } else {
+          // POSIX: child leads its own process group (detached), so negating the
+          // pid signals the whole group — the cli and every grandchild.
           process.kill(-child.pid, signal)
         }
-      } catch { /* group already gone — nothing to kill */ }
+      } catch { /* group/tree already gone — nothing to kill */ }
     }
     const killTimer = timeoutSec
       ? setTimeout(() => {
