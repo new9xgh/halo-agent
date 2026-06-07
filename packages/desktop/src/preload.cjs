@@ -178,6 +178,21 @@ window.haloPin = {
   toggle: () => ipcRenderer.invoke('halo:pin-toggle'),
 }
 
+// In-page find bridge for non-Monaco surfaces (markdown preview, chat, …). The
+// admin renders its own find bar and drives Electron's findInPage through here;
+// `onResult` streams back {activeMatchOrdinal, matches} so the bar shows n/total.
+// Only defined in the desktop shell — in a plain browser `window.haloFind` is
+// undefined, so the admin falls back to the browser's native Cmd+F.
+window.haloFind = {
+  find: (text, opts) => ipcRenderer.invoke('halo:find', text, opts),
+  stop: (action) => ipcRenderer.invoke('halo:find-stop', action),
+  onResult: (cb) => {
+    const handler = (_e, r) => cb(r)
+    ipcRenderer.on('halo:find-result', handler)
+    return () => ipcRenderer.removeListener('halo:find-result', handler)
+  },
+}
+
 // Screen/window capture bridge for the "let the AI see an app" feature. Only
 // defined in the desktop shell — in a plain browser `window.haloCapture` is
 // undefined, so the chat UI hides the capture button and skips prompt

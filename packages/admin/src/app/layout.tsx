@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import { AppI18nProvider } from '@/shared/i18n'
+import { FindBar } from '@/shared/components/find-bar'
 import './globals.css'
 
 const inter = Inter({
@@ -23,6 +24,7 @@ export default function RootLayout({
       <body className={`${inter.variable} font-sans antialiased`}>
         <AppI18nProvider>
           {children}
+          <FindBar />
         </AppI18nProvider>
       </body>
     </html>
