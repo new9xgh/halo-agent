@@ -71,17 +71,20 @@ const stubReactDevtoolsPlugin = {
 }
 
 // Build the external list explicitly: every dep declared in cli + server +
-// core's package.json, except @halo/* workspace packages. esbuild bundles
-// what's not external — so @halo/* (workspace, reached through pnpm's
-// symlinks) gets inlined automatically, no plugin needed.
+// core's package.json, except workspace packages. esbuild bundles what's not
+// external — so the workspace deps (reached through pnpm's symlinks) get
+// inlined automatically, no plugin needed. Identify them by their
+// `workspace:` version range rather than a hard-coded name prefix, so a
+// rebrand of the package scope can never silently push them back to external
+// (which would leave the bundle importing a package that isn't installed).
 function readDepsList() {
   const cli    = JSON.parse(fs.readFileSync(path.join(CLI_ROOT,    'package.json'), 'utf-8'))
   const server = JSON.parse(fs.readFileSync(path.join(SERVER_ROOT, 'package.json'), 'utf-8'))
   const core   = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'core', 'package.json'), 'utf-8'))
   const names = new Set()
   for (const pkg of [cli, server, core]) {
-    for (const name of Object.keys(pkg.dependencies ?? {})) {
-      if (name.startsWith('@halo/')) continue   // workspace — inline
+    for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
+      if (typeof range === 'string' && range.startsWith('workspace:')) continue   // workspace — inline
       names.add(name)
     }
   }
@@ -90,7 +93,7 @@ function readDepsList() {
 
 const EXTERNAL = readDepsList()
 
-// Output an ESM bundle. We only bundle our own source (`@halo/*` workspace
+// Output an ESM bundle. We only bundle our own source (the workspace
 // packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
 // and gets installed by `npm install` at the user's machine.
 //
