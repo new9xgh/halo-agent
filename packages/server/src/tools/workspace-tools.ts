@@ -340,7 +340,7 @@ export function createWorkspaceTools(
 
   const viewImage: ToolDef = {
     name: 'view_image',
-    description: 'Load an image file (png/jpg/jpeg/gif/webp) as a visual input — the image is returned as a vision block the model can see directly, so screenshots / generated charts / video frames on disk become visible without describing them. Paths are resolved like file_read. Max 5 MB per image.',
+    description: 'Load an image file (png/jpg/jpeg/gif/webp) as a visual input — the image is returned as a vision block the model can see directly, so screenshots / generated charts / video frames on disk become visible without describing them. Paths are resolved like file_read. Oversized images are auto-downscaled to fit the model\'s image limit, so you can load full-resolution screenshots directly.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -363,16 +363,45 @@ export function createWorkspaceTools(
       if (!mediaType) {
         return `${TOOL_WARN_MARKER}\nError: unsupported image type "${ext}". Supported: png, jpg, jpeg, gif, webp.`
       }
-      const stat = await sandboxStat(fullPath, sbOpts)
-      const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-      if (stat.size > MAX_IMAGE_BYTES) {
-        return `${TOOL_WARN_MARKER}\nError: image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max 5 MB.`
-      }
       const buf = await sandboxReadBinaryFile(fullPath, sbOpts)
       const md5 = crypto.createHash('md5').update(buf).digest('hex').slice(0, 8)
+
+      // Anthropic caps a single image at ~5 MB of *base64* (not raw bytes), and
+      // base64 inflates ~33%, so a ~3.8 MB raw image already overflows the API
+      // limit and the whole request errors out. The model often screenshots at
+      // full resolution (which it can't shrink itself), so rather than reject,
+      // we downscale+re-encode to fit. The file on disk is untouched — only the
+      // bytes we hand the model are compressed.
+      const B64_LIMIT = 5 * 1024 * 1024
+      const b64Len = (n: number) => Math.ceil(n / 3) * 4
+      let outMediaType = mediaType
+      let outBuf = buf
+      let note = ''
+      if (b64Len(buf.length) > B64_LIMIT) {
+        try {
+          const { Jimp } = await import('jimp')
+          const img = await Jimp.read(buf)
+          // Cap the long edge, then re-encode as JPEG, stepping quality down
+          // until the base64 fits. JPEG (not PNG) so photographic screenshots
+          // shrink hard; mirrors the camera/screen-capture compression.
+          const longEdge = Math.max(img.bitmap.width, img.bitmap.height)
+          if (longEdge > 2000) img.scale(2000 / longEdge)
+          let q = 80
+          let jpeg = await img.getBuffer('image/jpeg', { quality: q })
+          while (b64Len(jpeg.length) > B64_LIMIT && q > 30) {
+            q -= 15
+            jpeg = await img.getBuffer('image/jpeg', { quality: q })
+          }
+          outBuf = jpeg
+          outMediaType = 'image/jpeg'
+          note = ` — compressed to ${(jpeg.length / 1024).toFixed(0)} KB (jpeg q${q}) to fit the model's image limit`
+        } catch (err) {
+          return `${TOOL_WARN_MARKER}\nError: image too large for the model (${(b64Len(buf.length) / 1024 / 1024).toFixed(1)} MB base64) and automatic compression failed (${err instanceof Error ? err.message : String(err)}). Shrink it (e.g. lower resolution / crop the relevant region) and retry.`
+        }
+      }
       return [
-        { type: 'text' as const, text: `Image loaded: ${input.path} (${mediaType}, ${(stat.size / 1024).toFixed(1)} KB, md5: ${md5})` },
-        { type: 'image' as const, source: { type: 'base64' as const, media_type: mediaType, data: buf.toString('base64') } },
+        { type: 'text' as const, text: `Image loaded: ${input.path} (${outMediaType}, ${(outBuf.length / 1024).toFixed(1)} KB, md5: ${md5}${note})` },
+        { type: 'image' as const, source: { type: 'base64' as const, media_type: outMediaType, data: outBuf.toString('base64') } },
       ]
     },
   }
