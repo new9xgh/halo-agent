@@ -60,7 +60,7 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   const store = useChatStore.getState()
   const w = window as unknown as {
     haloCapture?: { grab: (id: string) => Promise<string | null> }
-    haloCamera?: { snap: () => Promise<string | null> }
+    haloCamera?: { snap: (deviceId?: string) => Promise<string | null> }
   }
   const source = store.captureSource
   if (!source) return
@@ -86,7 +86,9 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   const mimeType = isCamera ? 'image/jpeg' : 'image/png'
   let base64: string | null = null
   try {
-    base64 = isCamera ? await w.haloCamera!.snap() : await w.haloCapture!.grab(source.id)
+    // For the camera, source.id holds the chosen deviceId ('' = default); pass
+    // it through so multi-camera machines snap the camera the user picked.
+    base64 = isCamera ? await w.haloCamera!.snap(source.id || undefined) : await w.haloCapture!.grab(source.id)
   } catch {
     base64 = null
   }

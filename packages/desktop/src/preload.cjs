@@ -244,6 +244,20 @@ window.haloCamera = {
       return false
     }
   },
+  // Enumerate webcams so the UI can offer a picker when there's more than one
+  // (laptop builtin + external/capture card). Labels are blank until camera
+  // permission is granted, so we fall back to a numbered name. Returns
+  // [{ deviceId, label }]; empty on error / no camera.
+  list: async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      return devices
+        .filter((d) => d.kind === 'videoinput')
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` }))
+    } catch {
+      return []
+    }
+  },
   // Trigger / read the macOS camera (TCC) permission. askForMediaAccess prompts
   // on first use and returns true once authorized; if the user previously
   // denied, macOS won't re-prompt and it returns false (→ UI points them at
@@ -254,13 +268,16 @@ window.haloCamera = {
   // getUserMedia stream, draws one settled frame to a canvas, then stops the
   // track (releases the device + turns the camera light back off). Returns null
   // on any failure (permission denied, device busy, still black after waiting).
-  snap: async () => {
+  snap: async (deviceId) => {
     let stream = null
+    // Pin to the chosen camera when the UI passed a deviceId (multi-camera
+    // machines); `exact` so it never silently falls back to the default one.
+    // No deviceId → let the browser pick its default.
+    const video = deviceId
+      ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      : { width: { ideal: 1280 }, height: { ideal: 720 } }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      })
+      stream = await navigator.mediaDevices.getUserMedia({ video, audio: false })
     } catch {
       return null // denied / no device / device in use by another app
     }

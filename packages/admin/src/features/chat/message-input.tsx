@@ -45,7 +45,8 @@ function getHaloCapture(): HaloCapture | undefined {
  *  Counterpart to HaloCapture for the camera — `snap` grabs a still JPEG. */
 interface HaloCamera {
   has: () => Promise<boolean>
-  snap: () => Promise<string | null>
+  snap: (deviceId?: string) => Promise<string | null>
+  list: () => Promise<Array<{ deviceId: string; label: string }>>
   requestPermission: () => Promise<boolean>
   openSettings: () => void
 }
@@ -156,6 +157,97 @@ function FaceControl() {
 }
 
 /**
+ * Camera picker with a live preview. Shown when there's more than one webcam so
+ * the user can see each one before binding — handy for aiming an external cam
+ * (e.g. pointing it at a desk to photograph homework). Owns the preview
+ * getUserMedia stream and tears it down on device-switch / close / unmount so
+ * the camera light doesn't stay on. The preview runs in the renderer directly
+ * (Electron has getUserMedia); the actual capture still goes through
+ * haloCamera.snap with the chosen deviceId.
+ */
+function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
+  cameras: Array<{ deviceId: string; label: string }>
+  activeId: string | null
+  onPick: (c: { deviceId: string; label: string }) => void
+  onTurnOff?: () => void
+  onClose: () => void
+}) {
+  const t = useT()
+  // Which device is being previewed (defaults to the active/remembered one, else first).
+  const [previewId, setPreviewId] = useState<string>(activeId || cameras[0]?.deviceId || '')
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+
+  // (Re)open the preview stream whenever the previewed device changes; always
+  // stop the previous stream first. Cleanup on unmount stops the camera.
+  useEffect(() => {
+    let cancelled = false
+    const stop = () => {
+      if (streamRef.current) {
+        for (const tr of streamRef.current.getTracks()) tr.stop()
+        streamRef.current = null
+      }
+    }
+    stop()
+    navigator.mediaDevices.getUserMedia({
+      video: previewId ? { deviceId: { exact: previewId } } : true,
+      audio: false,
+    }).then((s) => {
+      if (cancelled) { for (const tr of s.getTracks()) tr.stop(); return }
+      streamRef.current = s
+      if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.play().catch(() => {}) }
+    }).catch(() => { /* device busy / denied — preview just stays blank */ })
+    return () => { cancelled = true; stop() }
+  }, [previewId])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" onClick={onClose}>
+      <div className="flex w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <span className="text-sm font-medium text-[var(--foreground)]">{t('capture.cameraPick')}</span>
+          <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Live preview */}
+        <video ref={videoRef} muted playsInline className="aspect-video w-full bg-black object-contain" />
+        {/* Device list */}
+        <div className="flex flex-col gap-1 p-2">
+          {cameras.map((c) => (
+            <button
+              key={c.deviceId}
+              onClick={() => setPreviewId(c.deviceId)}
+              title={c.label}
+              className={cn(
+                'flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-[var(--secondary)]',
+                previewId === c.deviceId ? 'text-[var(--primary)]' : 'text-[var(--foreground)]',
+              )}
+            >
+              <Camera className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{c.label}</span>
+              {activeId === c.deviceId && <span className="shrink-0 text-[10px]">{t('capture.cameraCurrent')}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
+          {onTurnOff ? (
+            <button onClick={onTurnOff} className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+              {t('capture.cameraBound')}
+            </button>
+          ) : <span />}
+          <button
+            onClick={() => { const c = cameras.find((x) => x.deviceId === previewId); if (c) onPick(c) }}
+            className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+          >
+            {t('capture.cameraUse')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Capture control — lets the user share something for the LLM to look at on
  * demand (via the <<<CAPTURE>>> marker, see use-chat / chat-handlers). Two
  * sources, mutually exclusive (only one bound at a time, like a meeting app's
@@ -176,6 +268,10 @@ function CaptureControl() {
   const [loading, setLoading] = useState(false)
   const [cameraAvailable, setCameraAvailable] = useState(false)
   const [cameraDenied, setCameraDenied] = useState(false)
+  // Multi-camera: list of webcams + a small picker. Empty/single → no picker,
+  // the toggle binds directly. The chosen deviceId is remembered across opens.
+  const [cameraList, setCameraList] = useState<Array<{ deviceId: string; label: string }>>([])
+  const [cameraMenuOpen, setCameraMenuOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   const cap = getHaloCapture()
@@ -200,12 +296,12 @@ function CaptureControl() {
   }, [camera, modelSupportsImage])
 
   useEffect(() => {
-    if (!open) return
+    if (!open && !cameraMenuOpen) return
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setCameraMenuOpen(false) }
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') { setOpen(false); setCameraMenuOpen(false) }
     }
     document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKey)
@@ -213,7 +309,7 @@ function CaptureControl() {
       document.removeEventListener('mousedown', handleClick)
       document.removeEventListener('keydown', handleKey)
     }
-  }, [open])
+  }, [open, cameraMenuOpen])
 
   // Desktop shell only — a browser has no capture bridge. Also hidden when the
   // selected agent's model can't accept images (capture would be unsendable).
@@ -241,15 +337,42 @@ function CaptureControl() {
     }
   }
 
+  // Bind a specific camera. id '' = browser default (single-camera / unknown).
+  // Persist the choice so the next session reuses the same physical camera.
+  const bindCamera = (deviceId: string, label?: string) => {
+    setCameraDenied(false)
+    setCameraMenuOpen(false)
+    if (deviceId) { try { localStorage.setItem('halo.cameraId', deviceId) } catch { /* ignore */ } }
+    setCaptureSource({ id: deviceId, name: label || t('capture.cameraName'), thumb: '', kind: 'camera' })
+  }
+
   // Camera toggle: bound→unbind; otherwise request the macOS camera permission
   // (prompts on first use; the actual device only opens momentarily per snap,
-  // so binding just arms it + injects the prompt) and bind on grant.
+  // so binding just arms it + injects the prompt) and bind on grant. With more
+  // than one webcam, open a picker instead of binding the default blindly;
+  // labels are only populated after the permission grant, so we list() after.
   const toggleCamera = async () => {
-    if (captureSource?.kind === 'camera') { setCaptureSource(null); return }
+    // Already bound: with multiple cameras, reopen the picker so the user can
+    // switch device or turn it off; with one, just unbind (simple toggle).
+    if (captureSource?.kind === 'camera') {
+      if (cameraList.length > 1) { setCameraMenuOpen((v) => !v); return }
+      setCaptureSource(null)
+      return
+    }
     const granted = await camera!.requestPermission()
     if (!granted) { setCameraDenied(true); return }
-    setCameraDenied(false)
-    setCaptureSource({ id: 'camera', name: t('capture.cameraName'), thumb: '', kind: 'camera' })
+    const list = await camera!.list()
+    if (list.length <= 1) {
+      bindCamera(list[0]?.deviceId ?? '', list[0]?.label)
+      return
+    }
+    // Multiple cameras: prefer the remembered one if still present, else ask.
+    setCameraList(list)
+    let remembered: string | null = null
+    try { remembered = localStorage.getItem('halo.cameraId') } catch { /* ignore */ }
+    const match = remembered && list.find((c) => c.deviceId === remembered)
+    if (match) bindCamera(match.deviceId, match.label)
+    else setCameraMenuOpen(true)
   }
 
   return (
@@ -306,6 +429,15 @@ function CaptureControl() {
             </button>
           </div>
         </div>
+      )}
+      {cameraMenuOpen && cameraList.length > 1 && (
+        <CameraPicker
+          cameras={cameraList}
+          activeId={captureSource?.kind === 'camera' ? captureSource.id : null}
+          onPick={(c) => bindCamera(c.deviceId, c.label)}
+          onTurnOff={captureSource?.kind === 'camera' ? () => { setCaptureSource(null); setCameraMenuOpen(false) } : undefined}
+          onClose={() => setCameraMenuOpen(false)}
+        />
       )}
       {open && (
         <div
