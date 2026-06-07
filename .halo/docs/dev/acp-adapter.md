@@ -152,7 +152,7 @@ Pre-conditions for every case below:
 curl -fs http://localhost:9527/api/health  # expect 200
 
 # the token + workspace this section uses
-TOKEN=JSXOVeHWjXTW-kEWqQo3gyj-u6pZdxBZ
+TOKEN=<your-web-channel-token>
 WS=/home/ubuntu/sa-agent
 ```
 
