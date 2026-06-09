@@ -45,6 +45,11 @@ import { initBwrapCheck, isBwrapCached, setSandboxHiddenPaths } from './tools/sa
 
 const PORT = config.server.port
 
+/** App version, surfaced via GET /api/health. In the published bundle this is
+ *  replaced with a string literal by esbuild's `define` (see cli's
+ *  build-bundle.mjs); under `tsx` dev it's undefined, so fall back to 'dev'. */
+const HALO_VERSION = process.env.HALO_VERSION ?? 'dev'
+
 /** Walk up from cwd looking for the monorepo root (pnpm-workspace.yaml). */
 function findProjectRoot(): string {
   let dir = process.cwd()
@@ -257,6 +262,7 @@ app.get('/api/health', (c) => {
     timestamp: Date.now(),
     uptime: process.uptime(),
     engine: 'agent',
+    version: HALO_VERSION,
   })
 })
 

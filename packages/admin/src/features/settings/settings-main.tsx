@@ -35,6 +35,7 @@ export function SettingsMain() {
   const [activeNs, setActiveNs] = useState<string>('general')
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [version, setVersion] = useState<string | null>(null)
 
   const projectId = scope === 'workspace' ? activeProject?.path : undefined
 
@@ -55,6 +56,14 @@ export function SettingsMain() {
   }, [projectId])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // App version — fetched once from /api/health (server stamps it at bundle
+  // time via esbuild define; 'dev' under tsx). Shown at the sidebar foot.
+  useEffect(() => {
+    api.health()
+      .then((h) => setVersion(typeof h?.version === 'string' ? h.version : null))
+      .catch(() => setVersion(null))
+  }, [])
 
   async function handleSave(namespaceId: string, field: Field, rawValue: string) {
     setSaving(true)
@@ -126,7 +135,7 @@ export function SettingsMain() {
   return (
     <div className="flex h-full bg-[var(--background)]">
       {/* Left: nav */}
-      <div className="w-[220px] shrink-0 overflow-y-auto border-r border-[var(--border)]">
+      <div className="flex w-[220px] shrink-0 flex-col border-r border-[var(--border)]">
         <div className="flex h-10 items-center gap-2 border-b border-[var(--border)] px-3">
           <Settings2 className="h-4 w-4 text-[var(--muted-foreground)]" />
           <span className="text-sm font-medium text-[var(--foreground)]">{t('nav.settings')}</span>
@@ -141,37 +150,46 @@ export function SettingsMain() {
           </button>
         </div>
 
-        <div className="border-b border-[var(--border)] p-2">
-          <div className="flex rounded-md bg-[var(--card)] p-0.5">
-            <button
-              onClick={() => setScope('global')}
-              className={cn(
-                'flex flex-1 items-center justify-center gap-1 rounded-sm px-2 py-1 text-[10px] font-medium transition-colors',
-                scope === 'global' ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
-              )}
-            >
-              <Globe className="h-3 w-3" />
-              {t('common.global')}
-            </button>
-            <button
-              onClick={() => setScope('workspace')}
-              disabled={!activeProject}
-              className={cn(
-                'flex flex-1 items-center justify-center gap-1 rounded-sm px-2 py-1 text-[10px] font-medium transition-colors',
-                scope === 'workspace' ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
-                !activeProject && 'cursor-not-allowed opacity-40',
-              )}
-            >
-              <FolderDot className="h-3 w-3" />
-              {t('common.workspace')}
-            </button>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="border-b border-[var(--border)] p-2">
+            <div className="flex rounded-md bg-[var(--card)] p-0.5">
+              <button
+                onClick={() => setScope('global')}
+                className={cn(
+                  'flex flex-1 items-center justify-center gap-1 rounded-sm px-2 py-1 text-[10px] font-medium transition-colors',
+                  scope === 'global' ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+                )}
+              >
+                <Globe className="h-3 w-3" />
+                {t('common.global')}
+              </button>
+              <button
+                onClick={() => setScope('workspace')}
+                disabled={!activeProject}
+                className={cn(
+                  'flex flex-1 items-center justify-center gap-1 rounded-sm px-2 py-1 text-[10px] font-medium transition-colors',
+                  scope === 'workspace' ? 'bg-[var(--secondary)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
+                  !activeProject && 'cursor-not-allowed opacity-40',
+                )}
+              >
+                <FolderDot className="h-3 w-3" />
+                {t('common.workspace')}
+              </button>
+            </div>
+            {scope === 'workspace' && activeProject && (
+              <p className="mt-1 truncate text-[9px] text-[var(--muted-foreground)]">{activeProject.path}</p>
+            )}
           </div>
-          {scope === 'workspace' && activeProject && (
-            <p className="mt-1 truncate text-[9px] text-[var(--muted-foreground)]">{activeProject.path}</p>
-          )}
+
+          <NavList sections={sections} orphans={orphans} active={activeNs} onPick={setActiveNs} />
         </div>
 
-        <NavList sections={sections} orphans={orphans} active={activeNs} onPick={setActiveNs} />
+        {/* Version — stamped into the bundle at build time, read from /api/health */}
+        {version && (
+          <div className="shrink-0 border-t border-[var(--border)] px-3 py-2 text-[10px] text-[var(--muted-foreground)]">
+            Halo v{version}
+          </div>
+        )}
       </div>
 
       {/* Right: section content */}

@@ -93,6 +93,12 @@ function readDepsList() {
 
 const EXTERNAL = readDepsList()
 
+// Version stamped into the bundle as a compile-time constant. The bundle is a
+// single file with no package.json beside the source, so the server can't read
+// its own version at runtime — esbuild's `define` replaces `process.env.HALO_VERSION`
+// with the cli package.json version literal. Surfaced via GET /api/health.
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'package.json'), 'utf-8')).version
+
 // Output an ESM bundle. We only bundle our own source (the workspace
 // packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
 // and gets installed by `npm install` at the user's machine.
@@ -118,6 +124,9 @@ const buildPromise = build({
   target: 'node22',
   outfile: path.join(PUB_DIR, 'dist', 'index.js'),
   external: EXTERNAL,
+  define: {
+    'process.env.HALO_VERSION': JSON.stringify(PKG_VERSION),
+  },
   plugins: [stubReactDevtoolsPlugin],
   sourcemap: false,
   legalComments: 'none',

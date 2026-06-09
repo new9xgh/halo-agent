@@ -8,7 +8,9 @@ import { runCli } from './cli.js'
 import { runTui } from './tui.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
 
-const VERSION = '0.1.0'
+// Replaced with a string literal by esbuild's `define` at bundle time (see
+// build-bundle.mjs); 'dev' under tsx. Single source of truth = cli package.json.
+const VERSION = process.env.HALO_VERSION ?? 'dev'
 
 const HELP_TOP = `Usage: halo <command> [options]
 
