@@ -7,7 +7,7 @@ import { exec, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 
 const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
@@ -93,10 +93,17 @@ async function isBwrapAvailable(): Promise<boolean> {
   try {
     await execFileAsync('bwrap', ['--version'])
     _bwrapAvailable = true
-  } catch {
-    _bwrapAvailable = false
+    return true
+  } catch (err) {
+    // Only cache a DEFINITIVE "not installed" (ENOENT). A transient spawn
+    // failure (EAGAIN under fork pressure, ENOMEM, …) must NOT be frozen into
+    // a permanent `false` — that would silently downgrade every later call to
+    // the weaker app-level fallback with no alarm. Leave the cache null on
+    // transient errors so the next call re-probes.
+    const code = (err as { code?: string }).code
+    if (code === 'ENOENT') _bwrapAvailable = false
+    return false
   }
-  return _bwrapAvailable
 }
 
 export function isBwrapCached(): boolean {
@@ -172,25 +179,93 @@ function buildBwrapArgs(opts: SandboxOptions): string[] {
   return args
 }
 
-export function assertPathAllowed(filePath: string, opts: SandboxOptions, write = false): void {
-  opts = normalizeOptsForPlatform(opts)
-  if (opts.accessLevel === 'full') return
+/**
+ * Resolve a path with symlinks followed, tolerating non-existent leaf
+ * components. `path.resolve` is purely lexical — it does NOT follow symlinks,
+ * so a symlink *inside* the workspace pointing outside (e.g. `ws/escape ->
+ * /etc`) would pass a `startsWith(wsRoot)` check and let cat/readFile read out
+ * of bounds. We instead `realpath` the longest existing ancestor (which
+ * collapses any symlink in the path) and re-append the not-yet-existing tail
+ * (the file being written). The returned path is what the caller should
+ * actually operate on, so check-and-use agree.
+ */
+function realpathBounded(filePath: string): string {
+  let prefix = path.resolve(filePath)
+  const tail: string[] = []
+  // Walk up until we hit a component that exists on disk.
+  while (!existsSync(prefix)) {
+    const parent = path.dirname(prefix)
+    if (parent === prefix) break // reached filesystem root
+    tail.unshift(path.basename(prefix))
+    prefix = parent
+  }
+  let realPrefix: string
+  try {
+    realPrefix = realpathSync(prefix)
+  } catch {
+    realPrefix = prefix // race: vanished between existsSync and realpath
+  }
+  return tail.length > 0 ? path.join(realPrefix, ...tail) : realPrefix
+}
 
-  const resolved = path.resolve(filePath)
-  const wsRoot = path.resolve(opts.workspaceRoot)
+/**
+ * Validate that `filePath` is within the allowed sandbox paths and return the
+ * symlink-resolved absolute path the caller must use for the actual fs call.
+ * Resolving symlinks here is the whole point: it's the only boundary on the
+ * no-bwrap fallback path. (A narrow TOCTOU window remains — a component could
+ * be swapped for a symlink between this check and the caller's syscall — but
+ * the common symlink-escape, a symlink present at check time, is now caught.)
+ */
+export function assertPathAllowed(filePath: string, opts: SandboxOptions, write = false): string {
+  opts = normalizeOptsForPlatform(opts)
+  if (opts.accessLevel === 'full') return path.resolve(filePath)
+
+  const resolved = realpathBounded(filePath)
+  const wsRoot = realpathBounded(opts.workspaceRoot)
 
   if (resolved === wsRoot || resolved.startsWith(wsRoot + '/')) {
     if (write && opts.accessLevel === 'readonly') {
       throw new Error(`Access denied: readonly session cannot write to "${filePath}"`)
     }
-    return
+    return resolved
   }
 
   if (!write && (resolved === GLOBAL_DIR || resolved.startsWith(GLOBAL_DIR + '/'))) {
-    return
+    return resolved
   }
 
   throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
+}
+
+// ── Injection-safe `bash -c` argv builders ──────────────────────────
+//
+// Every place that hands a caller-controlled PATH to a `bash -c` script passes
+// it as a POSITIONAL argument ($1, $2…), never interpolated into the script
+// text. A path expanded from a parameter is inert — bash does not re-scan it
+// for `$(...)` / backtick command substitution — whereas the previous
+// `JSON.stringify(path)` produced a *double-quoted* literal, inside which `$()`
+// still executes. Centralised here so the three call sites can't drift and so
+// the construction is unit-testable without a working bwrap.
+//
+// argv layout for `bash -c SCRIPT NAME ARG1 ARG2…`: NAME becomes $0, ARG1 → $1.
+// We pass 'bash' as the $0 placeholder.
+
+/** `cd <workspaceRoot> && <command>` — workspaceRoot is data ($1), command is
+ *  an intentional shell snippet (the shell_exec contract). */
+export function buildExecScriptArgs(workspaceRoot: string, command: string): string[] {
+  return ['bash', '-c', `cd "$1" && shift && ${command}`, 'bash', workspaceRoot]
+}
+
+/** Write `content` to `filePath`. Path is data ($1); content is single-quote
+ *  escaped (the one genuinely injection-safe inline form). */
+export function buildWriteScriptArgs(filePath: string, content: string): string[] {
+  const escaped = content.replace(/'/g, "'\\''")
+  return ['bash', '-c', `mkdir -p "$(dirname "$1")" && printf '%s' '${escaped}' > "$1"`, 'bash', filePath]
+}
+
+/** `ls -1ap <dirPath>` — dirPath is data ($1). */
+export function buildReaddirScriptArgs(dirPath: string): string[] {
+  return ['bash', '-c', 'ls -1ap "$1"', 'bash', dirPath]
 }
 
 export async function sandboxExec(command: string, opts: SandboxOptions): Promise<SandboxResult> {
@@ -230,7 +305,7 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
   }
 
   const bwrapArgs = buildBwrapArgs(opts)
-  return bwrapExec([...bwrapArgs, '--', 'bash', '-c', `cd ${JSON.stringify(opts.workspaceRoot)} && ${command}`], {
+  return bwrapExec([...bwrapArgs, '--', ...buildExecScriptArgs(opts.workspaceRoot, command)], {
     timeout: opts.timeout,
     maxBuffer: opts.maxBuffer,
     signal: opts.signal,
@@ -246,9 +321,9 @@ export async function sandboxReadFile(filePath: string, opts: SandboxOptions): P
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) {
-    assertPathAllowed(filePath, opts)
+    const safe = assertPathAllowed(filePath, opts)
     const { readFile } = await import('node:fs/promises')
-    return readFile(filePath, 'utf-8')
+    return readFile(safe, 'utf-8')
   }
 
   const bwrapArgs = buildBwrapArgs(opts)
@@ -269,30 +344,64 @@ export async function sandboxReadBinaryFile(filePath: string, opts: SandboxOptio
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) {
-    assertPathAllowed(filePath, opts)
+    const safe = assertPathAllowed(filePath, opts)
     const { readFile } = await import('node:fs/promises')
-    return readFile(filePath)
+    return readFile(safe)
   }
 
   // bwrapExec returns string stdout via execFileAsync's default encoding —
-  // re-spawn raw so we can keep bytes intact.
+  // re-spawn raw so we can keep bytes intact. Unlike execFileAsync this hand-
+  // rolled spawn must wire up timeout / abort / output cap itself, or a
+  // workspace FIFO or /dev/zero would hang it forever with unbounded memory
+  // growth (the other read paths get these for free from execFileAsync).
+  const maxBuffer = opts.maxBuffer ?? 10 * 1024 * 1024
   return new Promise<Buffer>((resolve, reject) => {
     import('node:child_process').then(({ spawn }) => {
       const bwrapArgs = buildBwrapArgs(opts)
       const child = spawn('bwrap', [...bwrapArgs, '--', 'cat', filePath])
       const chunks: Buffer[] = []
       let stderr = ''
-      child.stdout.on('data', (c: Buffer) => chunks.push(c))
+      let total = 0
+      let settled = false
+      let timer: NodeJS.Timeout | undefined
+
+      const finish = (fn: () => void) => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
+        if (!child.killed) child.kill('SIGKILL')
+        fn()
+      }
+      const fail = (msg: string) => finish(() => reject(new Error(stripBwrapArgs(msg))))
+      const onAbort = () => fail('bwrap cat aborted')
+
+      if (opts.signal) {
+        if (opts.signal.aborted) { fail('bwrap cat aborted'); return }
+        opts.signal.addEventListener('abort', onAbort)
+      }
+      if (opts.timeout && opts.timeout > 0) {
+        timer = setTimeout(() => fail(`bwrap cat timed out after ${opts.timeout}ms`), opts.timeout)
+      }
+
+      child.stdout.on('data', (c: Buffer) => {
+        total += c.length
+        if (total > maxBuffer) { fail(`bwrap cat output exceeded ${maxBuffer} bytes`); return }
+        chunks.push(c)
+      })
       child.stderr.on('data', (c: Buffer) => { stderr += c.toString() })
-      child.on('error', reject)
+      child.on('error', (err) => fail(err.message))
       child.on('close', (code) => {
+        if (settled) return
         if (code !== 0) {
-          const err = new Error(stripBwrapArgs(stderr || `bwrap cat exited ${code}`))
-          ;(err as Error & { code?: number }).code = code ?? undefined
-          reject(err)
+          finish(() => {
+            const err = new Error(stripBwrapArgs(stderr || `bwrap cat exited ${code}`))
+            ;(err as Error & { code?: number }).code = code ?? undefined
+            reject(err)
+          })
           return
         }
-        resolve(Buffer.concat(chunks))
+        finish(() => resolve(Buffer.concat(chunks)))
       })
     }).catch(reject)
   })
@@ -309,17 +418,15 @@ export async function sandboxWriteFile(filePath: string, content: string, opts: 
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) {
-    assertPathAllowed(filePath, opts, true)
+    const safe = assertPathAllowed(filePath, opts, true)
     const fsP = await import('node:fs/promises')
-    await fsP.mkdir(path.dirname(filePath), { recursive: true })
-    await fsP.writeFile(filePath, content, 'utf-8')
+    await fsP.mkdir(path.dirname(safe), { recursive: true })
+    await fsP.writeFile(safe, content, 'utf-8')
     return
   }
 
   const bwrapArgs = buildBwrapArgs(opts)
-  const escaped = content.replace(/'/g, "'\\''")
-  const cmd = `mkdir -p ${JSON.stringify(path.dirname(filePath))} && printf '%s' '${escaped}' > ${JSON.stringify(filePath)}`
-  await bwrapExec([...bwrapArgs, '--', 'bash', '-c', cmd], {
+  await bwrapExec([...bwrapArgs, '--', ...buildWriteScriptArgs(filePath, content)], {
     maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
   })
 }
@@ -334,9 +441,9 @@ export async function sandboxStat(filePath: string, opts: SandboxOptions): Promi
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) {
-    assertPathAllowed(filePath, opts)
+    const safe = assertPathAllowed(filePath, opts)
     const { stat } = await import('node:fs/promises')
-    const s = await stat(filePath)
+    const s = await stat(safe)
     return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size }
   }
 
@@ -362,9 +469,9 @@ export async function sandboxReaddir(dirPath: string, opts: SandboxOptions): Pro
 
   const bwrapOk = await isBwrapAvailable()
   if (!bwrapOk) {
-    assertPathAllowed(dirPath, opts)
+    const safe = assertPathAllowed(dirPath, opts)
     const { readdir } = await import('node:fs/promises')
-    const entries = await readdir(dirPath, { withFileTypes: true })
+    const entries = await readdir(safe, { withFileTypes: true })
     return entries.map((e) => ({ name: e.name, isDirectory: e.isDirectory() }))
   }
 
@@ -372,7 +479,7 @@ export async function sandboxReaddir(dirPath: string, opts: SandboxOptions): Pro
   // -1ap (no -L): annotate entry types via lstat. Following symlinks would
   // let a workspace-internal symlink resolve to a path outside the bind
   // mount and leak its type into readdir results.
-  const result = await bwrapExec([...bwrapArgs, '--', 'bash', '-c', `ls -1ap ${JSON.stringify(dirPath)}`])
+  const result = await bwrapExec([...bwrapArgs, '--', ...buildReaddirScriptArgs(dirPath)])
   return result.stdout.split('\n').filter(Boolean).filter((n) => n !== './' && n !== '../').map((name) => {
     const isDir = name.endsWith('/')
     return { name: isDir ? name.slice(0, -1) : name, isDirectory: isDir }
