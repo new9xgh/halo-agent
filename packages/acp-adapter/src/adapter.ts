@@ -382,11 +382,10 @@ export class AcpAdapter {
       }
       case 'switch':
       case 'user':
-      case 'session':
-        // Already handled above (`session`) or not relevant to ACP
-        // (`switch` is internal slash-command bookkeeping; `user` is
-        // halo echoing the prompt we just sent — would only confuse
-        // the ACP client).
+        // Not relevant to ACP: `switch` is internal slash-command
+        // bookkeeping; `user` is halo echoing the prompt we just sent —
+        // would only confuse the ACP client. (`session` is handled by the
+        // first case in this switch.)
         return null
       case 'complete':
         return 'end'
