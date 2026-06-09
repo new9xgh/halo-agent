@@ -43,9 +43,9 @@ Responsibilities:
 1. Agent instance lifecycle (create / restore / release)
 2. Session state machine (idle / running / compacting)
 3. Message routing (user→agent / agent→agent)
-4. UI state management (UIState reducer + persistence)
-5. Event dispatch (emitEvent → listener)
-6. Disk persistence (rawMessages + UI log + JSONL audit)
+4. `rawMessages` disk persistence (`saveAgentState`) + JSONL audit
+
+Two read/UI concerns were split into their own files (SessionManager keeps thin pass-throughs and owns the instances): **SessionUIStore** — UIState reducer + persistence + event dispatch (`emitEvent` → listener); **SessionQueryStore** — read-only session-metadata queries + the row→SessionInfo status projection. Both take `this` as host. See below.
 
 ### ModelRuntime — LLM interaction layer (provider-agnostic)
 
@@ -118,6 +118,14 @@ File: `sessions/ui-log-builder.ts` (pure functions).
 
 UIState fields: `messageLog` / `streamBuffer` / `contextTokens` / `outputTokens` / `subSessionLogs` / `turnToolCalls` / `turnContentBlocks` / ...
 
+### SessionUIStore — UI-log state + event routing
+
+File: `agents/session-ui-store.ts`. The stateful host around UILogBuilder, split out of SessionManager. Owns the per-root-session UIState map, the debounced persist timers, and the event-listener registry; drives `applyEvent` and decides flush-vs-debounce. SessionManager constructs it with `this` as the `SessionUIStoreHost` (db / workspaceRoot / in-memory session lookup / delete tombstone / the single tombstone-honouring `persistSessionFile`) and exposes same-named thin pass-throughs so external callers stay unchanged. Dependency is one-directional: store → host, never the reverse.
+
+### SessionQueryStore — read-only session-metadata queries
+
+File: `agents/session-query-store.ts`. Stateless; split out of SessionManager alongside SessionUIStore. Owns `listSessions` / `listDescendants` / `findLatestByPrefix` / `getSessionById` / `getSessionTree` and the `toSessionInfo` projection. All SQLite reads plus one cross-read: status derivation fuses the row's `stopped_at`, the in-memory run map (`promise !== null` ⇒ running), and a batched active-child lookup — in that precedence. Takes `this` as `SessionQueryStoreHost` (db / workspaceRoot / in-memory session lookup); SessionManager keeps same-named pass-throughs so the 20+ `getSessionById` callers and the `SessionManagerInternals` contract are unchanged.
+
 ## Helper modules
 
 ### SessionStore — disk persistence
@@ -173,6 +181,8 @@ Methods: `init(dir)` / `commitAll(dir, msg)` / `getDiff(dir, path)`. Backed by s
 ─────────────────────────┼────┼────┼────┼────┼────────┼──────┼─────┤
 ModelRuntime            │ ✦  │    │    │    │        │      │     │
 SessionManager          │    │ ✦  │    │    │        │      │ ✦   │
+SessionUIStore          │ ✦  │    │    │    │        │      │     │
+SessionQueryStore       │ ✦  │    │    │    │        │      │     │
 EventProcessor          │    │ ✦  │    │ ✦  │        │      │
 UILogBuilder            │ ✦  │    │    │    │        │      │
 SessionStore            │ ✦  │ ✦  │ ✦  │ ✦  │ ✦(Ses) │      │
@@ -214,7 +224,7 @@ SQLite only holds metadata indexes; all content lives on the filesystem.
 
 ## Coupling hot spots
 
-**High: SessionManager** — the central hub, depending on 10+ modules and carrying 6 responsibilities. Refactor risk.
+**High: SessionManager** — the central hub, depending on 10+ modules. Still large (~2700 lines) but trending down: UI-log state + event routing live in SessionUIStore, read-only metadata queries in SessionQueryStore (both one-directional dependencies). Remaining carve-out candidates: agent construction, compaction.
 
 **Medium: WS Handler** — depends on SessionManager for all agent operations, owns connection lifecycle, compact orchestration, session switching, terminal/file watcher. It used to have two-way state sync with SessionManager (resolved: UIState now belongs to SessionManager).
 

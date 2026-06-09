@@ -47,7 +47,7 @@ Full field list in [storage.md](storage.md).
 
 File: `packages/server/src/agents/session-manager.ts`
 
-Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 with a `ModelRuntime` instance.
+Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 with a `ModelRuntime` instance. Two concerns are split into sibling files: UI-log state + event routing → `SessionUIStore` (`agents/session-ui-store.ts`, see [Event routing](#event-routing)); read-only metadata queries + the row→SessionInfo status projection → `SessionQueryStore` (`agents/session-query-store.ts`). Both take SessionManager as host; it keeps thin pass-throughs.
 
 ### Key methods
 
@@ -107,13 +107,17 @@ Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 
 ### Event routing
 
+Routing + UI-log state live in **`SessionUIStore`** (`agents/session-ui-store.ts`), carved out of SessionManager. The manager keeps same-named thin pass-throughs (`emitEvent` / `registerEventListener` / `appendUserMessage` / …) so the 30+ external callers (ws / channels / cli / session-tools) are unchanged; the store reaches back for db / workspaceRoot / the in-memory session lookup / the delete tombstone through a narrow `SessionUIStoreHost` interface (SessionManager passes `this`).
+
 Two-level dispatch:
 1. **Per-session-tree listener** — WS handler calls `registerEventListener(rootSessionId, handler)`. Any event in the tree routes to the root via `findRootSessionId(sessionId)` = `sessionId.split('>')[0]`.
 2. **Global fallback** — the `eventHandler` field, used when no tree listener matches.
 
+`emitEvent` captures the turnId *before* reducing the event but hands listeners the state *after* — sub-agent events carry their own `taskId`/`currentTurnId`, so a single post-reduce turnId would collapse every sub-agent block into one bubble. Persistence is split: `complete` flushes synchronously (and broadcasts `session:changed` so admin lists re-fetch), every other save-worthy event takes the 500ms debounce. Characterized in `test/session-ui-store.test.ts`.
+
 ### Viewing a sub-session's live log (`getSessionView`)
 
-Because every event reduces into the **root's** UIState (a sub-agent's stream / tool calls land in `rootState.subSessionLogs[subId]`, keyed by the sub's full id), `getSessionView(subId)` must read from there — not from `ensureUIState(subId)`, which is keyed by the sub's own id and would only ever see a cold disk-seeded snapshot (and, since the root is self-driven, never re-read disk → a live viewer would freeze on the first frame). So `getSessionView` special-cases a sub-session whose root holds it in `subSessionLogs`: it snapshots that sub-log directly (in-flight buffers included, fresher than disk). Once the sub finishes, `agent_done` deletes the sub-log and the call falls through to the on-disk file. This is what lets the TUI `/log` viewer refresh a running sub-agent's log in real time.
+Because every event reduces into the **root's** UIState (a sub-agent's stream / tool calls land in `rootState.subSessionLogs[subId]`, keyed by the sub's full id), `getSessionView(subId)` must read from there — not from `uiStore.ensureUIState(subId)`, which is keyed by the sub's own id and would only ever see a cold disk-seeded snapshot (and, since the root is self-driven, never re-read disk → a live viewer would freeze on the first frame). So `getSessionView` special-cases a sub-session whose root holds it in `subSessionLogs` (read via `uiStore.getCachedUIState(rootId)`): it snapshots that sub-log directly (in-flight buffers included, fresher than disk). For the root-view path it calls `uiStore.prepareForView(sessionId, selfDriven)`, which evicts a stale cache when the session isn't self-driven so the snapshot reflects disk. Once the sub finishes, `agent_done` deletes the sub-log and the call falls through to the on-disk file. This is what lets the TUI `/log` viewer refresh a running sub-agent's log in real time.
 
 ### SQLite metadata
 

@@ -27,17 +27,19 @@ import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
 import { createDb, getDisabledSet, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
-import { eq, and, isNull, isNotNull, desc, lt, gte, inArray } from 'drizzle-orm'
+import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { scanSkillDescriptors } from '../commands/skill-command.js'
 import { buildSessionTools } from './session-tools.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveSessionToFile, loadSessionMessages, fileSegment, getSessionDir, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
-import type { SessionMessage, SessionFileData } from '../sessions/session-types.js'
+import { saveSessionToFile, fileSegment, getSessionDir, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
+import type { SessionMessage } from '../sessions/session-types.js'
 import {
-  applyEvent, createEmptyUIState, createSaveSnapshot, genId,
+  createSaveSnapshot,
   type UIState,
 } from '../sessions/ui-log-builder.js'
+import { SessionUIStore } from './session-ui-store.js'
+import { SessionQueryStore } from './session-query-store.js'
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -242,22 +244,14 @@ export class SessionManager implements SessionManagerInternals {
   private locks: Map<string, Promise<void>> = new Map()
   workspaceRoot: string
   private db: HaloDb
-  /** Global event handler (backward compat — used when no per-tree listener found) */
-  private eventHandler: ((event: AgentSessionEvent) => void) | null = null
-  /** Per-session-tree event listeners: rootSessionId → Set of handlers.
-   *  Args: (event, state after mutation, turnId captured before mutation) */
-  private eventListeners: Map<string, Set<(event: AgentSessionEvent, state: UIState, turnId: string) => void>> = new Map()
-  /**
-   * Per-root-session UI log state. Keyed by root session ID (the session the
-   * user is viewing in the chat panel). Sub-session states are nested inside
-   * the root's `subSessionLogs` map, so we only keep top-level roots here.
-   * Built lazily on first event / first view request.
-   */
-  private uiStates: Map<string, UIState> = new Map()
-  /** Project path for each root session, needed for disk persistence */
-  private uiStateProjectPaths: Map<string, string | null> = new Map()
-  /** Debounced persist timers — prevents flooding disk with writes during rapid tool loops */
-  private persistTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+  /** UI log state + event routing for every session in this workspace. Carved
+   *  out of this class (see SessionUIStore); constructed with `this` as host so
+   *  it can read back db / workspaceRoot / sessions / the tombstone check. */
+  private readonly uiStore: SessionUIStore
+  /** Read-only session metadata queries + row→SessionInfo projection. Carved
+   *  out of this class (see SessionQueryStore); reads db + the in-memory map
+   *  (status only) through `this` as host. */
+  private readonly queryStore: SessionQueryStore
   /**
    * Tombstones: ids of sessions deleted during this process's lifetime. After
    * deletion any in-flight `saveSessionToFile` for these ids must be skipped,
@@ -299,6 +293,8 @@ export class SessionManager implements SessionManagerInternals {
     this.workspaceRoot = workspaceRoot
     const haloDir = path.join(workspaceRoot, '.halo')
     this.db = createDb(haloDir)
+    this.uiStore = new SessionUIStore(this)
+    this.queryStore = new SessionQueryStore(this)
     // Only the long-lived server process (which owns this workspace's runtime
     // and holds server.lock) passes this. CLI/TUI/channel-subprocess/evo-wrapper
     // share the same db while the server may be actively running sessions — they
@@ -349,46 +345,21 @@ export class SessionManager implements SessionManagerInternals {
     return this.db
   }
 
-  // ── Event routing ──────────────────────────────────────────────────
+  // ── Event routing + UI log (delegated to SessionUIStore) ────────────
+  // These stay as thin pass-throughs so the 30+ external call sites (ws,
+  // channels, cli, session-tools, skill-command) keep calling the manager.
 
   /** Store global event handler (backward compat — Phase 2 only) */
   setEventHandler(handler: (event: AgentSessionEvent) => void): void {
-    this.eventHandler = handler
+    this.uiStore.setEventHandler(handler)
   }
 
-  /**
-   * Register an event listener for an entire session **tree** (root + all
-   * sub-sessions). Sub-session events are routed to the root's listeners —
-   * passing a hierarchical id like `root>child` is allowed but auto-normalized
-   * to its root. There is no per-sub-session subscription; callers that want
-   * to demultiplex by sub-session should branch on `event.taskId` inside the
-   * handler.
-   *
-   * Returns an unsubscribe fn.
-   */
   registerEventListener(rootSessionId: string, handler: (event: AgentSessionEvent, state: UIState, turnId: string) => void): () => void {
-    const rootId = this.findRootSessionId(rootSessionId)
-    let set = this.eventListeners.get(rootId)
-    if (!set) {
-      set = new Set()
-      this.eventListeners.set(rootId, set)
-    }
-    set.add(handler)
-    console.debug(`[SessionManager] +listener ${rootId} (total=${set.size})`)
-    return () => {
-      const s = this.eventListeners.get(rootId)
-      if (!s) return
-      s.delete(handler)
-      console.debug(`[SessionManager] -listener ${rootId} (remaining=${s.size})`)
-      if (s.size === 0) this.eventListeners.delete(rootId)
-    }
+    return this.uiStore.registerEventListener(rootSessionId, handler)
   }
 
-  /** Unregister ALL event listeners for a session tree.
-   *  Same root-normalization as `registerEventListener` — accepts any id
-   *  in the tree and clears the root's listener set. */
   unregisterEventListener(rootSessionId: string): void {
-    this.eventListeners.delete(this.findRootSessionId(rootSessionId))
+    this.uiStore.unregisterEventListener(rootSessionId)
   }
 
   /** Find root session ID — O(1) via `>` separator in hierarchical session IDs */
@@ -396,197 +367,9 @@ export class SessionManager implements SessionManagerInternals {
     return sessionId.split('>')[0]
   }
 
-  /**
-   * Emit an event for a session. Routes through per-tree listener if available,
-   * otherwise falls back to global eventHandler.
-   *
-   * The event is reduced into the root session's UIState (built lazily from
-   * disk on first access) so the backend owns a live view of the session
-   * independent of any frontend. Persist-to-disk is driven by the reducer's
-   * signal — tool_call/tool_result/usage/complete all trigger a save, so a
-   * frontend reload during a sleep() will find the tool call already written.
-   */
   /** @internal */
   emitEvent(sessionId: string, event: AgentSessionEvent): void {
-    const rootId = this.findRootSessionId(sessionId)
-    const state = this.ensureUIState(rootId)
-    // Capture turnId from the right scope: sub-agent events come with their
-    // own taskId and have a separate `currentTurnId` on the sub TurnState;
-    // using the root's value (which doesn't rotate while a sub-agent is
-    // running) made every sub-agent block share the same turnId, so
-    // ensureStreamingSlot on the frontend never split — all sub-agent
-    // tool_calls collapsed into one giant message bubble.
-    const e = event as { taskId?: string }
-    const sub = e.taskId ? state.subSessionLogs.get(e.taskId) : undefined
-    const turnId = sub ? sub.currentTurnId : state.currentTurnId
-    this.reduceIntoUIState(rootId, event)
-    // Root turn settled — push session:changed so admin session lists re-fetch
-    // their list-visible metadata (messageCount / title / updatedAt). This is
-    // the only admin-side refresh hook for channel-driven turns; without it the
-    // list stays stale, e.g. a fresh channel session lingers at "0 msgs / no
-    // title" because createSession's broadcast raced ahead of the message's
-    // (debounced) disk write and nothing re-broadcast after. `complete` is the
-    // right moment: reduceIntoUIState just flushed final state synchronously
-    // (flushPersist, not the debounced path a `user` event takes) and
-    // runAgentTurn already bumped the SQLite updatedAt, so the re-fetch reads
-    // consistent count + ordering. The open chat already streams live via the
-    // listeners below; the list was the gap. `complete` only ever fires for
-    // root sessions, so no extra guard needed.
-    if (event.type === 'complete') broadcast({ type: 'session:changed' })
-    const listeners = this.eventListeners.get(rootId)
-    if (event.type === 'complete' || event.type === 'user') {
-      console.debug(`[SessionManager] emit ${event.type} root=${rootId} listeners=${listeners?.size ?? 0}`)
-    } else if (event.type === 'tool_call') {
-      const e = event as { toolName?: string; taskId?: string }
-      console.debug(`[SessionManager] tool_call root=${rootId}${e.taskId ? ` task=${e.taskId.slice(-12)}` : ''} tool=${e.toolName}`)
-    } else if (event.type === 'tool_result') {
-      const e = event as { durationMs?: number; taskId?: string }
-      console.debug(`[SessionManager] tool_result root=${rootId}${e.taskId ? ` task=${e.taskId.slice(-12)}` : ''} dur=${e.durationMs}ms`)
-    } else if (event.type === 'usage') {
-      const e = event as { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheWriteInputTokens?: number; ttftMs?: number; e2eMs?: number; taskId?: string }
-      console.debug(`[SessionManager] usage root=${rootId}${e.taskId ? ` task=${e.taskId.slice(-12)}` : ''} in=${e.inputTokens ?? 0} out=${e.outputTokens ?? 0} cacheRead=${e.cacheReadInputTokens ?? 0} cacheWrite=${e.cacheWriteInputTokens ?? 0} ttft=${e.ttftMs ?? 0}ms e2e=${e.e2eMs ?? 0}ms`)
-    }
-    if (listeners && listeners.size > 0) {
-      for (const listener of listeners) listener(event, state, turnId)
-      return
-    }
-    this.eventHandler?.(event)
-  }
-
-  /**
-   * Fold an event into the root session's UIState and persist to disk if the
-   * reducer signals `shouldSave`. Builds the state lazily from disk if
-   * needed.
-   */
-  private reduceIntoUIState(rootId: string, event: AgentSessionEvent): void {
-    try {
-      const state = this.ensureUIState(rootId)
-      const result = applyEvent(state, event)
-      if (result.subSessionSave) {
-        this.persistSubSession(state, rootId, result.subSessionSave)
-      }
-      if (result.subSessionDone) {
-        this.persistSubSession(state, rootId, result.subSessionDone)
-        state.subSessionLogs.delete(result.subSessionDone)
-      }
-      if (result.shouldSave) {
-        if (result.isComplete) {
-          this.flushPersist(rootId, state)
-        } else {
-          this.debouncedPersist(rootId, state)
-        }
-      }
-    } catch (err) {
-      console.error(`[SessionManager] reduceIntoUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  /** Debounced persist — coalesces rapid tool_call/tool_result saves into one write */
-  private debouncedPersist(rootId: string, state: UIState): void {
-    const existing = this.persistTimers.get(rootId)
-    if (existing) clearTimeout(existing)
-    this.persistTimers.set(rootId, setTimeout(() => {
-      this.persistTimers.delete(rootId)
-      this.persistUIState(rootId, state)
-    }, 500))
-  }
-
-  /** Flush pending persist immediately (on complete/disconnect) */
-  private flushPersist(rootId: string, state: UIState): void {
-    const existing = this.persistTimers.get(rootId)
-    if (existing) {
-      clearTimeout(existing)
-      this.persistTimers.delete(rootId)
-    }
-    this.persistUIState(rootId, state)
-  }
-
-  /**
-   * Ensure UIState for a root session. On first access for a session that
-   * already has a disk log (user resumed an old session), we seed messageLog
-   * from the on-disk messages so the view is complete.
-   */
-  private ensureUIState(rootId: string): UIState {
-    const existing = this.uiStates.get(rootId)
-    if (existing) return existing
-
-    const state = createEmptyUIState()
-    // Seed from disk if available — resumed sessions
-    try {
-      const row = this.db.select().from(agentSessions)
-        .where(eq(agentSessions.id, rootId)).get()
-      if (row) {
-        // UI state / session store APIs need a real path — use our known root.
-        this.uiStateProjectPaths.set(rootId, this.workspaceRoot)
-        const messages = loadSessionMessages(rootId, this.workspaceRoot, row.agentId)
-        if (messages.length > 0) state.messageLog = messages
-        // Token counts are on the file's top-level fields, not in messages
-        try {
-          const filePath = path.join(this.sessionDir(row.agentId), `${fileSegment(rootId)}.json`)
-          const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) as SessionFileData
-          state.contextTokens = data.contextTokens ?? 0
-          state.outputTokens = data.totalOutputTokens ?? 0
-        } catch { /* no file yet */ }
-      }
-    } catch { /* new session */ }
-
-    this.uiStates.set(rootId, state)
-    return state
-  }
-
-  /** Persist UI state (root messages + token counts) to disk */
-  private persistUIState(rootId: string, state: UIState): void {
-    try {
-      const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.workspaceRoot
-      const snapshot = createSaveSnapshot(state)
-      if (snapshot.length === 0) return
-      // Source of truth for agentId: prefer the in-memory session (always
-      // accurate, including for internal sessions that don't have a db
-      // row), fall back to the workspace db row, and only as a last
-      // resort let saveSessionToFile pick its 'default' default. Without
-      // this, internal sessions (`__evo_agent__` etc.) get persisted to
-      // `sessions/default/` instead of the global internal-sessions
-      // directory.
-      const inMem = this.sessions.get(rootId)
-      const row = inMem ? null : this.db.select().from(agentSessions)
-        .where(eq(agentSessions.id, rootId)).get()
-      this.persistSessionFile({
-        sessionId: rootId,
-        projectPath,
-        messages: snapshot,
-        contextTokens: state.contextTokens,
-        outputTokens: state.outputTokens,
-        agentId: inMem?.agentId ?? row?.agentId,
-        agentName: inMem?.agentId ?? row?.agentName ?? row?.agentId,
-      })
-    } catch (err) {
-      console.error(`[SessionManager] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  /** Persist a sub-session's UI log to its own disk file */
-  private persistSubSession(state: UIState, rootId: string, taskId: string): void {
-    if (this.deletedSessionIds.has(rootId)) return  // root tombstoned → don't write its descendants
-    const sub = state.subSessionLogs.get(taskId)
-    if (!sub || sub.messageLog.length === 0) return
-    try {
-      const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.workspaceRoot
-      // Merge with existing on-disk messages — sub-session logs are re-initialized
-      // each query_session/start_session, so only the current turn is in memory
-      const existing = loadSessionMessages(taskId, projectPath, sub.agentId)
-      const seen = new Set(existing.map((m) => m.id).filter(Boolean))
-      const merged = [...existing, ...sub.messageLog.filter((m) => !m.id || !seen.has(m.id))]
-      const parts = taskId.split('>')
-      const directParentId = parts.length > 1 ? parts.slice(0, -1).join('>') : rootId
-      this.persistSessionFile({
-        sessionId: taskId, projectPath, messages: merged,
-        contextTokens: 0, outputTokens: 0,
-        agentId: sub.agentId, agentName: sub.agentName,
-        source: 'delegated', description: sub.description, parentSessionId: directParentId,
-      })
-    } catch (err) {
-      console.error(`[SessionManager] persistSubSession failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    this.uiStore.emitEvent(sessionId, event)
   }
 
 
@@ -1190,7 +973,7 @@ export class SessionManager implements SessionManagerInternals {
       // save-order fix, or sessions compacted before context was preserved).
       // Without this the UI shows no Prompt button for resumed sessions.
       const rootId = this.findRootSessionId(sessionId)
-      const state = this.ensureUIState(rootId)
+      const state = this.uiStore.ensureUIState(rootId)
       const hasContext = state.messageLog.some((m) => m.type === 'context' && m.agentName === (meta.agentName ?? meta.agentId))
       if (!hasContext) {
         this.emitEvent(sessionId, {
@@ -1226,9 +1009,7 @@ export class SessionManager implements SessionManagerInternals {
   private releaseSession(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    const rootId = this.findRootSessionId(sessionId)
-    const uiState = this.uiStates.get(rootId)
-    if (uiState) this.flushPersist(rootId, uiState)
+    this.uiStore.flushSession(sessionId)
     this.saveAgentState(session)
     this.sessions.delete(sessionId)
     console.debug(`[SessionManager] Released session ${sessionId}`)
@@ -1290,165 +1071,28 @@ export class SessionManager implements SessionManagerInternals {
     return sessionId
   }
 
-  /**
-   * List sessions, paginated, with all filters pushed down to SQL.
-   *
-   *   - `parentId === undefined` → no parent filter (any depth)
-   *   - `parentId === null`      → top-level only (`parent_id IS NULL`)
-   *   - `parentId === '<id>'`    → direct children of that session
-   *   - `prefix`                 → channel scope (id range query, uses pk index)
-   *   - `cursor` (epoch ms)      → keyset pagination on `updated_at`
-   *   - `limit`                  → page size; default 50
-   *
-   * Returns `nextCursor` set to the last row's `updated_at` when there are
-   * more rows past this page (computed via fetch-N+1). Callers that don't
-   * care about pagination can ignore it.
-   *
-   * Why range query for prefix instead of `LIKE 'wx_user_%'`: sqlite LIKE
-   * with leading `_` (a single-char wildcard) doesn't always pick up the
-   * pk index, and prefix strings legitimately contain `_`. `id >= prefix
-   * AND id < prefix + '￿'` is unambiguous and index-friendly.
-   */
+  // ── Session metadata queries (delegated to SessionQueryStore) ───────
+  // Thin pass-throughs so external callers (ws / channels / routes / cli /
+  // session-tools / evolution) and the SessionManagerInternals contract are
+  // unchanged. The store reads db + the in-memory map (status only) via `this`.
+
   listSessions(opts?: {
     parentId?: string | null
     prefix?: string
-    /** When true, exclude sub-agent sessions (parent_id IS NULL). Used by
-     *  channel `/list` / `/switch` to show only the user's own root
-     *  conversations. */
     rootOnly?: boolean
     includeArchived?: boolean
     limit?: number
     cursor?: number
   }): { sessions: SessionInfo[]; nextCursor: number | null } {
-    const limit = Math.max(1, Math.min(500, opts?.limit ?? 50))
-
-    const conditions = [] as Array<ReturnType<typeof eq>>
-    if (opts?.parentId === null) conditions.push(isNull(agentSessions.parentId) as never)
-    else if (typeof opts?.parentId === 'string') conditions.push(eq(agentSessions.parentId, opts.parentId))
-
-    if (opts?.prefix) {
-      conditions.push(gte(agentSessions.id, opts.prefix) as never)
-      conditions.push(lt(agentSessions.id, opts.prefix + '￿') as never)
-    }
-    // Caller opt-in: keep only root sessions (parent_id IS NULL). Channel
-    // `/list` / `/switch` set this so the user's session list shows their
-    // own conversations, not the internal sub-agents those conversations
-    // spawn. Other callers that want all matching rows (including subs)
-    // simply omit it — the prefix range-scan still works as before.
-    if (opts?.rootOnly) {
-      conditions.push(isNull(agentSessions.parentId) as never)
-    }
-
-    if (!opts?.includeArchived) conditions.push(isNull(agentSessions.archivedAt) as never)
-
-    if (typeof opts?.cursor === 'number') {
-      conditions.push(lt(agentSessions.updatedAt, opts.cursor) as never)
-    }
-
-    // Fetch limit+1 so we can tell whether more pages exist without a
-    // second COUNT query. Drop the extra row before mapping.
-    const rows = this.db.select().from(agentSessions)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(agentSessions.updatedAt))
-      .limit(limit + 1)
-      .all()
-
-    const hasMore = rows.length > limit
-    const page = hasMore ? rows.slice(0, limit) : rows
-    const nextCursor = hasMore ? page[page.length - 1].updatedAt : null
-
-    const activeParents = this.computeActiveParents(page.map((r) => r.id))
-    return {
-      sessions: page.map((row) => this.toSessionInfo(row, activeParents)),
-      nextCursor,
-    }
+    return this.queryStore.listSessions(opts)
   }
 
-  /**
-   * One-shot batched lookup: which of the given session ids have at least
-   * one live child (non-stopped, non-archived). Replaces the per-row
-   * "select active child" subquery that `toSessionInfo` would otherwise
-   * fire N times for an N-row listing. Single SQL with `parent_id IN
-   * (...)` against the `idx_agent_sessions_parent_id` index — typical
-   * page (30 ids) finishes in well under 1ms.
-   */
-  private computeActiveParents(ids: string[]): Set<string> {
-    if (ids.length === 0) return new Set()
-    const rows = this.db.select({ parentId: agentSessions.parentId })
-      .from(agentSessions)
-      .where(and(
-        inArray(agentSessions.parentId, ids),
-        isNull(agentSessions.stoppedAt),
-        isNull(agentSessions.archivedAt),
-      ))
-      .all()
-    const out = new Set<string>()
-    for (const r of rows) {
-      if (r.parentId !== null) out.add(r.parentId)
-    }
-    return out
-  }
-
-  /**
-   * Return every descendant of any session in `rootIds` (transitive — children,
-   * grandchildren, etc.). One SQL query per root, using the hierarchical id
-   * format `root>child>grandchild` and a keyset range scan on the pk index.
-   *
-   * Used by the admin sidebar to build full session trees in one shot
-   * without recursive lazy-loading. For the typical N=30 page size, this
-   * is 30 indexed range scans — orders of magnitude cheaper than
-   * `select all from agent_sessions` and 0 round-trips per expand.
-   */
   listDescendants(rootIds: string[], opts?: { includeArchived?: boolean }): SessionInfo[] {
-    if (rootIds.length === 0) return []
-    // Collect every descendant row first, then resolve status for all
-    // of them in one batched activeParents query — avoids the N+1
-    // subquery the per-row toSessionInfo would otherwise fire.
-    const allRows: Array<typeof agentSessions.$inferSelect> = []
-    for (const rootId of rootIds) {
-      const conditions = [
-        gte(agentSessions.id, rootId + '>'),
-        lt(agentSessions.id, rootId + '>￿'),
-      ]
-      if (!opts?.includeArchived) conditions.push(isNull(agentSessions.archivedAt))
-      const rows = this.db.select().from(agentSessions)
-        .where(and(...conditions))
-        .orderBy(desc(agentSessions.updatedAt))
-        .all()
-      allRows.push(...rows)
-    }
-    const activeParents = this.computeActiveParents(allRows.map((r) => r.id))
-    return allRows.map((r) => this.toSessionInfo(r, activeParents))
+    return this.queryStore.listDescendants(rootIds, opts)
   }
 
-  /**
-   * Find the most-recent session whose id starts with the given prefix.
-   *
-   * Hot path: every inbound channel message calls `findActiveSessionId`,
-   * which used to pull the entire `agent_sessions` table into memory and
-   * filter by string prefix. Replaced with this single-row keyset query
-   * — at N=10000 it's roughly four orders of magnitude cheaper.
-   */
   findLatestByPrefix(prefix: string): SessionInfo | null {
-    // Channel handlers (wechat / telegram / web / etc.) call this to find a
-    // user's "current" root session by per-user prefix (e.g. `wx_<uid>_`).
-    // Sub-agent session ids are hierarchical (`<root>>sid_xxx`) and share
-    // the parent's prefix, so a plain range-scan would return the latest
-    // sub-agent as "the user's active session" — routing the user's next
-    // message into a sub-agent's conversation. Filter on `parent_id IS NULL`
-    // to keep only root sessions; that's the semantic source of truth, the
-    // `>`-in-id pattern is just an implementation detail.
-    const row = this.db.select().from(agentSessions)
-      .where(and(
-        gte(agentSessions.id, prefix),
-        lt(agentSessions.id, prefix + '￿'),
-        isNull(agentSessions.parentId),
-        isNull(agentSessions.archivedAt),
-      ))
-      .orderBy(desc(agentSessions.createdAt))
-      .limit(1)
-      .get()
-    return row ? this.toSessionInfo(row) : null
+    return this.queryStore.findLatestByPrefix(prefix)
   }
 
   /**
@@ -1512,29 +1156,7 @@ export class SessionManager implements SessionManagerInternals {
 
   /** Look up a single session by ID. */
   getSessionById(sessionId: string): SessionInfo | null {
-    const row = this.db.select().from(agentSessions)
-      .where(eq(agentSessions.id, sessionId)).get()
-    if (row) return this.toSessionInfo(row)
-    // Internal-agent sessions don't have a workspace db row by design —
-    // they live under `~/.halo/global/internal-sessions/<agentId>/`.
-    // Surface a synthetic SessionInfo so callers checking "does this
-    // session exist?" before resume/createSession see them.
-    const internal = findInternalSession(sessionId)
-    if (!internal) return null
-    const ts = internal.data.createdAt ? new Date(internal.data.createdAt).getTime() : Date.now()
-    return {
-      id: sessionId,
-      parentId: null,
-      agentId: internal.agentId,
-      agentName: internal.agentId,
-      description: internal.data.description ?? internal.data.title ?? '',
-      status: 'idle',
-      accessLevel: null,
-      createdAt: ts,
-      updatedAt: ts,
-      stoppedAt: null,
-      archivedAt: null,
-    }
+    return this.queryStore.getSessionById(sessionId)
   }
 
   /**
@@ -1545,71 +1167,7 @@ export class SessionManager implements SessionManagerInternals {
    * Returns null if `rootId` is unknown.
    */
   getSessionTree(rootId: string): SessionTreeNode | null {
-    const root = this.getSessionById(rootId)
-    if (!root) return null
-    const build = (parent: SessionInfo): SessionTreeNode => {
-      // No limit here intentionally — getSessionTree is used by archive /
-      // delete cascades, which must enumerate every descendant. A practical
-      // cap of 10k per parent is plenty: sub-agent fan-out beyond that is
-      // an unrelated bug.
-      const { sessions: children } = this.listSessions({
-        parentId: parent.id,
-        includeArchived: true,
-        limit: 10_000,
-      })
-      return {
-        id: parent.id,
-        agentName: parent.agentName,
-        status: parent.status,
-        archived: parent.archivedAt != null,
-        createdAt: parent.createdAt,
-        description: parent.description,
-        children: children.map(build),
-      }
-    }
-    return build(root)
-  }
-
-  /**
-   * `activeParents` is an optional pre-computed set of session ids that
-   * have at least one non-stopped, non-archived child. List callers
-   * (`listSessions`, `listDescendants`) build this set with one batched
-   * SQL query for the entire page so per-row status resolution avoids
-   * the N+1 child-lookup. Single-row callers (`getSessionById`,
-   * `findLatestByPrefix`) omit it and fall back to the per-row query —
-   * negligible at N=1.
-   */
-  private toSessionInfo(
-    row: typeof agentSessions.$inferSelect,
-    activeParents?: Set<string>,
-  ): SessionInfo {
-    const inMemory = this.sessions.get(row.id)
-    let status: 'running' | 'idle' | 'stopped'
-    if (row.stoppedAt) {
-      status = 'stopped'
-    } else if (inMemory?.promise !== null && inMemory?.promise !== undefined) {
-      status = 'running'
-    } else if (activeParents) {
-      status = activeParents.has(row.id) ? 'running' : 'idle'
-    } else {
-      const activeChild = this.db.select({ id: agentSessions.id }).from(agentSessions)
-        .where(and(eq(agentSessions.parentId, row.id), isNull(agentSessions.stoppedAt), isNull(agentSessions.archivedAt)))
-        .get()
-      status = activeChild ? 'running' : 'idle'
-    }
-    return {
-      id: row.id,
-      parentId: row.parentId,
-      agentId: row.agentId,
-      agentName: row.agentName || row.agentId,
-      description: row.description ?? '',
-      status,
-      accessLevel: (row.accessLevel as 'readonly' | 'workspace' | 'full' | null | undefined) ?? null,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      stoppedAt: row.stoppedAt,
-      archivedAt: row.archivedAt,
-    }
+    return this.queryStore.getSessionTree(rootId)
   }
 
   getSessionTitle(sessionId: string): string | null {
@@ -1657,7 +1215,7 @@ export class SessionManager implements SessionManagerInternals {
     // snapshot. Pull the sub-log directly from the root when it's there; it
     // carries in-flight stream/tool buffers, fresher than the on-disk file.
     if (rootId !== sessionId) {
-      const rootState = this.uiStates.get(rootId)
+      const rootState = this.uiStore.getCachedUIState(rootId)
       const subLog = rootState?.subSessionLogs.get(sessionId)
       if (subLog) {
         const contextConfig = await this.getContextConfig(sessionId)
@@ -1687,13 +1245,11 @@ export class SessionManager implements SessionManagerInternals {
     // nothing in memory is keeping it live. Sessions this process IS running
     // keep their cache (it holds in-flight streaming buffers not yet on disk).
     const selfDriven = this.sessions.has(sessionId) || this.sessions.has(rootId)
-    if (!selfDriven) this.uiStates.delete(sessionId)
-
     // Ensure UIState is built (seeds from disk if needed). The state includes
     // in-flight streaming buffers + tool calls, so a view opened during a tool
-    // execution sees the partial log.
-    this.uiStateProjectPaths.set(sessionId, this.workspaceRoot)
-    const state = this.ensureUIState(sessionId)
+    // execution sees the partial log. prepareForView evicts a stale cache first
+    // when the session isn't self-driven, so a re-view reflects disk.
+    const state = this.uiStore.prepareForView(sessionId, selfDriven)
     // createSaveSnapshot may return state.messageLog directly — copy to avoid
     // aliasing with the caller's client.messageLog (which would cause every
     // downstream push to hit both logs, producing duplicates on persist).
@@ -1726,7 +1282,7 @@ export class SessionManager implements SessionManagerInternals {
       try { session = await this.ensureSession(sessionId) } catch { return null }
     }
     const rootId = this.findRootSessionId(sessionId)
-    const state = this.uiStates.get(rootId)
+    const state = this.uiStore.getCachedUIState(rootId)
     return {
       workspace: this.workspaceRoot,
       agentId: session.agentId,
@@ -1753,61 +1309,27 @@ export class SessionManager implements SessionManagerInternals {
    * For "I want the state, build it from disk if needed" use `getUIState`.
    */
   getCachedUIState(rootSessionId: string): UIState | null {
-    return this.uiStates.get(rootSessionId) ?? null
+    return this.uiStore.getCachedUIState(rootSessionId)
   }
 
-  /**
-   * Get the UIState for a session, restoring it from disk if it isn't
-   * in memory yet. Returns null only when the session id doesn't exist
-   * in SQLite at all — i.e. there's nothing to restore.
-   */
   getUIState(rootSessionId: string): UIState | null {
-    const existing = this.uiStates.get(rootSessionId)
-    if (existing) return existing
-    const session = this.getSessionById(rootSessionId)
-    if (!session) return null
-    return this.ensureUIState(rootSessionId)
+    return this.uiStore.getUIState(rootSessionId)
   }
 
   appendUserMessage(sessionId: string, text: string, opts?: { local?: boolean }): void {
-    this.emitEvent(sessionId, { type: 'user', text, agentName: 'user', localEcho: opts?.local })
+    this.uiStore.appendUserMessage(sessionId, text, opts)
   }
 
-  /**
-   * Append a notification (system message) to the UI log. Used by the WS
-   * handler to record out-of-band events like compact notices.
-   */
   appendNotification(sessionId: string, text: string, agentName: string = 'System'): void {
-    const rootId = this.findRootSessionId(sessionId)
-    const state = this.ensureUIState(rootId)
-    state.messageLog.push({
-      id: genId(), type: 'notification', role: 'system',
-      content: text, timestamp: Date.now(), agentName,
-    })
-    this.persistUIState(rootId, state)
+    this.uiStore.appendNotification(sessionId, text, agentName)
   }
 
-  /**
-   * Replace the message log entirely (used for compact, which rewrites the
-   * conversation). Persists to disk.
-   */
   replaceMessageLog(sessionId: string, messages: SessionMessage[]): void {
-    const rootId = this.findRootSessionId(sessionId)
-    const state = this.ensureUIState(rootId)
-    state.messageLog = messages
-    state.streamBuffer = ''
-    state.turnToolCalls = []
-    state.turnContentBlocks = []
-    this.persistUIState(rootId, state)
+    this.uiStore.replaceMessageLog(sessionId, messages)
   }
 
-  /**
-   * Drop the in-memory UIState for a session (e.g. after stopSession / clear).
-   * The disk file stays. This is a no-op if not loaded.
-   */
   dropUIState(sessionId: string): void {
-    this.uiStates.delete(sessionId)
-    this.uiStateProjectPaths.delete(sessionId)
+    this.uiStore.dropUIState(sessionId)
   }
 
   // ── Loop detection ──────────────────────────────────────────────────
@@ -3014,14 +2536,7 @@ export class SessionManager implements SessionManagerInternals {
     // racing background save (e.g. an outstanding WS `saveSession` closure
     // capturing the now-stale state) can detect deletion and bail.
     for (const id of allIds) {
-      this.uiStates.delete(id)
-      this.uiStateProjectPaths.delete(id)
-      const timer = this.persistTimers.get(id)
-      if (timer) {
-        clearTimeout(timer)
-        this.persistTimers.delete(id)
-      }
-      this.eventListeners.delete(id)
+      this.uiStore.purge(id)
       this.deletedSessionIds.add(id)
     }
 
@@ -3081,8 +2596,7 @@ export class SessionManager implements SessionManagerInternals {
       session.pendingUserMessages = []
       this.sessions.delete(sessionId)
     }
-    this.uiStates.delete(sessionId)
-    this.uiStateProjectPaths.delete(sessionId)
+    this.uiStore.dropUIState(sessionId)
   }
 
   // ── Session output + status ────────────────────────────────────────
