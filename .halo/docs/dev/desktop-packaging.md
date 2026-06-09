@@ -8,6 +8,12 @@ then spawns the server as a child process and points a `BrowserWindow` at it.
 See [design](../design/) for the server itself; this doc is only about the
 packaging pipeline.
 
+> **Before packaging, check for `desktop-packaging.local.md` in this directory**
+> (gitignored, per-host). If present it carries operator/machine-specific setup
+> not captured here — e.g. building on a Linux host (wine/32-bit, workspace
+> build order, `corepack enable`) and artifact-distribution gotchas. Read it
+> first; absence just means none were recorded on this machine.
+
 ## Architecture
 
 ```
