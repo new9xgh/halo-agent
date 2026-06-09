@@ -47,7 +47,7 @@ Full field list in [storage.md](storage.md).
 
 File: `packages/server/src/agents/session-manager.ts`
 
-Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 with a `ModelRuntime` instance. Two concerns are split into sibling files: UI-log state + event routing → `SessionUIStore` (`agents/session-ui-store.ts`, see [Event routing](#event-routing)); read-only metadata queries + the row→SessionInfo status projection → `SessionQueryStore` (`agents/session-query-store.ts`). Both take SessionManager as host; it keeps thin pass-throughs.
+Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 with a `ModelRuntime` instance. Four concerns are split into sibling files, each taking SessionManager as host (it keeps thin pass-throughs): UI-log state + event routing → `SessionUIStore` (`agents/session-ui-store.ts`, see [Event routing](#event-routing)); read-only metadata queries + status projection → `SessionQueryStore` (`agents/session-query-store.ts`); agent construction → `SessionAgentBuilder` (`agents/session-agent-builder.ts`); skill-command permissions → `SessionSkillCommands` (`agents/session-skill-commands.ts`).
 
 ### Key methods
 
