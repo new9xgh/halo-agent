@@ -45,9 +45,8 @@ simply absent. Consequences you must apply:
   behavior in a workspace where a workspace copy shadows it. To customize a
   global skill for one workspace, copy the WHOLE folder to workspace scope
   (including resource files — remember: no per-file fallback), then edit.
-- **Built-in skills** (`agent`, `skill`, `organize-workspace`,
-  `share-workspace`, `manage-cron-jobs`, `send-file`, `create-halo-acp`,
-  `express-self`): their global copies are force re-seeded on every server
+- **Built-in skills** (`agent`, `skill`, `ws`, `cron`, `acp`, `send-file`,
+  `express-self`, `aws-knowledge`, `nova-web-search`): their global copies are force re-seeded on every server
   start — direct edits to those global files are lost. Customize at workspace
   scope instead.
 - **Disabled state** lives per-workspace in the `disabled_items` DB table, not

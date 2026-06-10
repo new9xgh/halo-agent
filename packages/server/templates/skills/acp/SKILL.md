@@ -1,9 +1,34 @@
 ---
-name: Create Halo ACP Binding
-description: Generate a new halo-to-halo ACP bridge skill. The user gives connection details (label, host, port, token, workspace) for a remote halo agent; this command stamps out a fresh `ask-<label>` skill that the local agent can call to relay questions to that remote. Activate when the user says "add an ACP binding", "let me talk to <other halo>", "set up halo-to-halo", "create an ACP connection", or asks to wire a new remote halo workspace.
+name: acp
+description: Manage ACP bindings — generate an `ask-<label>` bridge skill that relays questions to a remote halo agent (host/port/token/workspace) or to a local Claude Code instance. Activate when the user says "add an ACP binding", "let me talk to <other agent>", "connect Claude Code", or asks to wire a new remote workspace.
+command: /acp
+requiresAccess: full
+verbs:
+  - { name: add, desc: Generate a new ask-<label> binding (halo or claude) }
+  - { name: list, desc: List existing ask-* bindings }
+  - { name: remove, desc: Remove a binding (delete its ask-<label> skill) }
 ---
 
-# Create Halo ACP Binding
+# acp
+
+The requested action is **`$1`** (full args: `$ARGUMENTS`); with natural
+language, infer it. `list` = enumerate `ask-*` skill dirs (workspace + global)
+and report label/kind/target. `remove` = confirm, then delete the chosen
+`ask-<label>` skill directory and its settings.yaml namespace entry. `add` =
+the generator flow below.
+
+## Two binding kinds
+
+- **halo** (default) — a remote halo server: needs label/host/port/token/workspace.
+- **claude** — the local Claude Code install, bridged via the standard ACP
+  adapter (`claude-agent-acp`, `npm i -g @agentclientprotocol/claude-agent-acp`).
+  Needs only label + a working directory (`cwd`) the Claude session should run
+  in. No host/port/token. The generated SKILL.md invokes
+  `ask.py --kind claude --cwd <dir>`; everything else (threading via SESSION
+  id, reply format) is identical.
+
+
+## Add — generator flow
 
 Stamps out a new skill named `ask-<label>` that bridges this local agent to a different halo agent over the [ACP adapter](../../docs/dev/acp-adapter.md). One binding = one remote (host + port + token + workspace). Multiple bindings can coexist — each gets its own slash command (`/ask-sa-agent`, `/ask-prod`, …) and its own settings namespace.
 
@@ -17,7 +42,7 @@ Required from the user:
 |---|---|
 | `label` | Slug — lowercase, hex/dash only (regex `^[a-z][a-z0-9-]*$`). Used for the skill id (`ask-<label>`), slash command (`/ask-<label>`), and settings namespace. Must not collide with an existing skill. Example: `sa-agent`, `prod-cluster`, `audit-ws`. |
 | `host` | Remote halo server hostname / IP. |
-| `port` | Remote halo server port. |
+| `port` | Remote halo server port. (halo kind only) |
 | `workspace` | Absolute path of the remote workspace on its server. |
 | `token` | Web-channel token from the remote halo's admin (Channels → Web → copy). Should be a `full` access token if you'll later want to override workspace per call. |
 
@@ -40,7 +65,7 @@ Before writing files:
 
 ## Step 3 — stage files
 
-The template directory is `~/.halo/global/skills/create-halo-acp/templates/`. Copy + substitute placeholders. Three files per binding:
+The template directory is `~/.halo/global/skills/acp/templates/`. Copy + substitute placeholders. Three files per binding:
 
 ```
 <scope-dir>/ask-<label>/
@@ -77,7 +102,7 @@ PORT=9527
 WORKSPACE=/home/ubuntu/sa-agent
 SCOPE_DIR=$HOME/.halo/global/skills           # or the workspace's .halo/skills
 SKILL_DIR=$SCOPE_DIR/ask-$LABEL
-TPL=$HOME/.halo/global/skills/create-halo-acp/templates
+TPL=$HOME/.halo/global/skills/acp/templates
 
 mkdir -p "$SKILL_DIR"
 sed -e "s|{{LABEL}}|$LABEL|g" \

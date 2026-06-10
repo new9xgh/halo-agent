@@ -80,7 +80,7 @@ const BUILTIN_SKILL_IDS = new Set([
   // `ask-<label>` ACP binding skill. The generated bindings live in
   // user-owned skill dirs (workspace or global) and aren't templated;
   // only this generator itself is platform-owned.
-  'create-halo-acp',
+  'acp',
   // Always-on file delivery primitive: every channel handler (web /
   // wechat / telegram / slack / feishu) intercepts `MEDIA:<path>` from
   // the agent's reply and uploads it. The skill body teaches the agent

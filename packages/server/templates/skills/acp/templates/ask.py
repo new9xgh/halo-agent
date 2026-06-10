@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ask.py — call a remote halo agent over ACP. See SKILL.md for usage."""
+"""ask.py — call a remote agent over ACP (halo server or local Claude Code). See SKILL.md."""
 from __future__ import annotations
 
 import argparse
@@ -19,24 +19,36 @@ def fail(msg: str, code: int = 1) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="ask.py", description="Ask a remote halo agent over ACP.")
+    p = argparse.ArgumentParser(prog="ask.py", description="Ask a remote agent over ACP.")
     p.add_argument("question")
-    p.add_argument("--host", required=True)
-    p.add_argument("--port", required=True)
-    p.add_argument("--token", required=True)
-    p.add_argument("--workspace", required=True)
+    p.add_argument("--kind", default="halo", choices=["halo", "claude"],
+                   help="halo: remote halo server via `halo acp`; claude: local Claude Code via `claude-agent-acp`.")
+    p.add_argument("--host")
+    p.add_argument("--port")
+    p.add_argument("--token")
+    p.add_argument("--workspace")
+    p.add_argument("--cwd", default=None, help="claude kind: working directory for the session (defaults to CWD).")
     p.add_argument("--agent-id", default=None)
     p.add_argument("--session-id", default=None)
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--halo-bin", default=None)
+    p.add_argument("--claude-bin", default=None)
     args = p.parse_args()
 
-    halo = args.halo_bin or os.environ.get("HALO_BIN") or "halo"
-    if shutil.which(halo) is None and not os.path.isabs(halo):
-        fail(f"`{halo}` not found in PATH. Install @turmind/halo or set --halo-bin.", 2)
-
-    cmd = [halo, "acp", "--host", args.host, "--port", str(args.port),
-           "--token", args.token, "--workspace", args.workspace]
+    if args.kind == "claude":
+        bin_ = args.claude_bin or os.environ.get("CLAUDE_ACP_BIN") or "claude-agent-acp"
+        if shutil.which(bin_) is None and not os.path.isabs(bin_):
+            fail(f"`{bin_}` not found in PATH. npm install -g @agentclientprotocol/claude-agent-acp, or set --claude-bin.", 2)
+        cmd = [bin_]
+    else:
+        for k in ("host", "port", "token", "workspace"):
+            if not getattr(args, k):
+                fail(f"--{k} is required for --kind halo", 2)
+        halo = args.halo_bin or os.environ.get("HALO_BIN") or "halo"
+        if shutil.which(halo) is None and not os.path.isabs(halo):
+            fail(f"`{halo}` not found in PATH. Install @turmind/halo or set --halo-bin.", 2)
+        cmd = [halo, "acp", "--host", args.host, "--port", str(args.port),
+               "--token", args.token, "--workspace", args.workspace]
     # Drop `--agent-id` when blank OR an unsubstituted `{{...}}` literal.
     # Both mean "user hasn't configured this optional field" — the first
     # because settings.yaml has `agent_id: ""`, the second because the
@@ -116,7 +128,8 @@ def main() -> None:
                 fail(f"session/load failed: {resp['error']}")
             session_id = args.session_id
         else:
-            rid = send("session/new", {})
+            new_params = {"cwd": args.cwd or os.getcwd(), "mcpServers": []} if args.kind == "claude" else {}
+            rid = send("session/new", new_params)
             resp = wait_for(rid, deadline)
             if "error" in resp:
                 fail(f"session/new failed: {resp['error']}")
