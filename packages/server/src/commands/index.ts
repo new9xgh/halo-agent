@@ -20,15 +20,26 @@ export const commandRegistry = new CommandRegistry()
 // registry; it caused web-demo / wechat / telegram to list dead commands.
 
 commandRegistry.registerDescriptor({ name: 'help',    slashName: '/help',    description: 'Show available commands',                type: 'server', source: 'builtin' })
-// Object command: session lifecycle (new/list/switch/stop/interrupt/compact/context).
-commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', description: 'Manage sessions (new/list/switch/stop/interrupt/compact/context)', type: 'server', argHint: '<verb>', source: 'builtin' })
+// Object commands declare their builtin verbs here so completion UIs (admin
+// palette, TUI) can suggest them. Keep in sync with SUBCOMMAND_ROUTES — skill
+// verbs (e.g. agent create/update) come from the skill's SKILL.md instead.
+commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', description: 'Manage sessions', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+  { name: 'new', builtin: true }, { name: 'list', builtin: true }, { name: 'switch', builtin: true },
+  { name: 'stop', builtin: true }, { name: 'interrupt', builtin: true }, { name: 'compact', builtin: true }, { name: 'context', builtin: true },
+] })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 // Object command: list/switch/desc/delete run as builtin verbs (work on every
 // agent); create/update fall through to the `agent` skill. Always registered
 // so it doesn't depend on the skill being whitelisted.
-commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Manage agents (list/switch/desc/delete; create/update via skill)', type: 'server', argHint: '<verb>', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   description: 'Manage skills (list/desc/disable/delete; create/update via skill)', type: 'server', argHint: '<verb>', source: 'builtin' })
+commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Manage agents', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+  { name: 'list', builtin: true }, { name: 'switch', builtin: true }, { name: 'desc', builtin: true }, { name: 'delete', builtin: true },
+  { name: 'create' }, { name: 'update' },
+] })
+commandRegistry.registerDescriptor({ name: 'skill',   slashName: '/skill',   description: 'Manage skills', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+  { name: 'list', builtin: true }, { name: 'desc', builtin: true }, { name: 'disable', builtin: true }, { name: 'enable', builtin: true }, { name: 'delete', builtin: true },
+  { name: 'create' }, { name: 'update' },
+] })
 
 /** Names (no leading slash) of every registered builtin command. Single source
  *  of truth for channels that need to enumerate commands — e.g. Telegram's

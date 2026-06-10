@@ -27,11 +27,27 @@ interface Props {
 function filterCommands(items: SlashItem[], rawValue: string): SlashItem[] {
   if (!rawValue.startsWith('/')) return []
   // Only suggest while the user is still typing the *command word* — once
-  // they type a space, they're entering args, not browsing commands.
+  // they type a space, they're entering args (the verb stage below takes
+  // over for object commands).
   const firstSpace = rawValue.indexOf(' ')
   if (firstSpace !== -1) return []
   const prefix = rawValue.toLowerCase()
   return items.filter((c) => c.slashName.toLowerCase().startsWith(prefix))
+}
+
+/** Second stage: `/cmd <partial-verb>` → suggest the object command's verbs.
+ *  Active only when the command word matches exactly and the cursor is in the
+ *  first argument token. Rendered through the same SlashSuggest dropdown by
+ *  mapping each verb to a pseudo SlashItem (`/cmd verb`). */
+function filterVerbs(items: SlashItem[], rawValue: string): SlashItem[] {
+  const m = rawValue.match(/^(\/\S+)\s+(\S*)$/)
+  if (!m) return []
+  const cmd = items.find((c) => c.slashName.toLowerCase() === m[1].toLowerCase())
+  if (!cmd?.verbs?.length) return []
+  const partial = m[2].toLowerCase()
+  return cmd.verbs
+    .filter((v) => v.name.startsWith(partial) && v.name !== partial)
+    .map((v) => ({ slashName: `${cmd.slashName} ${v.name}`, description: v.desc ?? '' }))
 }
 
 export function InputBox({ enabled, placeholder, history, onSubmit, hint, commands = [], workspace }: Props): React.ReactElement {
@@ -51,7 +67,9 @@ export function InputBox({ enabled, placeholder, history, onSubmit, hint, comman
     setCursorKey((k) => k + 1)
   }
 
-  const filtered = useMemo(() => filterCommands(commands, value), [commands, value])
+  const cmdMatches = useMemo(() => filterCommands(commands, value), [commands, value])
+  const verbMatches = useMemo(() => filterVerbs(commands, value), [commands, value])
+  const filtered = cmdMatches.length > 0 ? cmdMatches : verbMatches
   const suggestOpen = filtered.length > 0
 
   // @file/@image path completion. Recompute scan whenever the active partial

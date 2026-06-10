@@ -8,7 +8,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { postToFace } from '@/features/editor/face-bridge'
-import { matchCommands, type SlashCommand } from './slash-commands'
+import { matchCommands, matchVerbs, type SlashCommand } from './slash-commands'
 import { CommandPalette } from './command-palette'
 import { FileMentionPicker } from './file-mention-picker'
 import { useT } from '@/shared/i18n'
@@ -624,6 +624,15 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     return matchCommands(firstWord)
   }, [text])
 
+  // Second-stage completion: `/agent ` typed in full → suggest its verbs.
+  const matchedVerbs = useMemo(() => matchVerbs(text), [text])
+  const [verbIndex, setVerbIndex] = useState(0)
+  useEffect(() => { setVerbIndex(0) }, [matchedVerbs.length])
+  const selectVerb = useCallback((v: { cmd: SlashCommand; verb: { name: string } }) => {
+    setText(`${v.cmd.name} ${v.verb.name} `)
+    textareaRef.current?.focus()
+  }, [])
+
   // Detect @scope trigger first — `@scope <dir>` is a literal marker the server
   // expands (directory-scoped INSTRUCTIONS.md for the turn), so unlike @mention
   // it must stay in the text. Matches the explicit `@scope ` prefix; a bare `@`
@@ -775,6 +784,13 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     const trimmed = text.trim()
     if (!trimmed && pendingFiles.length === 0) return
 
+    // A verb candidate is highlighted (e.g. `/skill dis` → disable): Enter
+    // completes it instead of sending the partial verb as an argument.
+    if (matchedVerbs.length > 0) {
+      const v = matchedVerbs[verbIndex] ?? matchedVerbs[0]
+      selectVerb(v)
+      return
+    }
     if (trimmed.startsWith('/') && matchedCmds.length > 0) {
       selectCommand(matchedCmds[cmdIndex] ?? matchedCmds[0])
       return
@@ -805,7 +821,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
     setMentionedFiles([])
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles])
+  }, [text, pendingFiles, onSend, matchedCmds, cmdIndex, selectCommand, mentionedFiles, matchedVerbs, verbIndex, selectVerb])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -835,6 +851,14 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
         if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return }
       }
       // Command palette navigation
+      // Verb stage first (it only matches when the command itself is complete,
+      // so the two stages never overlap).
+      if (matchedVerbs.length > 0) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); setVerbIndex((i) => Math.min(i + 1, matchedVerbs.length - 1)); return }
+        if (e.key === 'ArrowUp') { e.preventDefault(); setVerbIndex((i) => Math.max(i - 1, 0)); return }
+        if (e.key === 'Tab') { e.preventDefault(); const v = matchedVerbs[verbIndex]; if (v) selectVerb(v); return }
+        if (e.key === 'Escape') { e.preventDefault(); setVerbIndex(0); return }
+      }
       if (matchedCmds.length > 0) {
         if (e.key === 'ArrowDown') { e.preventDefault(); setCmdIndex((i) => Math.min(i + 1, matchedCmds.length - 1)); return }
         if (e.key === 'ArrowUp') { e.preventDefault(); setCmdIndex((i) => Math.max(i - 1, 0)); return }
@@ -848,7 +872,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       }
       if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); handleSend() }
     },
-    [handleSend, matchedCmds, cmdIndex, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt],
+    [handleSend, matchedCmds, cmdIndex, matchedVerbs, verbIndex, selectVerb, mentionMatches, mentionIndex, selectMention, scopeMatches, scopeIndex, selectScope, isStreaming, text, onInterrupt],
   )
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -889,6 +913,11 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
     >
       <CommandPalette commands={matchedCmds} selectedIndex={cmdIndex} onSelect={selectCommand} />
+      <CommandPalette
+        commands={matchedVerbs.map((v) => ({ name: `${v.cmd.name} ${v.verb.name}`, description: v.verb.desc ?? '', type: 'server' as const }))}
+        selectedIndex={verbIndex}
+        onSelect={(c) => { setText(c.name + ' '); textareaRef.current?.focus() }}
+      />
       <FileMentionPicker matches={mentionMatches} selectedIndex={mentionIndex} onSelect={selectMention} />
       <FileMentionPicker matches={scopeMatches} selectedIndex={scopeIndex} onSelect={selectScope} dirs />
 

@@ -549,6 +549,7 @@ export function App({ harness, verbose }: AppProps): ReactElement {
         slashName: c.slashName,
         description: c.description,
         argHint: c.argHint,
+        verbs: c.verbs,
       })))
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }

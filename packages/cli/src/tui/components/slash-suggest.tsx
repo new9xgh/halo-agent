@@ -5,6 +5,9 @@ export interface SlashItem {
   slashName: string
   description: string
   argHint?: string
+  /** Object-command sub-actions (e.g. /agent list|create…) — drives the
+   *  second completion stage after the command name + space. */
+  verbs?: Array<{ name: string; desc?: string }>
 }
 
 interface Props {

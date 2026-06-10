@@ -7,6 +7,9 @@ export interface SlashCommand {
   argHint?: string
   source?: 'builtin' | 'skill'
   skillId?: string
+  /** Declared sub-actions of an object command (e.g. /agent list|create…).
+   *  Drives second-stage completion: type the command + space → pick a verb. */
+  verbs?: Array<{ name: string; desc?: string }>
 }
 
 const CLIENT_FALLBACK: SlashCommand[] = [
@@ -27,6 +30,7 @@ export async function refreshCommands(projectId?: string, sessionId?: string, ag
       argHint: d.argHint,
       source: d.source,
       skillId: d.skillId,
+      verbs: d.verbs,
     }))
   } catch {
     serverCommands = []
@@ -41,4 +45,19 @@ export function matchCommands(input: string): SlashCommand[] {
   if (!input.startsWith('/')) return []
   const lower = input.toLowerCase()
   return getCommands().filter((cmd) => cmd.name.startsWith(lower))
+}
+
+/** Second-stage completion: after `/cmd ` (command typed in full + space),
+ *  suggest its verbs filtered by the partial verb typed so far. Returns []
+ *  for non-object commands or when a verb is already complete (followed by
+ *  more args). */
+export function matchVerbs(text: string): Array<{ cmd: SlashCommand; verb: { name: string; desc?: string } }> {
+  const m = text.match(/^(\/\S+)\s+(\S*)$/)
+  if (!m) return []
+  const cmd = getCommands().find((c) => c.name === m[1].toLowerCase())
+  if (!cmd?.verbs?.length) return []
+  const partial = m[2].toLowerCase()
+  return cmd.verbs
+    .filter((v) => v.name.startsWith(partial) && v.name !== partial)
+    .map((verb) => ({ cmd, verb }))
 }

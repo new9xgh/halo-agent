@@ -428,7 +428,7 @@ export const api = {
       if (sessionId) params.set('sessionId', sessionId)
       if (agentId) params.set('agentId', agentId)
       const qs = params.toString() ? `?${params.toString()}` : ''
-      return request<{ commands: Array<{ name: string; slashName: string; description: string; type: 'server' | 'client'; argHint?: string; source: 'builtin' | 'skill'; skillId?: string }> }>(`/commands${qs}`)
+      return request<{ commands: Array<{ name: string; slashName: string; description: string; type: 'server' | 'client'; argHint?: string; source: 'builtin' | 'skill'; skillId?: string; verbs?: Array<{ name: string; desc?: string }> }> }>(`/commands${qs}`)
     },
   },
 
