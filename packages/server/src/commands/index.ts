@@ -20,13 +20,8 @@ export const commandRegistry = new CommandRegistry()
 // registry; it caused web-demo / wechat / telegram to list dead commands.
 
 commandRegistry.registerDescriptor({ name: 'help',    slashName: '/help',    description: 'Show available commands',                type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'new',     slashName: '/new',     description: 'Start a new session',                    type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'list',    slashName: '/list',    description: 'List recent sessions',                   type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'switch',  slashName: '/switch',  description: 'Switch to a session by index',           type: 'server', argHint: '<n>', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'stop',    slashName: '/stop',    description: 'Stop the running agent task',            type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'interrupt', slashName: '/interrupt', description: 'Interrupt the running task (queued messages run next)', type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'compact', slashName: '/compact', description: 'Compress conversation context',          type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'context', slashName: '/context', description: 'Show context window + agent info',       type: 'server', source: 'builtin' })
+// Object command: session lifecycle (new/list/switch/stop/interrupt/compact/context).
+commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', description: 'Manage sessions (new/list/switch/stop/interrupt/compact/context)', type: 'server', argHint: '<verb>', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 // Object command: list/switch/desc/delete run as builtin verbs (work on every

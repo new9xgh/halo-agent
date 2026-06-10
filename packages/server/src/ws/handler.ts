@@ -303,8 +303,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
                 break
               }
 
-              // Compact: call SM directly with onProgress callback
-              if (cmdName === 'compact') {
+              // Compact (`/session compact`): call SM directly with onProgress
+              // callback — the only verb needing UI progress events.
+              if (cmdName === 'session' && (msg.message ?? '').trim().split(/\s+/)[0] === 'compact') {
                 sm.compactSession(sid, {
                   onProgress: (status) => sendJson(ws, { type: `compact:${status}` }),
                 }).then((result) => {

@@ -7,19 +7,22 @@ const messages: Record<string, Record<Lang, string>> = {
   // Builtin command descriptions (keyed by descriptor.name; skills fall back
   // to their SKILL.md description). execHelp looks these up by `cmd.<name>`.
   'cmd.help':    { zh: '显示此帮助', en: 'Show available commands' },
-  'cmd.new':     { zh: '开始新会话', en: 'Start a new session' },
-  'cmd.clear':   { zh: '清空聊天（/new 的别名）', en: 'Clear chat (alias for /new)' },
-  'cmd.list':    { zh: '列出最近会话', en: 'List recent sessions' },
-  'cmd.switch':  { zh: '按编号切换会话', en: 'Switch to a session by index' },
-  'cmd.stop':    { zh: '中断当前任务', en: 'Stop the running agent task' },
-  'cmd.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
-  'cmd.compact': { zh: '压缩上下文', en: 'Compress conversation context' },
-  'cmd.context': { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
+  'cmd.clear':   { zh: '清空聊天（/session new 的别名）', en: 'Clear chat (alias for /session new)' },
+  'cmd.session': { zh: '管理会话', en: 'Manage sessions' },
   'cmd.ws':      { zh: '查看或切换 workspace', en: 'Show or switch workspace' },
   'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
   'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },
+
+  // ── /session builtin verbs ──
+  'verb.session.new':       { zh: '开始新会话', en: 'Start a new session' },
+  'verb.session.list':      { zh: '列出最近会话', en: 'List recent sessions' },
+  'verb.session.switch':    { zh: '按编号切换会话', en: 'Switch to a session by index' },
+  'verb.session.stop':      { zh: '中断当前任务', en: 'Stop the running agent task' },
+  'verb.session.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
+  'verb.session.compact':   { zh: '压缩上下文', en: 'Compress conversation context' },
+  'verb.session.context':   { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
 
   // ── /agent builtin verb descriptions (shown in `/agent help`) ──
   'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },
@@ -65,23 +68,23 @@ const messages: Record<string, Record<Lang, string>> = {
 
   // ── /compact ──
   'compact.no_session': { zh: '没有活跃会话可压缩', en: 'No active session to compact' },
-  'compact.running': { zh: '当前任务还在跑，等它结束再 /compact', en: 'Task is still running, wait for it to finish before /compact' },
+  'compact.running': { zh: '当前任务还在跑，等它结束再 /session compact', en: 'Task is still running, wait for it to finish before /session compact' },
   'compact.already': { zh: '已经在压缩中', en: 'Already compacting' },
   'compact.started': { zh: '⏳ 开始压缩上下文…', en: '⏳ Compacting context…' },
 
   // ── /new ──
-  'new.done': { zh: '✅ 已开始新会话。/list 查看历史，/switch <编号> 切回', en: '✅ New session started. /list to see history, /switch <number> to go back' },
+  'new.done': { zh: '✅ 已开始新会话。/session list 查看历史，/session switch <编号> 切回', en: '✅ New session started. /session list to see history, /session switch <number> to go back' },
   'new.failed': { zh: '创建失败: {error}', en: 'Failed to create: {error}' },
 
   // ── /list ──
   'list.empty': { zh: '没有会话。发任何消息即可开始新会话', en: 'No sessions. Send any message to start one' },
   'list.title': { zh: '会话列表（最新在前）：', en: 'Sessions (newest first):' },
-  'list.switch_full': { zh: '/switch <编号> 切换（可切到任何会话）', en: '/switch <number> to switch (can switch to any session)' },
-  'list.switch_readonly': { zh: '/switch <编号> 切换（readonly 仅能切到自己的 [我] 会话）', en: '/switch <number> to switch (readonly: own sessions only)' },
+  'list.switch_full': { zh: '/session switch <编号> 切换（可切到任何会话）', en: '/session switch <number> to switch (can switch to any session)' },
+  'list.switch_readonly': { zh: '/session switch <编号> 切换（readonly 仅能切到自己的 [我] 会话）', en: '/session switch <number> to switch (readonly: own sessions only)' },
 
   // ── /switch ──
   'switch.empty': { zh: '没有会话可切换', en: 'No sessions to switch to' },
-  'switch.usage': { zh: '用法：/switch <编号>  （1-{max}）', en: 'Usage: /switch <number>  (1-{max})' },
+  'switch.usage': { zh: '用法：/session switch <编号>  （1-{max}）', en: 'Usage: /session switch <number>  (1-{max})' },
   'switch.readonly': { zh: '⚠️ readonly 模式不允许切换到别人的会话', en: "⚠️ Readonly mode can't switch to others' sessions" },
   'switch.done': { zh: '✅ 已切换到会话 {idx}（{time}）\n{desc}', en: '✅ Switched to session {idx} ({time})\n{desc}' },
 

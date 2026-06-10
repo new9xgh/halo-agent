@@ -231,7 +231,7 @@ export function ChatPanel() {
           pendingMessages={pendingMessages}
           onRemovePending={removePendingMessage}
           onCommand={handleCommand}
-          onCompact={() => handleCommand({ name: '/compact', description: '', type: 'server' }, '')}
+          onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
           renderLeftControls={() => (
             <div className="relative flex items-center gap-0.5">
               {(sessions.length > 0 || mainMessages.length > 0) && (

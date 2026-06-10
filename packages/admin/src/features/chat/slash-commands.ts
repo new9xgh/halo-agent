@@ -10,11 +10,9 @@ export interface SlashCommand {
 }
 
 const CLIENT_FALLBACK: SlashCommand[] = [
-  { name: '/new', description: 'Start a new session', type: 'client' },
-  { name: '/clear', description: 'Clear chat (alias for /new)', type: 'client' },
-  { name: '/context', description: 'Show context window usage and agent info', type: 'server' },
+  { name: '/session', description: 'Manage sessions (new/list/switch/stop/interrupt/compact/context)', type: 'server', argHint: '<verb>' },
+  { name: '/clear', description: 'Clear chat (alias for /session new)', type: 'client' },
   { name: '/help', description: 'Show available commands', type: 'client' },
-  { name: '/compact', description: 'Compress conversation context', type: 'server' },
 ]
 
 let serverCommands: SlashCommand[] = []

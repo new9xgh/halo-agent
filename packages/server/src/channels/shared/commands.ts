@@ -397,8 +397,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  * channel's frontend or by WS handler before reaching dispatch).
  */
 export const DISPATCH_COMMANDS = [
-  '/help', '/stop', '/interrupt', '/compact', '/new', '/list', '/switch',
-  '/ws', '/context', '/evo', '/agent', '/skill',
+  '/help', '/ws', '/evo', '/session', '/agent', '/skill',
 ] as const
 
 export async function dispatchCommand(
@@ -409,15 +408,10 @@ export async function dispatchCommand(
 ): Promise<CommandResult | null> {
   switch (command) {
     case '/help': return execHelp(ctx, opts?.extraHelpLines)
-    case '/stop': return execStop(ctx)
-    case '/interrupt': return execInterrupt(ctx)
-    case '/compact': return execCompact(ctx, opts?.channelName ?? 'unknown')
-    case '/new': return execNew(ctx)
-    case '/list': return execList(ctx)
-    case '/switch': return execSwitch(ctx, arg)
     case '/ws': return execWs(ctx, arg)
-    case '/context': return execContext(ctx)
     case '/evo': return execNote(ctx, arg)
+    // Session lifecycle is an object command: /session new|list|switch|stop|…
+    case '/session': return routeObjectOrSkill(ctx, command, arg)
     // `/agent` is a builtin object command: its list/switch/desc/delete verbs
     // are deterministic builtin code, so it works on EVERY agent regardless of
     // whether the `agent` skill is whitelisted. create/update fall through to
@@ -487,6 +481,18 @@ interface BuiltinVerb {
  * can differ under one `/agent` command.
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
+  '/session': {
+    // All open to readonly: new/switch operate within the caller's own access
+    // level (the created/target session inherits it), and list/context/stop/
+    // interrupt/compact were never gated as top-level commands either.
+    new: { handler: (ctx) => execNew(ctx), descKey: 'verb.session.new' },
+    list: { handler: (ctx) => execList(ctx), descKey: 'verb.session.list' },
+    switch: { handler: (ctx, subArg) => execSwitch(ctx, subArg), descKey: 'verb.session.switch' },
+    stop: { handler: (ctx) => execStop(ctx), descKey: 'verb.session.stop' },
+    interrupt: { handler: (ctx) => execInterrupt(ctx), descKey: 'verb.session.interrupt' },
+    compact: { handler: (ctx) => execCompact(ctx, 'session'), descKey: 'verb.session.compact' },
+    context: { handler: (ctx) => execContext(ctx), descKey: 'verb.session.context' },
+  },
   '/agent': {
     // list/desc are pure reads; switch creates a session that inherits the
     // caller's own access level (no escalation) — all open to readonly.
