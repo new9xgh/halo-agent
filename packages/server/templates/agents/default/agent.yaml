@@ -36,7 +36,7 @@ tools:
   - stop_session
   - archive_session
 skills:
-  - create-agent
+  - agent
   - create-skill
   - organize-workspace
   - share-workspace

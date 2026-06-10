@@ -59,8 +59,26 @@ export async function loadAgentYaml(agentId: string, workspaceRoot?: string): Pr
   }
 }
 
+/** A declared sub-action of an object skill (Halo extension over the Agent
+ *  Skills standard, which has no subcommand field). `builtin: true` means the
+ *  verb is handled by deterministic code (a SUBCOMMAND_ROUTES entry); false /
+ *  omitted means it falls through to the skill body (LLM-driven). Standard
+ *  skills omit `verbs` entirely and still work — they just have no expandable
+ *  subcommands.
+ *
+ *  NOTE: `builtin` is declarative only — routing is decided solely by whether
+ *  SUBCOMMAND_ROUTES has the verb, never by this flag. Keep the two in sync by
+ *  hand: a verb marked `builtin: true` must have a SUBCOMMAND_ROUTES entry, and
+ *  vice-versa. Nothing enforces it, so a mismatch silently mis-lists in help. */
+export interface SkillVerb {
+  name: string
+  builtin?: boolean
+  desc?: string
+}
+
 /** Parse SKILL.md frontmatter to extract name, description, optional
- *  command, and optional `requiresAccess` (full|workspace|readonly).
+ *  command, optional `requiresAccess` (full|workspace|readonly), optional
+ *  `verbs` (Halo subcommand extension), and `disableModelInvocation`.
  *  When `requiresAccess` is set, the skill is hidden from agents whose
  *  session access level is more restricted (see SkillMeta filtering in
  *  loadSkillMetadata). Default is unset → visible to all access levels. */
@@ -69,30 +87,69 @@ export function parseSkillFrontmatter(raw: string): {
   description?: string
   command?: string
   requiresAccess?: 'full' | 'workspace' | 'readonly'
+  verbs?: SkillVerb[]
+  disableModelInvocation?: boolean
   body: string
 } {
   const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/)
   if (!fmMatch) return { body: raw.trim() }
   const fmBlock = fmMatch[1]
   const body = raw.slice(fmMatch[0].length).trim()
-  let name: string | undefined
-  let description: string | undefined
-  let command: string | undefined
-  let requiresAccess: 'full' | 'workspace' | 'readonly' | undefined
-  for (const line of fmBlock.split('\n')) {
-    const nameMatch = line.match(/^name:\s*(.+)/)
-    if (nameMatch) name = nameMatch[1].trim()
-    const descMatch = line.match(/^description:\s*(.+)/)
-    if (descMatch) description = descMatch[1].trim()
-    const cmdMatch = line.match(/^command:\s*(.+)/)
-    if (cmdMatch) command = cmdMatch[1].trim()
-    const acccessMatch = line.match(/^requiresAccess:\s*(.+)/)
-    if (acccessMatch) {
-      const v = acccessMatch[1].trim()
-      if (v === 'full' || v === 'workspace' || v === 'readonly') requiresAccess = v
-    }
+
+  // `name` / `description` / `command` are plain scalar strings (the standard
+  // convention). Extract them line-by-line so an unquoted colon-space in a
+  // description (`Manage agents: create, update` — natural English) is kept
+  // verbatim rather than throwing under YAML's mapping rules. The line regex
+  // tolerates anything after the key.
+  const lineValue = (key: string): string | undefined => {
+    const m = fmBlock.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))
+    return m ? m[1].trim() : undefined
   }
-  return { name, description, command, requiresAccess, body }
+  const name = lineValue('name')
+  const description = lineValue('description')
+  const command = lineValue('command')
+
+  // Structured / enumerated fields (`verbs:` list, `requiresAccess`,
+  // `disable-model-invocation`) need real YAML. Parse the block, but a throw
+  // here must NOT lose the scalar fields above — they're already extracted.
+  let doc: Record<string, unknown> = {}
+  const parseYaml = (block: string): boolean => {
+    try {
+      const parsed = YAML.parse(block)
+      if (parsed && typeof parsed === 'object') doc = parsed as Record<string, unknown>
+      return true
+    } catch { return false }
+  }
+  if (!parseYaml(fmBlock)) {
+    // A scalar line (e.g. an unquoted colon-space in `description`) broke YAML.
+    // Those scalars are already captured above by regex, so drop the scalar
+    // lines and retry — keeps the structured fields (`verbs` etc.) intact
+    // instead of losing them to a description's punctuation.
+    const stripped = fmBlock.replace(/^(name|description|command):.*$/gm, '')
+    parseYaml(stripped)
+  }
+
+  const ra = typeof doc.requiresAccess === 'string' ? doc.requiresAccess.trim() : undefined
+  const requiresAccess = (ra === 'full' || ra === 'workspace' || ra === 'readonly') ? ra : undefined
+  // `disable-model-invocation` is the standard (kebab) field name; accept the
+  // camel variant too for hand-authored leniency.
+  const disableModelInvocation = doc['disable-model-invocation'] === true || doc.disableModelInvocation === true
+
+  let verbs: SkillVerb[] | undefined
+  if (Array.isArray(doc.verbs)) {
+    const parsedVerbs = doc.verbs
+      .map((v): SkillVerb | null => {
+        if (v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string') {
+          const o = v as { name: string; builtin?: unknown; desc?: unknown }
+          return { name: o.name.trim(), builtin: o.builtin === true, desc: typeof o.desc === 'string' ? o.desc : undefined }
+        }
+        return null
+      })
+      .filter((v): v is SkillVerb => v !== null)
+    if (parsedVerbs.length > 0) verbs = parsedVerbs
+  }
+
+  return { name, description, command, requiresAccess, verbs, disableModelInvocation, body }
 }
 
 /** A skill id must be a single path segment — same shape as the `{{<id>.params}}`
@@ -142,7 +199,9 @@ const ACCESS_RANK: Record<'readonly' | 'workspace' | 'full', number> = {
 }
 
 /**
- * Load skill metadata (name + description only) for system prompt injection.
+ * Load skill metadata (name + description only) for the model — both system
+ * prompt injection AND the query_agent tool's skill listing. Anything excluded
+ * here is invisible to the model (can't be auto-activated or reported).
  *
  * Filters:
  *   - skill in `disabledSet` → excluded (admin-disabled)
@@ -150,6 +209,9 @@ const ACCESS_RANK: Record<'readonly' | 'workspace' | 'full', number> = {
  *     excluded (e.g. `requiresAccess: full` is hidden from a `readonly`
  *     channel session). When the session has no access constraint
  *     (full / undefined), nothing is filtered on this axis.
+ *   - skill's `disable-model-invocation: true` → excluded from the model
+ *     entirely (it stays a usable slash command via scanSkillDescriptors, but
+ *     the model neither sees it nor can auto-activate it).
  */
 export async function loadSkillMetadata(
   skillIds: string[],
@@ -165,8 +227,13 @@ export async function loadSkillMetadata(
     if (!mdPath) continue
     try {
       const raw = await fs.readFile(mdPath, 'utf-8')
-      const { name, description, command, requiresAccess } = parseSkillFrontmatter(raw)
+      const { name, description, command, requiresAccess, disableModelInvocation } = parseSkillFrontmatter(raw)
       if (requiresAccess && ACCESS_RANK[requiresAccess] > sessionRank) continue
+      // `disable-model-invocation`: the skill stays a usable slash command
+      // (scanSkillDescriptors still registers it) but is NOT injected into the
+      // model's <available_skills> / activate_skill list — so the model can't
+      // auto-activate it; only an explicit user command reaches it.
+      if (disableModelInvocation) continue
       result.push({
         id: skillId,
         name: name ?? skillId,

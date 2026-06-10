@@ -1,11 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionManager } from '../../agents/session-manager.js'
-import { scanAvailableAgents } from '../../agents/agent-loader.js'
+import { scanAvailableAgents, GLOBAL_AGENTS_DIR } from '../../agents/agent-loader.js'
 import { ensureWorkspaceHalo } from '../../init.js'
 import { getDisabledSet } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
-import { execSkillCommand } from '../../commands/skill-command.js'
+import { execSkillCommand, scanSkillDescriptors } from '../../commands/skill-command.js'
+import type { CommandDescriptor } from '../../commands/types.js'
 import { commandRegistry } from '../../commands/index.js'
 import { config } from '../../config.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
@@ -398,6 +399,14 @@ export async function dispatchCommand(
     case '/context': return execContext(ctx)
     case '/note': return execNote(ctx, arg)
     default: {
+      // noun-verb routing: for object commands like `/agent`, the first arg
+      // token is a verb. Verbs with a builtin handler run as deterministic
+      // code (no LLM); everything else falls through to the same-named skill
+      // (LLM-driven). Lets `/agent list` be exact while `/agent create` is the
+      // skill's job. See SUBCOMMAND_ROUTES.
+      const routed = await tryRouteSubcommand(ctx, command, arg)
+      if (routed !== NOT_ROUTED) return routed
+
       const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
       if (active) {
         // Pass ctx.accessLevel — the channel account's *current* level —
@@ -414,6 +423,198 @@ export async function dispatchCommand(
       return null
     }
   }
+}
+
+/** Sentinel: this command/verb has no builtin subcommand handler — caller
+ *  should fall through to the skill path. Distinct from a handler returning
+ *  `null` (which is a real "handled, no reply" result). */
+const NOT_ROUTED = Symbol('not-routed')
+
+/** A builtin subcommand handler. `subArg` is the args after the verb
+ *  (e.g. for `/agent switch coder`, verb=`switch`, subArg=`coder`). */
+type SubcommandHandler = (ctx: CommandContext, subArg: string) => Promise<CommandResult | null> | CommandResult | null
+
+/** A builtin verb: its handler plus a hardcoded access gate. `requiresAccess`
+ *  is code-level (NOT read from the skill's SKILL.md) — builtin verbs are code,
+ *  so their permissions live with the code. Unset → open to everyone. */
+interface BuiltinVerb {
+  handler: SubcommandHandler
+  requiresAccess?: 'full' | 'workspace' | 'readonly'
+}
+
+/**
+ * noun-verb subcommand table. Keyed by object command (`/agent`) → verb
+ * (`list`) → { handler, requiresAccess }. A verb NOT in this table falls
+ * through to the object's skill (LLM-driven, e.g. `/agent create`, gated by
+ * the skill's own requiresAccess in execSkillCommand). Per-verb access is
+ * hardcoded here so read-only verbs (list/desc) and destructive ones (delete)
+ * can differ under one `/agent` command.
+ */
+const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
+  '/agent': {
+    list: { handler: (ctx) => execAgentList(ctx), requiresAccess: 'workspace' },
+    switch: { handler: (ctx, subArg) => execAgentSwitch(ctx, subArg), requiresAccess: 'workspace' },
+    desc: { handler: (ctx, subArg) => execAgentDesc(ctx, subArg), requiresAccess: 'workspace' },
+    delete: { handler: (ctx, subArg) => execAgentDelete(ctx, subArg), requiresAccess: 'full' },
+  },
+}
+
+// ── /agent builtin verbs ─────────────────────────────────────────────────────
+// Deterministic agent management. create / update are NOT here — they fall
+// through to the `agent` skill (LLM-driven, needs to author yaml + AGENT.md).
+
+/** Usable agents: deduped (workspace overrides global), internal + disabled
+ *  excluded. Shared by every /agent verb so they see the same set. */
+async function loadUsableAgents(ctx: CommandContext) {
+  const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
+  const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
+  const seen = new Map<string, typeof all[0]>()
+  for (const a of all) {
+    if (a.disabled || a.internal) continue
+    if (!seen.has(a.id) || a.scope === 'workspace') seen.set(a.id, a)
+  }
+  return [...seen.values()]
+}
+
+/** Resolve an agent by 1-based index or by id/name, against the usable set. */
+function resolveAgent(agents: Awaited<ReturnType<typeof loadUsableAgents>>, arg: string) {
+  const idx = parseInt(arg, 10)
+  if (Number.isInteger(idx) && idx >= 1 && idx <= agents.length) return agents[idx - 1]
+  return agents.find((a) => a.id === arg || a.name === arg)
+}
+
+export async function execAgentList(ctx: CommandContext): Promise<CommandResult> {
+  const agents = await loadUsableAgents(ctx)
+  if (agents.length === 0) return { text: t('agents.empty', ctx.lang) }
+  const activeSessionId = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  const currentAgentId = activeSessionId ? ctx.sm.getSessionById(activeSessionId)?.agentId : undefined
+  const lines = [t('agents.title', ctx.lang)]
+  agents.forEach((a, i) => {
+    const scope = a.scope === 'workspace' ? '[ws]' : (ctx.lang === 'zh' ? '[全局]' : '[global]')
+    const desc = a.description ? ` — ${a.description.slice(0, 30)}` : ''
+    const current = a.id === currentAgentId ? ' ◀' : ''
+    lines.push(`  ${i + 1}. ${scope} ${a.id}${desc}${current}`)
+  })
+  return { text: lines.join('\n') }
+}
+
+export async function execAgentSwitch(ctx: CommandContext, arg: string): Promise<CommandResult> {
+  if (!arg) return { text: t('agent.usage', ctx.lang) }
+  const agents = await loadUsableAgents(ctx)
+  if (agents.length === 0) return { text: t('agents.empty', ctx.lang) }
+  const agent = resolveAgent(agents, arg)
+  if (!agent) return { text: t('agent.not_found', ctx.lang, { name: arg }) }
+  const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
+  const accessLevel = ctx.accessLevel === 'full' ? null : ctx.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+  try {
+    await ctx.sm.createSession(agent.id, null, ctx.channelLabel, agent.name, newId, undefined, accessLevel)
+    ctx.activeOverrides.set(ctx.userId, newId)
+    return { text: t('agent.done', ctx.lang, { name: agent.name }), switchTo: newId }
+  } catch (err) {
+    return { text: t('agent.failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
+  }
+}
+
+export async function execAgentDesc(ctx: CommandContext, arg: string): Promise<CommandResult> {
+  if (!arg) return { text: t('agent.usage', ctx.lang) }
+  const agents = await loadUsableAgents(ctx)
+  const agent = resolveAgent(agents, arg)
+  if (!agent) return { text: t('agent.not_found', ctx.lang, { name: arg }) }
+  const lines = [
+    `**${agent.name}** (${agent.id}) ${agent.scope === 'workspace' ? '[ws]' : '[global]'}`,
+    agent.description ? `\n${agent.description}` : '',
+    `\n**Model:** ${agent.model}`,
+    agent.tools.length ? `**Tools:** ${agent.tools.join(', ')}` : '',
+    agent.skills.length ? `**Skills:** ${agent.skills.join(', ')}` : '',
+  ].filter(Boolean)
+  return { text: lines.join('\n') }
+}
+
+export async function execAgentDelete(ctx: CommandContext, arg: string): Promise<CommandResult> {
+  // Access ('full') is gated at the router (SUBCOMMAND_ROUTES) before we get here.
+  if (!arg) return { text: t('agent.delete_usage', ctx.lang) }
+  const agents = await loadUsableAgents(ctx)
+  const agent = resolveAgent(agents, arg)
+  if (!agent) return { text: t('agent.not_found', ctx.lang, { name: arg }) }
+  // Built-in agents are re-seeded on restart — deleting won't stick.
+  const dir = agent.scope === 'workspace'
+    ? path.join(ctx.workspacePath, '.halo', 'agents', agent.id)
+    : path.join(GLOBAL_AGENTS_DIR, agent.id)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+    return { text: t('agent.delete_done', ctx.lang, { name: agent.name, scope: agent.scope }) }
+  } catch (err) {
+    return { text: t('agent.failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
+  }
+}
+
+/** Route `/<obj> <verb> <rest>`:
+ *   - command isn't an object command (no SUBCOMMAND_ROUTES entry) → NOT_ROUTED
+ *   - verb empty or `help` → builtin help listing the object's verbs
+ *   - verb has a builtin handler → run it (deterministic)
+ *   - verb has no handler → NOT_ROUTED (falls through to the skill, e.g. create)
+ */
+async function tryRouteSubcommand(
+  ctx: CommandContext,
+  command: string,
+  arg: string,
+): Promise<CommandResult | null | typeof NOT_ROUTED> {
+  const handlers = SUBCOMMAND_ROUTES[command]
+  if (!handlers) return NOT_ROUTED
+
+  const descriptors = await scanSkillDescriptors(ctx.workspacePath)
+  const desc = descriptors.find((d) => d.slashName === command)
+
+  const trimmed = arg.trim()
+  const verb = trimmed.split(/\s+/)[0] ?? ''
+
+  // Bare / help: list only the verbs this user is allowed to run.
+  if (verb === '' || verb === 'help') return renderObjectHelp(ctx, command, desc)
+
+  const builtin = handlers[verb]
+  // Not a builtin verb → fall through to the skill (e.g. `/agent create`).
+  // Its access is gated by the skill's own requiresAccess in execSkillCommand,
+  // NOT here — skill-verb permissions live in SKILL.md.
+  if (!builtin) return NOT_ROUTED
+
+  // Builtin verb: gate by the verb's hardcoded requiresAccess (code-level,
+  // since builtin verbs are code and never reach execSkillCommand). Unset →
+  // open to everyone.
+  if (builtin.requiresAccess) {
+    const RANK = { readonly: 0, workspace: 1, full: 2 } as const
+    if (RANK[builtin.requiresAccess] > RANK[ctx.accessLevel]) {
+      return { text: t('skill.access_required', ctx.lang, { cmd: `${command} ${verb}`, required: builtin.requiresAccess, current: ctx.accessLevel }) }
+    }
+  }
+
+  const subArg = trimmed.slice(verb.length).trim()
+  return builtin.handler(ctx, subArg)
+}
+
+/** Build the `/cmd help` listing from the object command's declared `verbs`
+ *  (read from its skill descriptor — the SKILL.md `verbs:` field). Builtin
+ *  verbs and skill verbs are listed together so the user sees the full set in
+ *  one place, regardless of which side actually handles each. */
+async function renderObjectHelp(ctx: CommandContext, command: string, desc?: CommandDescriptor): Promise<CommandResult> {
+  // List only verbs the user can actually run. A verb's gate comes from its
+  // source: builtin verbs from the hardcoded SUBCOMMAND_ROUTES, skill verbs
+  // (create/update) from the skill's object-level requiresAccess. Unset → open.
+  const RANK = { readonly: 0, workspace: 1, full: 2 } as const
+  const builtins = SUBCOMMAND_ROUTES[command] ?? {}
+  const allowed = (verbName: string): boolean => {
+    const required = builtins[verbName]?.requiresAccess ?? (verbName in builtins ? undefined : desc?.requiresAccess)
+    return !required || RANK[required] <= RANK[ctx.accessLevel]
+  }
+  const verbs = (desc?.verbs ?? []).filter((v) => allowed(v.name))
+  // Verb names + descriptions come from the skill's SKILL.md (English /
+  // author-defined), so the listing stays English rather than going through
+  // i18n — matches how skill commands render in /help.
+  if (verbs.length === 0) {
+    return { text: `${command}: no actions to list` }
+  }
+  const width = Math.max(...verbs.map((v) => v.name.length))
+  const lines = verbs.map((v) => `  ${command} ${v.name.padEnd(width)}  ${v.desc ?? ''}`.trimEnd())
+  return { text: `${command} actions:\n${lines.join('\n')}` }
 }
 
 export function execWs(ctx: CommandContext, arg: string): CommandResult {

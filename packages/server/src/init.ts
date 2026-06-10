@@ -72,7 +72,7 @@ const BUILTIN_AGENT_IDS = new Set([
 
 /** Built-in skills — same overwrite rule. */
 const BUILTIN_SKILL_IDS = new Set([
-  'create-agent',
+  'agent',
   'create-skill',
   'organize-workspace',
   'share-workspace',

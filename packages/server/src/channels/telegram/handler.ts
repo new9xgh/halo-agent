@@ -194,6 +194,30 @@ async function runBot(args: {
     }
 
     const text = ctx.message.text
+    // Skill commands (e.g. `/agent`, `/create-skill`) aren't registered via
+    // `bot.command` — that loop only covers builtins. grammY routes an
+    // unregistered `/foo` here as plain text, so detect a leading slash and
+    // run it through the shared dispatcher (which handles skill commands +
+    // their noun-verb routing). Builtins already matched `bot.command` above
+    // and never reach this handler. Falls through to chat if not a command.
+    if (text.startsWith('/')) {
+      const cmdCtx = buildCmdCtx(userId, ctx.chat?.id)
+      if (cmdCtx) {
+        const space = text.indexOf(' ')
+        const command = space === -1 ? text : text.slice(0, space)
+        const arg = space === -1 ? '' : text.slice(space + 1).trim()
+        const result = await dispatchCommand(cmdCtx, command, arg, { channelName: 'telegram' })
+        if (result) {
+          if (result.workspace) {
+            updateAccount(db, account.accountId, { workspacePath: result.workspace.path })
+            restartSelf()
+          }
+          if (result.text) await ctx.reply(result.text)
+          return
+        }
+        // result null → not a known command; fall through to treat as chat.
+      }
+    }
     await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text, lang, unsubscribers, activeOverrides })
   })
 

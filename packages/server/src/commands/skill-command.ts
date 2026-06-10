@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CommandDescriptor } from './types.js'
 import { commandRegistry } from './index.js'
-import { GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter } from '../agents/agent-loader.js'
+import { GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter, type SkillVerb } from '../agents/agent-loader.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
 import { t, type Lang } from '../channels/shared/i18n.js'
@@ -15,6 +15,7 @@ interface SkillCommandEntry {
   command: string
   skillPath: string
   requiresAccess?: 'full' | 'workspace' | 'readonly'
+  verbs?: SkillVerb[]
 }
 
 async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
@@ -34,9 +35,9 @@ async function scanDir(dir: string): Promise<SkillCommandEntry[]> {
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
       const content = await fs.readFile(skillMdPath, 'utf-8')
-      const { name, description, command, requiresAccess } = parseSkillFrontmatter(content)
+      const { name, description, command, requiresAccess, verbs } = parseSkillFrontmatter(content)
       if (command) {
-        entries.push({ id: entryName, name: name || entryName, description: description ?? '', command, skillPath: skillMdPath, requiresAccess })
+        entries.push({ id: entryName, name: name || entryName, description: description ?? '', command, skillPath: skillMdPath, requiresAccess, verbs })
       }
     } catch { /* skip */ }
   }
@@ -90,6 +91,7 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
       source: 'skill' as const,
       skillId: entry.id,
       requiresAccess: entry.requiresAccess,
+      verbs: entry.verbs,
     }
   })
 }

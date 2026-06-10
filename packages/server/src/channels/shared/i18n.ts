@@ -87,6 +87,16 @@ const messages: Record<string, Record<Lang, string>> = {
   'note.snapshot_failed': { zh: '快照失败,请查 server 日志。', en: 'Snapshot failed — check server logs.' },
   'note.queue_failed': { zh: '入队失败,请查 server 日志。', en: 'Failed to enqueue — check server logs.' },
 
+  // ── /agent verbs (list / switch / desc / delete) ──
+  'agents.empty': { zh: '没有可用的 agent', en: 'No agents available' },
+  'agents.title': { zh: '可用 Agent：', en: 'Available agents:' },
+  'agent.usage': { zh: '用法：/agent switch <名称或编号>', en: 'Usage: /agent switch <name or number>' },
+  'agent.not_found': { zh: '找不到 agent: {name}', en: 'Agent not found: {name}' },
+  'agent.done': { zh: '✅ 已用 agent "{name}" 开始新会话', en: '✅ Started new session with agent "{name}"' },
+  'agent.failed': { zh: '操作失败: {error}', en: 'Operation failed: {error}' },
+  'agent.delete_usage': { zh: '用法：/agent delete <名称或编号>', en: 'Usage: /agent delete <name or number>' },
+  'agent.delete_done': { zh: '🗑 已删除 agent "{name}"（{scope}）', en: '🗑 Deleted agent "{name}" ({scope})' },
+
   // ── Skill activation ──
   'skill.activated': { zh: '已激活 Skill {cmd}', en: 'Skill {cmd} activated' },
   'skill.no_session': { zh: '无法解析会话 {session} 以做权限检查。', en: 'Cannot resolve session {session} for permission check.' },
