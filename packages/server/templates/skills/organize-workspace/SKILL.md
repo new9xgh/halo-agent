@@ -1,31 +1,34 @@
 ---
-name: Organize Workspace
-description: Set up or reorganize a workspace's `.halo/` knowledge files. First run — interview the user, draft INDEX.md / INSTRUCTIONS.md / memory entries from scratch. Subsequent runs — review what's already there, prune stale entries, reshape sections, surface gaps. Activate when the user asks to "set up / init / organize / reorganize / clean up" the workspace.
+name: organize-workspace
+description: Set up (setup) or tidy/prune (tidy) a workspace's `.halo/` knowledge files — INDEX.md, INSTRUCTIONS.md, memory entries. Reached via `/ws setup` and `/ws tidy`, or by natural language when the user asks to set up / organize / clean up the workspace knowledge base.
 requiresAccess: workspace
 ---
 
-# Organize Workspace
+# organize-workspace
 
-Invoked via `/ws setup` (first-time setup) or `/ws tidy` (review & prune an
-existing knowledge base) — the mode arrives as **`$1`** (`setup` or `tidy`).
-With no `$1` (natural-language activation), infer the mode: no `.halo/INDEX.md`
-yet → setup; otherwise tidy.
+Maintains a workspace's `.halo/` knowledge files (INDEX.md, INSTRUCTIONS.md,
+memory/). The requested mode arrives as **`$1`**:
 
+- **`setup`** — first-time setup: interview the user, draft INDEX.md /
+  INSTRUCTIONS.md / memory entries from scratch (see Setup mode).
+- **`tidy`** — review what's already there: prune stale entries, reshape
+  sections, surface gaps (see Tidy mode).
+- **no `$1`** (natural-language activation) — infer: no `.halo/INDEX.md` yet
+  → setup; otherwise tidy.
 
-Use this when the user wants to **set up** or **reorganize** a workspace's `.halo/` knowledge files (INDEX.md, INSTRUCTIONS.md, memory/). Two modes, picked by what's already on disk:
+## Step 0 — Verify mode against disk
 
-- **Init mode** — no `.halo/INDEX.md` yet. Draft from the README and a few clarifying questions.
-- **Organize mode** — `.halo/INDEX.md` already exists. Review, prune stale entries, reshape sections, fill gaps.
+`file_read .halo/INDEX.md`. If it exists with substantive content, tidy is the
+right mode; if missing or trivially empty, setup is. If this contradicts the
+requested `$1` (e.g. `/ws setup` on an already-initialized workspace), say so
+and confirm before overwriting anything.
 
-## Step 0 — Detect mode
-
-`file_read .halo/INDEX.md`. If it exists and has substantive content, you're in **organize mode** — jump to that section. If missing or trivially empty, you're in **init mode**.
-
-You can also be in init mode while INSTRUCTIONS.md exists alone (without INDEX.md). Treat that as "init the index, leave instructions as is unless the user asks otherwise".
+INSTRUCTIONS.md existing alone (without INDEX.md) still means setup — init the
+index, leave instructions as-is unless the user asks otherwise.
 
 ---
 
-## Init mode
+## Setup mode
 
 ### 1. Look before you ask
 
@@ -164,7 +167,7 @@ Tell the user:
 
 ---
 
-## Organize mode
+## Tidy mode
 
 The workspace already has an INDEX.md. Restarting from scratch would
 discard the user's prior organization decisions; review mode preserves
