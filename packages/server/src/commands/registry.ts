@@ -11,10 +11,4 @@ export class CommandRegistry {
     return Array.from(this.descriptors.values())
       .filter((d) => !d.hidden)
   }
-
-  clearSkillCommands(): void {
-    for (const [name, desc] of this.descriptors) {
-      if (desc.source === 'skill') this.descriptors.delete(name)
-    }
-  }
 }

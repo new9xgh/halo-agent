@@ -20,6 +20,25 @@ import YAML from 'yaml'
 
 const PATTERN = /\{\{\s*([\w-][\w.-]*)\s*\}\}/g
 const ENV_PATTERN = /<<([A-Z_][A-Z0-9_]*)>>/g
+/** `$ARGUMENTS` or `$1`..`$9` — the standard (non-Halo) skill arg syntax for
+ *  user-supplied command-line args. `\$` escapes to a literal `$`. Kept
+ *  separate from `{{...}}` (Halo-internal: params / channel / builtins) so an
+ *  externally-authored SKILL.md using `$1` runs unchanged. Other `$` (e.g.
+ *  `$PATH`, `$5.00`) is left untouched — only `$ARGUMENTS` / `$<single digit>`
+ *  is a placeholder. The digit must not be followed by another digit or `.`
+ *  (so `$5.00` and `$12` stay literal — a lone `$1` is a placeholder, a price
+ *  is not). */
+const ARG_PATTERN = /\\\$|\$ARGUMENTS\b|\$([1-9])(?![\d.])/g
+
+/** Split a raw arg string into positional tokens, respecting double quotes:
+ *  `create "my coder"` → ['create', 'my coder']. */
+export function splitArgs(raw: string): string[] {
+  const out: string[] = []
+  const re = /"([^"]*)"|(\S+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw)) !== null) out.push(m[1] ?? m[2]!)
+  return out
+}
 
 export interface BuiltinVars {
   args?: string
@@ -129,6 +148,18 @@ function substituteEnv(value: string): string {
 const PARAM_PATH = /^([\w-]+)\.params\.[\w-][\w.-]*$/
 
 export function renderMdBody(body: string, ctx: RenderContext): string {
+  // First pass: standard `$ARGUMENTS` / `$1`..`$9` (user-supplied args). This
+  // is independent of the `{{...}}` pass below — different syntax, different
+  // source (command-line args vs. Halo-injected values). `\$` → literal `$`.
+  const rawArgs = ctx.builtin.args ?? ''
+  const positional = splitArgs(rawArgs)
+  body = body.replace(ARG_PATTERN, (match, digit?: string) => {
+    if (match === '\\$') return '$'
+    if (match === '$ARGUMENTS') return rawArgs
+    // $1..$9 — 1-based; missing positional → empty string.
+    return positional[Number(digit) - 1] ?? ''
+  })
+
   return body.replace(PATTERN, (match, name: string) => {
     if (!name.includes('.')) {
       const builtin = (ctx.builtin as Record<string, string | undefined>)[name]

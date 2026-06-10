@@ -198,12 +198,13 @@ export async function execSkillCommand(
   //     conversation and look like nonsense.
   //   - `agentMessage` is what the LLM sees as the "user turn" — it
   //     carries the full rendered skill body so the model has the
-  //     instructions it needs.
+  //     instructions it needs. Args reach the body only through `$ARGUMENTS`
+  //     / `$1` placeholders (rendered above); they are NOT re-appended here.
   // The channel-specific text response ("Skill /xxx activated") is
   // already produced by the caller (dispatchCommand) and printed
   // separately in the SSE / IM stream.
   const displayMessage = `[Skill activated: /${cmdName}]${args ? ` ${args}` : ''}`
-  const agentMessage = `[Skill activated: /${cmdName}]\n\n${body}${args ? `\n\n${args}` : ''}`
+  const agentMessage = `[Skill activated: /${cmdName}]\n\n${body}`
   sm.appendUserMessage(sessionId, displayMessage)
   sm.sendUserMessage(sessionId, agentMessage).catch(() => {})
   return 'ok'

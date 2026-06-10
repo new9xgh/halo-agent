@@ -507,9 +507,7 @@ async function handleSlashCommand(args: {
 
   // Shared commands. /qr is admin-only (creates invite QR), so hide it from
   // /help for non-full users — the command itself still rejects below.
-  const helpExtras: Array<{ head: string; desc: string }> = [
-    { head: '/send <path>', desc: t('cmd.send', lang) },
-  ]
+  const helpExtras: Array<{ head: string; desc: string }> = []
   if (account.accessLevel === 'full') {
     helpExtras.push({ head: '/qr [level]', desc: t('cmd.qr', lang) })
   }
@@ -583,32 +581,6 @@ async function handleSlashCommand(args: {
       }).catch(async (err) => {
         await sendToUser({ account, toUserId: fromUserId, text: t('wechat.qr_failed', lang, { error: String(err) }) }).catch(() => {})
       })
-      return true
-    }
-
-    case '/send': {
-      if (!arg) {
-        await reply(t('wechat.send_usage', lang))
-        return true
-      }
-      const resolved = path.resolve(account.workspacePath, arg)
-      if (!isPathAllowed(resolved, account.workspacePath)) {
-        await reply(t('send.path_not_allowed', lang))
-        return true
-      }
-      if (!fs.existsSync(resolved)) {
-        await reply(t('wechat.send_not_found', lang, { path: resolved }))
-        return true
-      }
-      try {
-        await sendMediaFile({
-          baseUrl: account.baseUrl, token: account.botToken,
-          toUserId: fromUserId, contextToken,
-          filePath: resolved,
-        })
-      } catch (err) {
-        await reply(t('wechat.send_failed', lang, { error: err instanceof Error ? err.message : String(err) }))
-      }
       return true
     }
 

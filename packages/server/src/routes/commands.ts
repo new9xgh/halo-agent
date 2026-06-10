@@ -1,6 +1,5 @@
 import { Hono } from 'hono'
 import type { CommandRegistry } from '../commands/registry.js'
-import { scanSkillDescriptors } from '../commands/skill-command.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 
 export function createCommandRoutes(
@@ -35,16 +34,11 @@ export function createCommandRoutes(
       return c.json({ commands: [...builtins, ...skills] })
     }
 
-    // Legacy path: only projectId — list every skill in the workspace, no
-    // agent-scoped filtering. Kept for clients that don't send sessionId or
-    // agentId yet.
-    if (projectId) {
-      registry.clearSkillCommands()
-      const descriptors = await scanSkillDescriptors(projectId)
-      for (const desc of descriptors) registry.registerDescriptor(desc)
-    }
-
-    return c.json({ commands: registry.listDescriptors() })
+    // No session/agent context → we can't apply the per-agent whitelist /
+    // access-level gate, so we must NOT list any skill commands (doing so
+    // leaked full-access skills like /agent into a readonly user's palette).
+    // Fall back to builtins only.
+    return c.json({ commands: registry.listDescriptors().filter((d) => d.source !== 'skill') })
   })
 
   return app

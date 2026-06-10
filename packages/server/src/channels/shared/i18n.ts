@@ -20,7 +20,6 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.note':    { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
 
   // Channel-specific (currently WeChat-only)
-  'cmd.send':    { zh: '发送 workspace 下的文件', en: 'Send file from workspace' },
   'cmd.qr':      { zh: '生成邀请二维码（仅管理员）', en: 'Generate invite QR (admin only)' },
   'cmd.model':   { zh: '切换当前会话的模型（仅 WS）', en: 'Switch model for this session (WS only)' },
   'cmd.retry':   { zh: '重新发送上一条消息', en: 'Resend the last user message' },
@@ -96,13 +95,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'skill.load_failed': { zh: '加载 skill 失败：{error}', en: 'Failed to load skill: {error}' },
   'skill.access_required': { zh: 'Skill {cmd} 需要 {required} 访问权限；当前会话为 {current}。', en: 'Skill {cmd} requires {required} access; this session has {current}.' },
 
-  // ── /send (channel-shared, currently used by WeChat) ──
-  'send.path_not_allowed': { zh: '路径不允许：必须在 workspace 内', en: 'Path not allowed: must be under workspace' },
-
   // ── WeChat-specific ──
-  'wechat.send_usage': { zh: '用法：/send <文件路径>（相对 workspace 或绝对路径）', en: 'Usage: /send <file path> (relative to workspace or absolute)' },
-  'wechat.send_not_found': { zh: '文件不存在：{path}', en: 'File not found: {path}' },
-  'wechat.send_failed': { zh: '发送失败: {error}', en: 'Send failed: {error}' },
   'wechat.ws_suffix': { zh: '\n（接下来的消息会进入这个 workspace 的会话）', en: '\n(Future messages will go to this workspace)' },
   'wechat.qr_admin_only': { zh: '仅管理员可生成邀请二维码', en: 'Only full-access users can generate invite QR' },
   'wechat.qr_usage': { zh: '用法: /qr [readonly|workspace|full]', en: 'Usage: /qr [readonly|workspace|full]' },
