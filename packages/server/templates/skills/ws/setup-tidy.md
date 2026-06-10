@@ -1,9 +1,3 @@
----
-name: organize-workspace
-description: Set up (setup) or tidy/prune (tidy) a workspace's `.halo/` knowledge files — INDEX.md, INSTRUCTIONS.md, memory entries. Reached via `/ws setup` and `/ws tidy`, or by natural language when the user asks to set up / organize / clean up the workspace knowledge base.
-requiresAccess: workspace
----
-
 # organize-workspace
 
 Maintains a workspace's `.halo/` knowledge files (INDEX.md, INSTRUCTIONS.md,

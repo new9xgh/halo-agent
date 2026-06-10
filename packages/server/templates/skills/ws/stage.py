@@ -2,7 +2,7 @@
 """
 Stage a Halo workspace's .halo/ contents into a shareable bundle.
 
-Run from the share-workspace skill via shell_exec:
+Run from the ws skill's share verb via shell_exec:
     python3 stage.py <workspace>
 
 Output:
@@ -73,8 +73,7 @@ BUILTIN_AGENT_IDS = {
     "default", "executor", "deep-executor",
 }
 BUILTIN_SKILL_IDS = {
-    "agent", "skill", "organize-workspace",
-    "share-workspace", "manage-cron-jobs", "send-file", "create-halo-acp",
+    "agent", "skill", "ws", "manage-cron-jobs", "send-file", "create-halo-acp",
 }
 
 # --- helpers ---------------------------------------------------------------

@@ -74,8 +74,7 @@ const BUILTIN_AGENT_IDS = new Set([
 const BUILTIN_SKILL_IDS = new Set([
   'agent',
   'skill',
-  'organize-workspace',
-  'share-workspace',
+  'ws',
   'manage-cron-jobs',
   // Meta-skill: walks the user through generating a per-remote
   // `ask-<label>` ACP binding skill. The generated bindings live in

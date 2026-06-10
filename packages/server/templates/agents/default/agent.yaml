@@ -38,8 +38,7 @@ tools:
 skills:
   - agent
   - skill
-  - organize-workspace
-  - share-workspace
+  - ws
   - send-file
   - express-self
   - manage-cron-jobs

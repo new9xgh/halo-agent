@@ -430,7 +430,7 @@ async function handleInbound(args: {
       const result = await dispatchCommand(ctx, normalized.split(/\s+/)[0]!, normalized.split(/\s+/).slice(1).join(' '), { channelName: 'slack' })
       if (result) {
         // Rewrite set = builtins + the active session's skill slash commands
-        // (so `/organize-workspace` etc. in /help also become `!…`) + Slack
+        // (so skill slash commands in /help also become `!…`) + Slack
         // extras. Derived live so it never drifts from the real command list.
         const active = sharedFindActive(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
         const skillNames = active

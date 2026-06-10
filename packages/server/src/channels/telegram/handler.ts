@@ -194,7 +194,7 @@ async function runBot(args: {
     }
 
     const text = ctx.message.text
-    // Skill commands (e.g. `/organize-workspace`) aren't registered via
+    // Skill slash commands aren't registered via
     // `bot.command` — that loop only covers builtins. grammY routes an
     // unregistered `/foo` here as plain text, so detect a leading slash and
     // run it through the shared dispatcher (which handles skill commands +

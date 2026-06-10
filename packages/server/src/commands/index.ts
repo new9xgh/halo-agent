@@ -35,9 +35,9 @@ commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', des
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
   { name: 'info', builtin: true, desc: 'Show the current workspace' },
   { name: 'switch', builtin: true, desc: 'Switch workspace (absolute path)' },
-  { name: 'setup', builtin: true, desc: 'Set up the .halo knowledge files' },
-  { name: 'tidy', builtin: true, desc: 'Tidy/prune the .halo knowledge files' },
-  { name: 'share', builtin: true, desc: 'Package the workspace config as a shareable zip' },
+  { name: 'setup', desc: 'Set up the .halo knowledge files' },
+  { name: 'tidy', desc: 'Tidy/prune the .halo knowledge files' },
+  { name: 'share', desc: 'Package the workspace config as a shareable zip' },
 ] })
 commandRegistry.registerDescriptor({ name: 'evo',     slashName: '/evo',     description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 // Object command: list/switch/desc/delete run as builtin verbs (work on every

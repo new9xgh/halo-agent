@@ -18,7 +18,6 @@ const messages: Record<string, Record<Lang, string>> = {
   'verb.ws.tidy':   { zh: '整理/清理 .halo 知识库（organize-workspace skill）', en: 'Tidy/prune the .halo knowledge files (organize-workspace skill)' },
   'verb.ws.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
   'ws.switch_usage': { zh: '用法：/ws switch <绝对路径>', en: 'Usage: /ws switch <absolute path>' },
-  'skill.no_active_session': { zh: '没有活跃会话，先发一条消息再试', en: 'No active session — send a message first' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
   'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },

@@ -1,9 +1,3 @@
----
-name: Share Workspace
-description: Package the current workspace's prompt environment (.halo/ config) into a shareable zip — receiver gets the same agents/skills/prompts setup. Activate when the user asks to "share / package / bundle / export" the workspace.
-requiresAccess: full
----
-
 # Share Workspace
 
 Stage the current workspace's `.halo/` into a self-contained bundle, let the user review what
@@ -25,8 +19,8 @@ file selection, secret redaction, manifest. You orchestrate it and confirm with 
 ### 1. Locate the helper
 
 The script lives at one of these paths (workspace wins if both exist):
-- \`<workspace-root>/.halo/skills/share-workspace/stage.py\`
-- \`~/.halo/global/skills/share-workspace/stage.py\`
+- \`<workspace-root>/.halo/skills/ws/stage.py\`
+- \`~/.halo/global/skills/ws/stage.py\`
 
 The two paths above are deterministic, so \`glob\` / \`find\` searches add latency
 without finding anything new. \`file_list\` the workspace skill dir first; if
@@ -86,7 +80,7 @@ missing).
 
 For each entry in `redactions.markdown_suspicious`, read the actual line from the staged file
 and show the user. Use the **full word** ("keep" / "redact" / "edit") in the prompt — single
-letters confuse the model when the user replies with just "k". Stay in the share-workspace
+letters confuse the model when the user replies with just "k". Stay in the share
 flow until all suspicious entries are resolved:
 
 ```
@@ -111,7 +105,7 @@ When they reply with "edit ..." → apply their replacement via `file_edit`.
 
 After every suspicious entry is resolved, summarize the decisions and move to step 5. **Do not
 treat short responses (`k`, `r`, `keep`, etc.) as off-topic chat** — you are still inside the
-share-workspace flow until the user explicitly cancels or you finish step 7.
+flow until the user explicitly cancels or you finish step 7.
 
 ### 5. Hand control to the user
 

@@ -418,7 +418,7 @@ export async function dispatchCommand(
     case '/agent': return routeObjectOrSkill(ctx, command, arg)
     case '/skill': return routeObjectOrSkill(ctx, command, arg)
     default:
-      // Skill-defined slash commands (e.g. /organize-workspace) — same routing, but
+      // Skill-defined slash commands — same routing, but
       // reached only when the command isn't a builtin above.
       return routeObjectOrSkill(ctx, command, arg)
   }
@@ -480,14 +480,11 @@ interface BuiltinVerb {
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
   '/ws': {
+    // info/switch are builtin; setup/tidy/share fall through to the `ws`
+    // skill (same name as the command — standard semantics), whose verbs:
+    // declare their own access.
     info: { handler: (ctx) => execWsInfo(ctx), descKey: 'verb.ws.info' },
     switch: { handler: (ctx, subArg) => execWsSwitch(ctx, subArg), requiresAccess: 'full', descKey: 'verb.ws.switch' },
-    // Delegated skill verbs — these run a specific skill by id (the skills
-    // carry no slash command of their own). Gated here AND by the skill's
-    // own requiresAccess inside execSkillCommand.
-    setup: { handler: (ctx, subArg) => delegateToSkill(ctx, 'organize-workspace', `setup ${subArg}`.trim()), requiresAccess: 'workspace', descKey: 'verb.ws.setup' },
-    tidy: { handler: (ctx, subArg) => delegateToSkill(ctx, 'organize-workspace', `tidy ${subArg}`.trim()), requiresAccess: 'workspace', descKey: 'verb.ws.tidy' },
-    share: { handler: (ctx, subArg) => delegateToSkill(ctx, 'share-workspace', subArg), requiresAccess: 'full', descKey: 'verb.ws.share' },
   },
   '/session': {
     // All open to readonly: new/switch operate within the caller's own access
@@ -891,14 +888,3 @@ export function execWsSwitch(ctx: CommandContext, arg: string): CommandResult {
   return { text: t('ws.done', ctx.lang, { path: arg }), workspace: { path: arg } }
 }
 
-/** Run a specific skill by id as a delegated object verb (e.g. `/ws setup` →
- *  the organize-workspace skill). Same activation path as a skill slash
- *  command — the skill's own whitelist/disabled/requiresAccess gates apply. */
-async function delegateToSkill(ctx: CommandContext, skillId: string, args: string): Promise<CommandResult | null> {
-  const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
-  if (!active) return { text: t('skill.no_active_session', ctx.lang) }
-  const result = await execSkillCommand(`skill:${skillId}`, args, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
-  if (result === 'ok') return { text: t('skill.activated', ctx.lang, { cmd: skillId }), startedTurn: true, sessionId: active }
-  if (result === 'not_found') return { text: t('skill.not_found', ctx.lang, { name: skillId }) }
-  return { text: result }
-}
