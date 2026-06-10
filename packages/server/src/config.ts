@@ -342,6 +342,7 @@ export const config = {
   sandbox: {
     hiddenDirs: settingsStr('general.sandbox.hidden_dirs', '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker').split(',').map((s) => s.trim()).filter(Boolean),
     hiddenFiles: settingsStr('general.sandbox.hidden_files', '~/.npmrc,~/.bash_history,~/.gitconfig').split(',').map((s) => s.trim()).filter(Boolean),
+    writableDirs: settingsStr('general.sandbox.writable_dirs', '').split(',').map((s) => s.trim()).filter(Boolean),
   },
 
   logging: {
@@ -394,11 +395,12 @@ export const config = {
 const HIDDEN_DIRS_DEFAULT = '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker'
 const HIDDEN_FILES_DEFAULT = '~/.npmrc,~/.bash_history,~/.gitconfig'
 
-export function reloadSandboxConfig(): { hiddenDirs: string[]; hiddenFiles: string[] } {
+export function reloadSandboxConfig(): { hiddenDirs: string[]; hiddenFiles: string[]; writableDirs: string[] } {
   // getSettings() is mtime-watched, so this picks up the latest file content.
   return {
     hiddenDirs: settingsStr('general.sandbox.hidden_dirs', HIDDEN_DIRS_DEFAULT).split(',').map((s) => s.trim()).filter(Boolean),
     hiddenFiles: settingsStr('general.sandbox.hidden_files', HIDDEN_FILES_DEFAULT).split(',').map((s) => s.trim()).filter(Boolean),
+    writableDirs: settingsStr('general.sandbox.writable_dirs', '').split(',').map((s) => s.trim()).filter(Boolean),
   }
 }
 

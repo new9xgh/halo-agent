@@ -138,6 +138,7 @@ function generalSection(): SchemaSection {
       { key: 'compact.summarize_timeout_sec', type: 'int', description: 'LLM summarization timeout (seconds)', description_zh: 'LLM 摘要超时时间（秒）', default: '300' },
       // sandbox (Linux bwrap only)
       { key: 'sandbox.hidden_dirs', description: 'Comma-separated dirs hidden by bwrap (Linux only)', description_zh: '通过 bwrap tmpfs 隐藏的目录（逗号分隔，仅 Linux）', default: '~/.halo/secrets,~/.aws,~/.ssh,~/.gnupg,~/.docker' },
+      { key: 'sandbox.writable_dirs', description: 'Comma-separated dirs bind-mounted read-write inside the bwrap sandbox (Linux only) — for external CLIs that keep local state, e.g. ~/.kiro,~/.local/share/kiro-cli. Not applied to readonly sessions.', description_zh: '在 bwrap 沙箱内以可写方式挂载的目录（逗号分隔，仅 Linux）——给需要本地状态的外部 CLI 用，如 ~/.kiro,~/.local/share/kiro-cli。readonly 会话不生效。', default: '' },
       { key: 'sandbox.hidden_files', description: 'Comma-separated files hidden by bwrap (Linux only)', description_zh: '通过 /dev/null bind 隐藏的文件（逗号分隔，仅 Linux）', default: '~/.npmrc,~/.bash_history,~/.gitconfig' },
       // logging
       { key: 'logging.level', type: 'enum', options: ['debug', 'info', 'warn', 'error'], description: 'Log level', description_zh: '日志级别', default: 'warn' },

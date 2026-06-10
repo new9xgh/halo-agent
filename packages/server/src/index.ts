@@ -199,10 +199,10 @@ acquireSingleInstanceLock(path.join(HALO_HOME, 'global', 'server.lock'))
 initLogger()
 
 await initBwrapCheck()
-setSandboxHiddenPaths(config.sandbox.hiddenDirs, config.sandbox.hiddenFiles)
+setSandboxHiddenPaths(config.sandbox.hiddenDirs, config.sandbox.hiddenFiles, config.sandbox.writableDirs)
 onSettingsChange(() => {
-  const { hiddenDirs, hiddenFiles } = reloadSandboxConfig()
-  setSandboxHiddenPaths(hiddenDirs, hiddenFiles)
+  const { hiddenDirs, hiddenFiles, writableDirs } = reloadSandboxConfig()
+  setSandboxHiddenPaths(hiddenDirs, hiddenFiles, writableDirs)
 })
 console.log(`[Server] bwrap sandbox: ${isBwrapCached() ? 'available' : 'NOT available (app-level fallback only)'}`)
 

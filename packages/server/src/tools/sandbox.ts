@@ -143,14 +143,21 @@ const DEFAULT_HIDDEN_FILES = [
 
 let _hiddenDirs: string[] = DEFAULT_HIDDEN_DIRS
 let _hiddenFiles: string[] = DEFAULT_HIDDEN_FILES
+/** Extra dirs bind-mounted read-write inside the sandbox. For external CLIs
+ *  the agent legitimately drives that keep local state under $HOME (e.g.
+ *  kiro-cli writes ~/.kiro + ~/.local/share/kiro-cli on session start — the
+ *  read-only root made it exit silently). Empty by default; configured via
+ *  general.sandbox.writable_dirs. */
+let _writableDirs: string[] = []
 
 function expandTilde(p: string): string {
   return p.startsWith('~/') ? path.join(HOME, p.slice(2)) : p
 }
 
-export function setSandboxHiddenPaths(dirs: string[], files: string[]): void {
+export function setSandboxHiddenPaths(dirs: string[], files: string[], writableDirs: string[] = []): void {
   _hiddenDirs = dirs
   _hiddenFiles = files
+  _writableDirs = writableDirs
 }
 
 function buildBwrapArgs(opts: SandboxOptions): string[] {
@@ -178,13 +185,24 @@ function buildBwrapArgs(opts: SandboxOptions): string[] {
     args.push('--bind', opts.workspaceRoot, opts.workspaceRoot)
   }
 
+  // User-configured rw dirs (external CLI state — see _writableDirs).
+  // Not granted to readonly sessions: those shouldn't run state-writing CLIs.
+  if (opts.accessLevel !== 'readonly') {
+    for (const raw of _writableDirs) {
+      const dir = expandTilde(raw)
+      if (existsSync(dir)) args.push('--bind', dir, dir)
+    }
+  }
+
   // /proc and /dev need real mounts
   args.push('--proc', '/proc')
   args.push('--dev', '/dev')
 
   // Clean environment
   args.push('--clearenv')
-  args.push('--setenv', 'PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
+  // Include ~/.local/bin — where user-level CLIs install (kiro-cli, pipx
+  // tools). The agent outside the sandbox sees them; inside should match.
+  args.push('--setenv', 'PATH', `${HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`)
   args.push('--setenv', 'HOME', HOME)
   args.push('--setenv', 'TERM', 'xterm-256color')
 
