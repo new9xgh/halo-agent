@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { CommandDescriptor } from './types.js'
+import { commandRegistry } from './index.js'
 import { GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { buildRenderContext, renderMdBody } from '../prompts/md-vars.js'
 import { getDisabledSet } from '../db/index.js'
+import { t, type Lang } from '../channels/shared/i18n.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
 interface SkillCommandEntry {
@@ -52,8 +54,33 @@ export async function scanSkillDescriptors(workspaceRoot?: string): Promise<Comm
   const merged = new Map<string, SkillCommandEntry>()
   for (const e of globalEntries) merged.set(e.id, e)
   for (const e of wsEntries) merged.set(e.id, e)
-  cachedEntries = Array.from(merged.values())
-  return cachedEntries.map((entry) => {
+
+  // Load-time conflict detection: a skill's `command:` must not collide with a
+  // builtin slash command or with another skill's. Builtins always win — the
+  // dispatcher matches them first, so a colliding skill command is unreachable
+  // anyway; among skills it's first-come. Colliding entries are dropped here, at
+  // the single source feeding both dispatch (via cachedEntries) and the popup
+  // (via the returned descriptors), so a command can never show up in the popup
+  // that dispatch is unable to route to ("visible but unreachable").
+  const builtinSlashes = new Set(
+    commandRegistry.listDescriptors()
+      .filter((d) => d.source === 'builtin')
+      .map((d) => d.slashName),
+  )
+  const claimed = new Set(builtinSlashes)
+  const valid: SkillCommandEntry[] = []
+  for (const entry of merged.values()) {
+    const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
+    if (claimed.has(slashName)) {
+      const by = builtinSlashes.has(slashName) ? 'a builtin' : 'another skill'
+      console.warn(`[CommandRegistry] skill "${entry.id}" command "${slashName}" shadowed by ${by} — dropped from command list`)
+      continue
+    }
+    claimed.add(slashName)
+    valid.push(entry)
+  }
+  cachedEntries = valid
+  return valid.map((entry) => {
     const slashName = entry.command.startsWith('/') ? entry.command : `/${entry.command}`
     return {
       name: slashName.slice(1),
@@ -81,6 +108,7 @@ export async function execSkillCommand(
    *  fires a slash command without sending a chat message in between
    *  (which would otherwise be the only path that updates the row). */
   channelAccessLevel?: 'readonly' | 'workspace' | 'full',
+  lang: Lang = 'en',
 ): Promise<'not_found' | 'ok' | string> {
   // Always rescan — frontmatter changes (e.g. flipping requiresAccess on
   // a deployed skill) must take effect for subsequent invocations without
@@ -100,16 +128,16 @@ export async function execSkillCommand(
   // a user typing the slash command manually still hits it.
   const sessionInfo = sm.getSessionById(sessionId)
   if (!sessionInfo) {
-    return `Cannot resolve session ${sessionId} for permission check.`
+    return t('skill.no_session', lang, { session: sessionId })
   }
   const yamlConfig = await loadAgentYaml(sessionInfo.agentId, workspaceRoot)
   const allowed = new Set(yamlConfig?.skills ?? [])
   if (!allowed.has(entry.id)) {
-    return `Skill /${cmdName} is not available to agent "${sessionInfo.agentName}". Add "${entry.id}" to the agent's skills list to enable.`
+    return t('skill.not_allowed', lang, { cmd: `/${cmdName}`, agent: sessionInfo.agentName, id: entry.id })
   }
   const disabledSet = getDisabledSet(sm.getDb(), 'skill')
   if (disabledSet.has(entry.id)) {
-    return `Skill /${cmdName} is disabled for this workspace.`
+    return t('skill.disabled', lang, { cmd: `/${cmdName}` })
   }
 
   // Read the SKILL.md fresh from disk for both the access-level check
@@ -127,7 +155,7 @@ export async function execSkillCommand(
     body = parsed.body
     freshRequiresAccess = parsed.requiresAccess
   } catch (err) {
-    return `Failed to load skill: ${err instanceof Error ? err.message : String(err)}`
+    return t('skill.load_failed', lang, { error: err instanceof Error ? err.message : String(err) })
   }
 
   // Access-level gate: skill's `requiresAccess` (set in SKILL.md
@@ -148,7 +176,7 @@ export async function execSkillCommand(
     const RANK = { readonly: 0, workspace: 1, full: 2 } as const
     const sessionRank = sessionLevel ? RANK[sessionLevel] : RANK.full
     if (RANK[freshRequiresAccess] > sessionRank) {
-      return `Skill /${cmdName} requires ${freshRequiresAccess} access; this session has ${sessionLevel ?? 'restricted'}.`
+      return t('skill.access_required', lang, { cmd: `/${cmdName}`, required: freshRequiresAccess, current: sessionLevel ?? 'restricted' })
     }
   }
 

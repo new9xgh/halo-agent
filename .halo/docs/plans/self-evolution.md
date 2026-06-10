@@ -34,9 +34,9 @@ L0 needs no code. L1 is what this spec covers. L2+ get a "Future levels" sketch.
    - `__evo_agent__` — drafts patches and runs dry-run scoring
    - `__apply_agent__` — merges approved patches into target files
    Both are normal Halo agents with `internal: true` so they don't appear in
-   `list_agents`, the chat agent selector, channel commands (`/agents`, `/agent`,
-   `/new`), and have no Test button. They show up in admin's agent management
-   (collapsed **Internal** group) for editing.
+   `list_agents`, the chat agent selector, `/new`'s default pick, and have no
+   Test button. They show up in admin's agent management (collapsed **Internal**
+   group) for editing.
 
 2. **Two queues in global db** (`evolution_runs`, `evolution_applies`)
    driven by a server-side ticker (every 30s). Ticker has zero in-memory state

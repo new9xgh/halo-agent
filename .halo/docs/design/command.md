@@ -36,6 +36,8 @@ WS handler special-cases `compact` because it needs UI progress callbacks: `comp
 5. Default case: tries `execSkillCommand` as fallback for skill-defined slash commands
 6. Returns `CommandResult { text, switchTo?, workspace? }` — channel formats and sends to user
 
+`scanSkillDescriptors` drops skill commands that collide with a built-in (or another skill) at scan time, so dispatch and the discovery API stay consistent — see [requirements/command.md](../requirements/command.md#conflict-detection).
+
 ## File structure
 
 ```

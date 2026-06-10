@@ -159,7 +159,7 @@ find /path/to/test-workspace/.halo/sessions -name '<deleted-id>*'
 | I6 | ⬜ | `/list` (readonly/workspace user) | wechat/tg readonly user `/list` | **Only own-prefix sessions** (regression for cross-user privacy) |
 | I7 | ⬜ | `/switch` matches `/list` indices | After I6, `/switch 1` for readonly user | Switches to user's first own session |
 | I8 | ⬜ | `/switch` to non-own blocked | readonly tries `/switch` to a global admin session via crafted index | Returns `switch.readonly` rejection (defense-in-depth even though list filtered) |
-| I9 | ⬜ | All builtin `/help`/`/agents`/`/agent`/`/ws`/`/stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
+| I9 | ⬜ | All builtin `/help`/`/ws`/`/stop` reachable from each channel | Run each through web/tg/wx | Same response shape |
 | I10 | ⬜ | Server startup descriptor↔dispatch sanity check | Restart server | Throws if a builtin server descriptor is missing a dispatch case |
 
 ## J. Session viewer & Debug
@@ -234,9 +234,7 @@ node packages/cli/bin/halo.js --help
 | N2 | ⬜ | TUI launch | `halo tui` | Starts, shows agent picker, accepts input |
 | N3 | ⬜ | TUI single turn | `halo tui` → say "what is 2+2" | Reply rendered with usage badge `think medium` (or model default) |
 | N4 | ⬜ | TUI session id has `cli_` prefix | After N3 | `~/.halo/sessions/default/cli_<...>.json` exists |
-| N5 | ⬜ | TUI `/agents` | Inside tui, `/agents` | List with global + workspace agents |
-| N6 | ⬜ | TUI `/agent <id>` | `/agent sleeper` | Switches; next prompt goes to sleeper |
-| N7 | ⬜ | TUI `/new` | After N6: `/new` | New session, sleeper-scoped |
+| N7 | ⬜ | TUI `/new` | `/new` | New session, default-scoped |
 | N8 | ⬜ | TUI `/stop` | "sleep 30 then say hi" → Ctrl-C or `/stop` | Clean abort |
 | N9 | ⬜ | TUI `/compact` | Build up 8+ messages → `/compact` | Compact runs; ctx tokens drop in next prompt |
 | N10 | ⬜ | TUI tool call rendering | Ask file_read | Tool card renders inline in tui |
@@ -248,7 +246,7 @@ node packages/cli/bin/halo.js --help
 | N16 | ⬜ | TUI sandbox enforced | `tui --access-level readonly` (if flag exists) → try `file_write` | Tool refused / sandbox blocks |
 | N17 | ⬜ | TUI uses **same** SessionManager.persistSessionFile path | Run a session in TUI, then start the WS server pointing at same workspace | UI shows the TUI session in sidebar (single source of truth) |
 
-> **Note on TUI commands**: I've listed commands by name above (`/agents`, `/agent`, `/new`, etc.). If your TUI uses different keybindings instead, swap the trigger column accordingly — the **expected behavior** is what we're checking.
+> **Note on TUI commands**: I've listed commands by name above (`/new`, `/stop`, `/compact`, etc.). If your TUI uses different keybindings instead, swap the trigger column accordingly — the **expected behavior** is what we're checking.
 
 ---
 

@@ -54,8 +54,6 @@ Typing `/` opens autocomplete.
 | `/stop` | Stop the running agent task |
 | `/list` | List recent sessions |
 | `/switch <n>` | Switch active session by index |
-| `/agents` | List available agents |
-| `/agent <name|index>` | Start a session with a specific agent |
 | `/ws [path]` | Show or switch workspace |
 | `/note [hint]` | Queue a self-evolution run on this session (requires `general.evolution.level: L1`) |
 | `/help` | List every command |

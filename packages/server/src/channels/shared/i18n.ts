@@ -15,8 +15,6 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
   'cmd.compact': { zh: '压缩上下文', en: 'Compress conversation context' },
   'cmd.context': { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
-  'cmd.agents':  { zh: '列出可用 agent', en: 'List available agents' },
-  'cmd.agent':   { zh: '用指定 agent 开始新会话', en: 'Start a session with a specific agent' },
   'cmd.ws':      { zh: '查看或切换 workspace', en: 'Show or switch workspace' },
   'cmd.ws.readonly': { zh: '查看当前 workspace', en: 'Show current workspace' },
   'cmd.note':    { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
@@ -59,17 +57,6 @@ const messages: Record<string, Record<Lang, string>> = {
   'switch.readonly': { zh: '⚠️ readonly 模式不允许切换到别人的会话', en: "⚠️ Readonly mode can't switch to others' sessions" },
   'switch.done': { zh: '✅ 已切换到会话 {idx}（{time}）\n{desc}', en: '✅ Switched to session {idx} ({time})\n{desc}' },
 
-  // ── /agents ──
-  'agents.empty': { zh: '没有可用的 agent', en: 'No agents available' },
-  'agents.title': { zh: '可用 Agent 列表：', en: 'Available agents:' },
-  'agents.hint': { zh: '用 /agent <名称或编号> 开始一个使用该 agent 的新会话', en: 'Use /agent <name or number> to start a session with that agent' },
-
-  // ── /agent ──
-  'agent.usage': { zh: '用法：/agent <名称或编号>\n先用 /agents 查看可用列表', en: 'Usage: /agent <name or number>\nUse /agents to see available list' },
-  'agent.not_found': { zh: '找不到 agent: {name}\n用 /agents 查看可用列表', en: 'Agent not found: {name}\nUse /agents to see available list' },
-  'agent.done': { zh: '✅ 已用 agent "{name}" 开始新会话', en: '✅ Started new session with agent "{name}"' },
-  'agent.failed': { zh: '创建失败: {error}', en: 'Failed to create: {error}' },
-
   // ── /ws ──
   'ws.current': { zh: '当前 workspace:\n{path}', en: 'Current workspace:\n{path}' },
   'ws.readonly': { zh: '⚠️ readonly 模式不允许切换 workspace', en: '⚠️ Readonly mode cannot switch workspace' },
@@ -103,6 +90,11 @@ const messages: Record<string, Record<Lang, string>> = {
 
   // ── Skill activation ──
   'skill.activated': { zh: '已激活 Skill {cmd}', en: 'Skill {cmd} activated' },
+  'skill.no_session': { zh: '无法解析会话 {session} 以做权限检查。', en: 'Cannot resolve session {session} for permission check.' },
+  'skill.not_allowed': { zh: 'Skill {cmd} 对 agent「{agent}」不可用。把「{id}」加入该 agent 的 skills 列表即可启用。', en: 'Skill {cmd} is not available to agent "{agent}". Add "{id}" to the agent\'s skills list to enable.' },
+  'skill.disabled': { zh: 'Skill {cmd} 在此 workspace 已被禁用。', en: 'Skill {cmd} is disabled for this workspace.' },
+  'skill.load_failed': { zh: '加载 skill 失败：{error}', en: 'Failed to load skill: {error}' },
+  'skill.access_required': { zh: 'Skill {cmd} 需要 {required} 访问权限；当前会话为 {current}。', en: 'Skill {cmd} requires {required} access; this session has {current}.' },
 
   // ── /send (channel-shared, currently used by WeChat) ──
   'send.path_not_allowed': { zh: '路径不允许：必须在 workspace 内', en: 'Path not allowed: must be under workspace' },

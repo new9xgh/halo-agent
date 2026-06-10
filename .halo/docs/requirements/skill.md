@@ -78,6 +78,8 @@ Review the code for:
 ### Skill-as-command
 When a `command` field is present (e.g. `command: /review`), the skill auto-registers as a slash command. Users trigger it with `/review`. See [commands](command.md).
 
+If the `command` collides with a built-in slash command (or another skill's `command`), it is dropped from the command list with a warning — built-ins win, then first-come among skills. Only the slash command is lost; the skill stays usable via `activate_skill`. See [conflict detection](command.md#conflict-detection).
+
 ### Access-level gate (`requiresAccess`)
 
 A skill can declare a minimum session access level in frontmatter:

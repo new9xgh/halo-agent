@@ -318,7 +318,7 @@ You almost always want:
 - `/ws` — show/switch workspace
 - `/help`
 
-Common commands (`/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`, `/agents`, `/agent`, `/help`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
+Common commands (`/new`, `/list`, `/switch`, `/stop`, `/compact`, `/ws`, `/help`) are handled by `dispatchCommand()` in [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts). Your channel handler only needs to:
 
 1. Build a `CommandContext` (including `lang` from the account's `language` field)
 2. Call `dispatchCommand(ctx, command, arg, { channelName: 'slack' })`

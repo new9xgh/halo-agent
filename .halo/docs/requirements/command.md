@@ -17,8 +17,6 @@ Source: [commands/index.ts](../../../packages/server/src/commands/index.ts) (des
 | `interrupt` | `/interrupt` | server | Interrupt the running turn immediately — aborts a command mid-execution, then folds any messages queued while busy into one follow-up turn. Esc in TUI / admin chat maps to this. |
 | `compact` | `/compact` | server | LLM-summary compact of the conversation |
 | `context` | `/context` | server | Show workspace, agent, model, tools, skills, and every loaded markdown / prompt file (each `prompts/<scope>/*.md` listed individually; built-in fallback shown as a single entry) |
-| `agents` | `/agents` | server | List available agents |
-| `agent` | `/agent` | server | Start a new session with a specific agent |
 | `ws` | `/ws` | server | Show / switch workspace |
 | `note` | `/note [text]` | server | Trigger self-evolution on the current root session: snapshot the conversation + queue an evo run. Optional text becomes a hint for what to focus on. Available only when `general.evolution.level=L1`. See [plans/self-evolution.md](../plans/self-evolution.md). |
 
@@ -51,6 +49,16 @@ When triggered, the skill body is read from disk and sent to the agent session a
 ```
 
 Every `GET /api/commands?projectId=xxx` rescans skill directories.
+
+### Conflict detection
+
+A skill's `command` must not collide with a built-in slash command or with another skill's. Collisions are resolved at scan time in `scanSkillDescriptors`, the single source feeding both dispatch and the discovery API:
+
+- **Built-ins always win** — the dispatcher matches them first, so a colliding skill command is unreachable anyway.
+- **Among skills, first-come wins** (workspace scope is merged over global before this check).
+- Colliding entries are **dropped** from the command list and a warning is logged (`[CommandRegistry] skill "<id>" command "/x" shadowed by …`). Dropping at the shared source guarantees a command can never appear in the palette that dispatch is unable to route ("visible but unreachable").
+
+Note: a skill's `command` collision only removes the *slash command*; the skill itself remains usable via the agent's normal skill activation.
 
 ## Command discovery API
 

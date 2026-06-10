@@ -288,67 +288,6 @@ export function execSwitch(ctx: CommandContext, arg: string): CommandResult {
   return { text: t('switch.done', ctx.lang, { idx, time: ts, desc: (target.description || '').slice(0, 40) }), switchTo: target.id }
 }
 
-export async function execAgents(ctx: CommandContext): Promise<CommandResult> {
-  const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
-  const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
-  const seen = new Map<string, typeof all[0]>()
-  for (const a of all) {
-    // Internal agents (self-evolution etc.) aren't user-selectable — they're
-    // delegated to by other agents, never started directly from a channel.
-    if (a.disabled || a.internal) continue
-    if (!seen.has(a.id) || a.scope === 'workspace') seen.set(a.id, a)
-  }
-  const agents = [...seen.values()]
-  if (agents.length === 0) return { text: t('agents.empty', ctx.lang) }
-  const activeSessionId = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
-  const activeSession = activeSessionId ? ctx.sm.getSessionById(activeSessionId) : null
-  const currentAgentId = activeSession?.agentId
-  const lines = [t('agents.title', ctx.lang)]
-  agents.forEach((a, i) => {
-    const scope = a.scope === 'workspace' ? '[ws]' : (ctx.lang === 'zh' ? '[全局]' : '[global]')
-    const desc = a.description ? ` — ${a.description.slice(0, 30)}` : ''
-    const current = a.id === currentAgentId ? ' ◀' : ''
-    lines.push(`  ${i + 1}. ${scope} ${a.id}${desc}${current}`)
-  })
-  lines.push('')
-  lines.push(t('agents.hint', ctx.lang))
-  return { text: lines.join('\n') }
-}
-
-export async function execAgent(ctx: CommandContext, arg: string): Promise<CommandResult> {
-  if (!arg) return { text: t('agent.usage', ctx.lang) }
-  const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
-  const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
-  const seen = new Map<string, typeof all[0]>()
-  for (const a of all) {
-    // Internal agents (self-evolution etc.) aren't user-selectable — they're
-    // delegated to by other agents, never started directly from a channel.
-    if (a.disabled || a.internal) continue
-    if (!seen.has(a.id) || a.scope === 'workspace') seen.set(a.id, a)
-  }
-  const agents = [...seen.values()]
-  if (agents.length === 0) return { text: t('agents.empty', ctx.lang) }
-
-  const idx = parseInt(arg, 10)
-  let agent: typeof agents[0] | undefined
-  if (Number.isInteger(idx) && idx >= 1 && idx <= agents.length) {
-    agent = agents[idx - 1]
-  } else {
-    agent = agents.find((a) => a.id === arg || a.name === arg)
-  }
-  if (!agent) return { text: t('agent.not_found', ctx.lang, { name: arg }) }
-
-  const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
-  const accessLevel = ctx.accessLevel === 'full' ? null : ctx.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  try {
-    await ctx.sm.createSession(agent.id, null, ctx.channelLabel, agent.name, newId, undefined, accessLevel)
-    ctx.activeOverrides.set(ctx.userId, newId)
-    return { text: t('agent.done', ctx.lang, { name: agent.name }), switchTo: newId }
-  } catch (err) {
-    return { text: t('agent.failed', ctx.lang, { error: err instanceof Error ? err.message : String(err) }) }
-  }
-}
-
 export function formatContextInfo(info: Awaited<ReturnType<SessionManager['getSessionContext']>> & {}): string {
   const pct = info.maxContextTokens > 0
     ? ((info.contextTokens / info.maxContextTokens) * 100).toFixed(1)
@@ -438,7 +377,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  */
 export const DISPATCH_COMMANDS = [
   '/help', '/stop', '/interrupt', '/compact', '/new', '/list', '/switch',
-  '/agents', '/agent', '/ws', '/context', '/note',
+  '/ws', '/context', '/note',
 ] as const
 
 export async function dispatchCommand(
@@ -455,8 +394,6 @@ export async function dispatchCommand(
     case '/new': return execNew(ctx)
     case '/list': return execList(ctx)
     case '/switch': return execSwitch(ctx, arg)
-    case '/agents': return execAgents(ctx)
-    case '/agent': return execAgent(ctx, arg)
     case '/ws': return execWs(ctx, arg)
     case '/context': return execContext(ctx)
     case '/note': return execNote(ctx, arg)
@@ -467,7 +404,7 @@ export async function dispatchCommand(
         // so a recent admin-side change (readonly → workspace, etc.)
         // takes effect immediately. Without this we'd gate against the
         // session row's stale snapshot.
-        const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel)
+        const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
         // 'ok' means execSkillCommand kicked sendUserMessage — the agent
         // is now running on `active`. Surface that so the channel keeps
         // its event stream open for the skill body's response.

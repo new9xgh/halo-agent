@@ -92,8 +92,6 @@ Multi-turn conversation. Supports all standard Halo slash commands:
 | `/stop` | Stop current agent task (ends the turn, no re-run) |
 | `/interrupt` | Interrupt the running turn now (aborts a command mid-run); any messages queued while busy then run as one follow-up turn |
 | `/compact` | Compact session context |
-| `/agents` | List available agents |
-| `/agent <name>` | Start session with specific agent |
 | `/ws` | Show current workspace |
 | `/ws <path>` | Switch workspace (full access only) |
 | `/quit` | Exit |

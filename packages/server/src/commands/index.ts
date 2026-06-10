@@ -27,8 +27,6 @@ commandRegistry.registerDescriptor({ name: 'stop',    slashName: '/stop',    des
 commandRegistry.registerDescriptor({ name: 'interrupt', slashName: '/interrupt', description: 'Interrupt the running task (queued messages run next)', type: 'server', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'compact', slashName: '/compact', description: 'Compress conversation context',          type: 'server', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'context', slashName: '/context', description: 'Show context window + agent info',       type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'agents',  slashName: '/agents',  description: 'List available agents',                  type: 'server', source: 'builtin' })
-commandRegistry.registerDescriptor({ name: 'agent',   slashName: '/agent',   description: 'Start a session with a specific agent',  type: 'server', argHint: '<name|index>', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Show or switch workspace',               type: 'server', argHint: '[path]', source: 'builtin' })
 commandRegistry.registerDescriptor({ name: 'note',    slashName: '/note',    description: 'Queue an evolution run on this session', type: 'server', argHint: '[hint]', source: 'builtin' })
 
