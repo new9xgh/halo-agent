@@ -91,17 +91,31 @@ let _bwrapAvailable: boolean | null = null
 async function isBwrapAvailable(): Promise<boolean> {
   if (_bwrapAvailable !== null) return _bwrapAvailable
   try {
-    await execFileAsync('bwrap', ['--version'])
+    // A real sandboxed no-op, not just --version: bwrap can be installed yet
+    // unable to create its namespaces — e.g. Ubuntu 24.04's
+    // kernel.apparmor_restrict_unprivileged_userns=1 makes every actual run
+    // die with "setting up uid map: Permission denied" while --version still
+    // exits 0. Probe with the same kind of invocation the sandbox uses so
+    // "available" means "actually works".
+    await execFileAsync('bwrap', ['--ro-bind', '/', '/', '--die-with-parent', '--', '/bin/true'], { timeout: 5000 })
     _bwrapAvailable = true
     return true
   } catch (err) {
-    // Only cache a DEFINITIVE "not installed" (ENOENT). A transient spawn
-    // failure (EAGAIN under fork pressure, ENOMEM, …) must NOT be frozen into
-    // a permanent `false` — that would silently downgrade every later call to
-    // the weaker app-level fallback with no alarm. Leave the cache null on
-    // transient errors so the next call re-probes.
-    const code = (err as { code?: string }).code
-    if (code === 'ENOENT') _bwrapAvailable = false
+    const e = err as { code?: string | number; stderr?: string }
+    // Definitive "can't sandbox" outcomes are cached as false:
+    //   - ENOENT: not installed
+    //   - non-zero exit with a namespace/permission error on stderr (AppArmor
+    //     userns restriction, seccomp, locked-down container, …)
+    // Transient spawn failures (EAGAIN under fork pressure, ENOMEM) stay
+    // uncached (null) so the next call re-probes instead of freezing the
+    // weaker app-level fallback in place silently.
+    const stderr = String(e.stderr ?? '')
+    if (e.code === 'ENOENT') {
+      _bwrapAvailable = false
+    } else if (/permission denied|capability|no permission|operation not permitted/i.test(stderr)) {
+      console.warn(`[sandbox] bwrap installed but cannot create namespaces (${stderr.trim().split('\n')[0]}) — falling back to app-level validation only`)
+      _bwrapAvailable = false
+    }
     return false
   }
 }
