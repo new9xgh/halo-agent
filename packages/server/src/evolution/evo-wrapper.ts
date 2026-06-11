@@ -627,10 +627,12 @@ function renderEvoContextSections(ctx: EvoContext | null): string[] {
 
   if (ctx.promptFiles.length > 0) {
     lines.push('=== Source prompt files ===')
-    lines.push('(each entry is a file the assembled prompt was built from. Workspace')
-    lines.push('files take precedence over global ones at runtime. The agent.yaml /')
-    lines.push('SKILL.md / template-version files are NOT included — those are')
-    lines.push('config / metadata, not prompt content.)')
+    lines.push('(each entry is a file behind the assembled prompt. Workspace files take')
+    lines.push('precedence over global ones at runtime. The triggering agent\'s')
+    lines.push('agent.yaml is included here too — its model / tools / context config is')
+    lines.push('a patch target, not just markdown. SKILL.md bodies are NOT inlined (see')
+    lines.push('the skills listing below; file_read the one you need) — but a SKILL.md')
+    lines.push('is just as patchable. Only template-version metadata is left out.)')
     lines.push('')
     for (const f of ctx.promptFiles) {
       lines.push(`--- ${f.scope}/${f.path} ---`)

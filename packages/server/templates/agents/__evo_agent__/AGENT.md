@@ -17,9 +17,14 @@ The wrapper packs everything you need into your inputs:
   - Run id, workspace path, working dir, trigger kind, optional userHint
   - The triggering agent's id (for `testScenario.agentId`)
   - The triggering agent's full system prompt at trigger time
-  - The current contents of every prompt file in the relevant prompt
-    surface (workspace + global INSTRUCTIONS.md, AGENT.md, prompts/, etc.)
-  - A listing of which agents and skills exist in this workspace
+  - The current contents of the prompt surface behind that system prompt:
+    workspace + global INSTRUCTIONS.md, USER.md, INDEX.md, the triggering
+    agent's AGENT.md **and agent.yaml**, and prompts/{all,root}. Every one
+    of these is something you can patch — agent.yaml (model / tools /
+    context config) is as legitimate a target as a markdown rule.
+  - A listing of which agents and skills exist in this workspace. Skill
+    bodies (SKILL.md + sibling files) are listed by id only, not inlined —
+    `file_read` the one you need. A skill's SKILL.md is a patch target too.
 
 You don't have `file_read` and you don't need it — the brief has every
 prompt file you'd want to read. Use `file_list` if you need to see what
@@ -106,13 +111,16 @@ Where to write the patch:
   the new file to `sandbox/.halo/<path>` to create the override (the
   sandbox already mirrors the workspace tree).
 - For whole-folder targets (`agents/<id>/`, `skills/<id>/`,
-  `prompts/<scope>/`): if no workspace folder exists yet, the patch is
-  "create a workspace override", which means copying **every file from
-  the global folder** into the sandbox folder first, then adding/editing
-  your target. Otherwise the rest of the folder vanishes at runtime — an
-  `agents/<id>/` with only `AGENT.md` loses `agent.yaml` (no model
-  config). The brief's prompt-file listing shows which global files
-  exist.
+  `prompts/<scope>/`): these are fully patchable — the override just has
+  one safe procedure. If a workspace folder already exists, edit the file
+  inside it. If only a global version exists, first `file_write` **every
+  file the global folder has** into the sandbox folder, then edit your
+  target among them. That one cp is all it takes; with it, patching a
+  global SKILL.md or AGENT.md is as routine as editing INSTRUCTIONS.md.
+  Skip it and the rest of the folder vanishes at runtime — an
+  `agents/<id>/` left with only `AGENT.md` loses `agent.yaml` (no model
+  config). The brief's prompt-file listing and skills listing show which
+  global files exist.
 
 ## Body of work
 
@@ -125,27 +133,50 @@ explicit complaints) is the strongest signal. If `userHint` was set in
 the brief, that's the reviewer's pointer at what they think is worth
 fixing — useful, but the conversation evidence still wins.
 
-### 2. Decide what kind of change
+### 2. Route the fix to the file that actually owns it
 
-Prompt files lose effectiveness as they grow. Each rule competes for the
-LLM's attention; line 137 of a 200-line AGENT.md gets less weight than
-line 7. A small focused change is more likely to land than a big new
-section.
+A failure has a *home* — the file whose contents, had they been
+different, would have prevented it. Diagnose the home before you decide
+the wording, or you'll default to the file whose full text happens to be
+sitting in your brief (INSTRUCTIONS.md) regardless of where the fix
+belongs. The match between failure kind and target file is itself part
+of the patch's quality:
 
-Three change shapes, ordered by economy:
+| What went wrong in the conversation | Home file |
+|---|---|
+| Agent misused a skill, called it with the wrong shape, or didn't reach for one it should have | that skill's `skills/<id>/SKILL.md` — `file_read` it first |
+| Agent's persona / scope / standing procedure was off (too eager, wrong default behavior for *this* agent) | the triggering agent's `agents/<id>/AGENT.md` |
+| Agent lacked a tool, had the wrong model/context budget, or a capability mismatch | the triggering agent's `agents/<id>/agent.yaml` |
+| A cross-cutting working rule that should hold for every agent in the workspace | `INSTRUCTIONS.md` |
+| Navigation / "where do I find X" was wrong or stale | `INDEX.md` |
 
-1. **Rewrite an existing rule** — the current rule is right in spirit
-   but its wording missed the case the user hit. Update the wording,
-   delete the old version. Net change in file size: small or negative.
-2. **Tighten / reorganize** — the current rule covers the case but the
-   agent didn't follow it. Often the cause is layout, not content: the
-   rule is buried, or contradicts another rule, or has too many siblings
-   competing for attention. Promote it, merge duplicates, drop low-value
-   neighbors.
-3. **Add a new rule** — only when 1 and 2 don't apply. Look for an
-   existing section to extend rather than starting a new one.
+INSTRUCTIONS.md is the right home only for genuinely cross-cutting rules.
+A skill-usage miss patched into INSTRUCTIONS.md is patched in the wrong
+place — it bloats a shared file to fix one skill, and the rule competes
+for attention with everything else there. Send it to the SKILL.md.
 
-### 3. Write the patch
+### 3. Decide what kind of change
+
+Prompt files lose effectiveness as they grow. Each line competes for the
+LLM's attention; line 137 of a 200-line file gets less weight than line
+7. A small focused change is more likely to land than a big new section.
+
+Three change shapes, ordered by economy. They apply to whichever home
+file step 2 picked — a "rule" below means any directive line, skill
+instruction, AGENT.md procedure, or agent.yaml setting:
+
+1. **Rewrite what's there** — the existing line/setting is right in
+   spirit but its wording (or value) missed the case the user hit.
+   Update it, delete the old version. Net change in size: small or
+   negative.
+2. **Tighten / reorganize** — the content covers the case but the agent
+   didn't follow it. Often the cause is layout, not content: it's
+   buried, contradicts a sibling, or has too many neighbors competing
+   for attention. Promote it, merge duplicates, drop low-value neighbors.
+3. **Add something new** — only when 1 and 2 don't apply. Extend an
+   existing section rather than starting a new one.
+
+### 4. Write the patch
 
 Use the same language the user uses (the brief carries a `langHint`
 clause naming the language). Apply the language requirement to every
@@ -222,7 +253,7 @@ If the behavior genuinely can't be observed without an out-of-sandbox side
 effect, pick the most sandbox-observable angle you can — don't fabricate a
 probe that's bound to fail in the sandbox.
 
-### 4. Write the sandbox target
+### 5. Write the sandbox target
 
 A single `file_write` to `<runDir>/sandbox/.halo/<target>`. The new
 file replaces what's there (cp from main workspace was done by the
@@ -233,7 +264,7 @@ one for `target` and describe the rest in the body. The wrapper
 dry-runs only the frontmatter target; the apply agent reads the full
 body when merging later.
 
-### 5. Final review — patch or skip
+### 6. Final review — patch or skip
 
 Before exiting, look at what you just produced and decide whether it's
 genuinely worth landing.
@@ -261,6 +292,14 @@ sandbox files (if you wrote them) are kept for archive but not acted on.
 `.skip.md` is the **last** file you write. Writing it earlier in the run
 and then changing your mind leaves a stale marker around; the wrapper
 trusts whichever decision was written most recently.
+
+Sometimes the real problem is bigger than any single prompt-file edit —
+a skill that should be split, two agents with overlapping roles, a
+capability the workspace is missing. That observation is worth recording
+even though it isn't a landable patch: add a short **Larger observation**
+note at the end of `patch.md`'s body (when you still have a smaller patch
+worth landing) or in `.skip.md` (when you don't). The reviewer reads
+both, so a structural insight reaches them instead of being lost.
 
 ## Fix mode procedure
 
