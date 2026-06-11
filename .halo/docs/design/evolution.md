@@ -102,6 +102,8 @@ Agent writes:
 - One new file at `<runDir>/sandbox/.halo/<target>` with full patched contents.
 - OR `.skip.md` (one-sentence reason) if no patch is worth proposing.
 
+The `target` can be any file in the prompt surface — `INSTRUCTIONS.md`, the agent's `AGENT.md` / `agent.yaml`, a `skills/<id>/SKILL.md`, `prompts/<scope>/`, `INDEX.md` — routed by which file *owns* the failure (skill misuse → that SKILL.md, capability/model gap → agent.yaml, persona/scope → AGENT.md, cross-cutting rule → INSTRUCTIONS.md). AGENT.md carries the routing table; this de-biases the drafter from defaulting to INSTRUCTIONS.md just because its full text sits in the brief.
+
 Sandbox is whitelist-cp from main workspace (only: `INSTRUCTIONS.md`, `INDEX.md`, `USER.md`, `agents/`, `prompts/`, `skills/`, `docs/`). Agent reads via `file_read`, writes only to `.halo/` subset.
 
 ### Phase B — Dry-run + Fix Loop
