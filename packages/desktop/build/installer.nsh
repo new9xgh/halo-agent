@@ -28,6 +28,20 @@
 
 ; --- electron-builder hooks ------------------------------------------------
 
+; Override the default "app is running" check. The stock check (taskkill /im
+; Halo.exe) kills only Halo.exe — but Halo spawns a child `node.exe` (the
+; server, holding port 9527 + ~/.halo/global/server.lock). Closing the Halo
+; window without a clean before-quit (or a crash) orphans that node.exe; it
+; survives, keeps the lock, and the installer keeps reporting "still running"
+; even after the user closed Halo. `/T` walks the whole tree (Halo.exe + its
+; node.exe children), `/F` forces it. Silent + idempotent: taskkill on a
+; not-running process just no-ops, so this is safe to run unconditionally and
+; avoids the stock check's modal-prompt-and-retry loop.
+!macro customCheckAppRunning
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /im "${APP_EXECUTABLE_FILENAME}" /T /F'
+  Sleep 500   ; give the OS a moment to release the file locks before we overwrite
+!macroend
+
 !macro customInstall
   ; Launcher: bundled node.exe + the cli-runtime esbuild bundle. %~dp0 is the
   ; .cmd's own dir ($INSTDIR with trailing backslash), so the app stays

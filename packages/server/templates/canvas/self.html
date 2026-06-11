@@ -246,6 +246,7 @@
   const voice = {
     el: null, src: null, ctx: null, analyser: null, time: null, freq: null,
     level: 0, bands: new Float32Array(6), playing: false, lastOnsetLevel: 0, lastOnsetAt: 0,
+    queue: [],     // pending clip URLs — several voice() calls play in sequence, not stomp
   }
   function ensureAudioGraph() {
     if (voice.ctx) return
@@ -269,12 +270,27 @@
     if (!pid) return u                                       // can't resolve → let it try as-is
     return '/api/files/download?path=' + encodeURIComponent(u) + '&projectId=' + encodeURIComponent(pid) + '&inline=1'
   }
-  function playVoice(url) {
+  // Queue a clip. Several voice() calls in one reply (or back-to-back) play in
+  // SEQUENCE — like say()/play() scenes — instead of each one stomping the last.
+  // (The old playVoice paused whatever was sounding and swapped in the new clip,
+  // so two clips meant you only ever heard the second. Queue fixes that.)
+  function enqueueVoice(url) {
     ensureAudioGraph()
     if (!voice.ctx) return                 // no Web Audio → silently skip (no fake wave)
-    url = resolveAudioUrl(url)
-    if (voice.el) { try { voice.el.pause() } catch {} }
+    voice.queue.push(resolveAudioUrl(url))
+    if (!voice.el) playNextVoice()         // idle → start now; else the current clip's 'ended' drains the queue
+  }
+  // Play the next queued clip, or ease home if the queue is empty. Driven by
+  // enqueueVoice (when idle) and by each clip's 'ended' (to chain the next).
+  function playNextVoice() {
     if (voice.src) { try { voice.src.disconnect() } catch {} }   // free the old node — they bind to one element for life and would pile up
+    const url = voice.queue.shift()
+    if (!url) {                            // queue drained → done speaking
+      voice.el = null
+      voice.playing = false
+      if (mode === 'wave') modeUntil = performance.now() + 500   // ease back to breathing
+      return
+    }
     const el = new Audio()
     el.crossOrigin = 'anonymous'           // same-origin download endpoint; lets the analyser read samples
     el.src = url
@@ -286,20 +302,25 @@
       voice.analyser.connect(voice.ctx.destination)
     } catch { /* already connected / unsupported — playback still works, just no ripple */ }
     const enter = () => { mode = 'wave'; modeUntil = Infinity; voice.playing = true }
-    const leave = () => {
-      voice.playing = false
-      // ease back to breathing only if nothing else grabbed the matrix meanwhile
-      if (mode === 'wave') { modeUntil = performance.now() + 500 }
-    }
+    // when a clip finishes (or errors), chain straight to the next queued one —
+    // no gap, no return-to-rest until the whole queue has drained.
+    const next = () => { el.removeEventListener('ended', next); playNextVoice() }
     el.addEventListener('playing', enter)
-    el.addEventListener('ended', leave)
-    el.addEventListener('error', leave)
-    el.addEventListener('pause', leave)
+    el.addEventListener('ended', next)
+    el.addEventListener('error', next)
     if (voice.ctx.state === 'suspended') voice.ctx.resume().catch(() => {})
-    el.play().then(enter).catch(() => { /* autoplay blocked → no ripple, no crash */ })
+    el.play().then(enter).catch(() => { /* autoplay blocked → skip to next, no crash */ next() })
   }
-  // stop a playing clip (the 'pause' listener flips playing false + eases home).
-  function stopVoice() { if (voice.el) { try { voice.el.pause() } catch {} } }
+  // stop everything: clear the queue and the current clip, ease home. (No
+  // 'pause' listener — pausing for the swap inside playNextVoice would otherwise
+  // re-enter the drain; stop is explicit here.)
+  function stopVoice() {
+    voice.queue.length = 0
+    if (voice.el) { try { voice.el.pause() } catch {} ; voice.el = null }
+    if (voice.src) { try { voice.src.disconnect() } catch {} ; voice.src = null }
+    voice.playing = false
+    if (mode === 'wave') modeUntil = performance.now() + 500
+  }
   // sample the live audio once per frame → level (RMS), bands (spectrum), onsets
   function readVoice(now) {
     if (!voice.playing || !voice.analyser) { voice.level += (0 - voice.level) * 0.1; return }
@@ -426,10 +447,12 @@
     shake(ms) { shakeUntil = performance.now() + (ms || 500) },
     // speak: play a speech clip Halo synthesized (handed to me as a URL) and let
     // the whole field ride its live amplitude. I don't synthesize — Halo does;
-    // this just plays the URL and makes the sound visible. Not a scene/queue: a
-    // voice should start now and own the matrix until it ends, then ease home.
+    // this just plays the URL and makes the sound visible. Clips QUEUE: several
+    // voice() calls play in sequence (one sentence after the next), they don't
+    // interrupt each other; the field owns the matrix until the queue drains,
+    // then eases home. rest() clears the queue and stops at once.
     //   self.voice("/api/files/download?path=...&projectId=...&inline=1")
-    voice(url) { if (typeof url === 'string' && url) playVoice(url) },
+    voice(url) { if (typeof url === 'string' && url) enqueueVoice(url) },
     // choreograph a sequence — hand me a score, I keep the clock.
     // Each beat: { say, hold, pulse, flash, shake, rest, gap }. The face advances
     // itself, so I never hand-write setTimeout chains in a marker line. Scenes
