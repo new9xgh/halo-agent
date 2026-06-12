@@ -96,6 +96,9 @@ halo server start     # 默认监听 :9527
 - **工作区工具** —— `file_read` / `file_write` / `file_edit`、沙箱化 `shell_exec`、`grep` / `glob`、`web_fetch`、`view_image`，以及会话工具（`start_session`、`query_session`、`interrupt_session` 等）用于多 Agent 调度。
 - **技能系统** —— 基于 Markdown 的技能定义，按需注入 Agent 提示词；工作区级或全局，无需改代码即可扩展。
 - **Cron 定时任务** —— 定时（周期或一次性）运行 Agent，结果分发到绑定的渠道账号。
+- **Halo City** —— 只读的像素**街区**，把服务器运行态可视化：每个工作区是一栋楼，每个会话是工位上的动物市民，点谁都能看他的实时会话日志。纯前端 canvas，零模型 token。位于 [`halo-city/`](halo-city/)，详见[设计文档](.halo/docs/design/halo-city.md)。
+
+![Halo City —— 把服务器运行态可视化的像素街区](assets/halo-city.jpg)
 
 ![技能面板 —— 全局与工作区技能，无需改代码即可扩展](assets/skills.jpg)
 

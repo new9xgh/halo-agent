@@ -96,6 +96,9 @@ Every channel shares the same workspace and session state. Onboarding guides liv
 - **Workspace tools** — `file_read` / `file_write` / `file_edit`, sandboxed `shell_exec`, `grep` / `glob`, `web_fetch`, `view_image`, plus session tools (`start_session`, `query_session`, `interrupt_session`, …) for multi-agent control.
 - **Skills system** — Markdown-based skill definitions injected into agent prompts on demand; workspace-scoped or global, extensible without code changes.
 - **Cron tasks** — scheduled agent runs (recurring or one-shot) that fan output out to bound channel accounts.
+- **Halo City** — a read-only pixel **city block** that visualizes a server's runtime: each workspace is a building, each session an animal citizen at a desk, click anyone to inspect their live session log. Pure client-side canvas, zero model tokens. Lives at [`halo-city/`](halo-city/) — see [design notes](.halo/docs/design/halo-city.md).
+
+![Halo City — a pixel city block visualizing the server runtime](assets/halo-city.jpg)
 
 ![Skills panel — global and workspace skills, extensible without code changes](assets/skills.jpg)
 
