@@ -288,6 +288,20 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
   const taskId = event.taskId
   const result: ApplyResult = { shouldSave: false, isComplete: false }
 
+  // Lazy sub-session entry: a sub-session can keep producing events while the
+  // root's `subSessionLogs` map is empty (e.g. server restart re-built root
+  // state from disk, but the in-memory map starts blank). Without an entry,
+  // `getTarget` would silently fall back to root and the sub-agent's stream/
+  // tool/usage all leak into the parent file. Initialize on first sight so
+  // routing is correct from this event onward. agent_start has its own init
+  // path; agent_done deletes after handling and would leave a stub.
+  if (taskId
+      && event.type !== 'agent_start'
+      && event.type !== 'agent_done'
+      && !state.subSessionLogs.has(taskId)) {
+    initSubSessionLog(state, taskId, event.agentId ?? agentName, agentName, '')
+  }
+
   switch (event.type) {
     case 'thinking':
       appendThinking(getTarget(state, taskId), event.text ?? '')

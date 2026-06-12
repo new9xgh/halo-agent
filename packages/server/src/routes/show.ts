@@ -5,6 +5,7 @@ import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
+import { readSessionFileMeta } from '../sessions/session-store.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
 import type { TurnState } from '../sessions/ui-log-builder.js'
@@ -41,6 +42,8 @@ interface ShowSession {
   updatedAt: number
   contextTokens: number
   outputTokens: number
+  /** Persisted message count from the session file (0 when unreadable). */
+  messageCount: number
 }
 
 interface ShowWorkspace {
@@ -121,6 +124,26 @@ function liveActivity(sm: SessionManager, sessionId: string): { lastTool: string
   return { lastTool, activeSkill }
 }
 
+// Disk-meta fallback cache for sessions with no live UIState. Keyed by
+// session id, invalidated by the session's updatedAt — so an idle/stopped
+// session costs one jsonl-header read per actual change, not per poll.
+interface MetaCacheEntry { updatedAt: number; contextTokens: number; outputTokens: number; messageCount: number }
+const _metaCache = new Map<string, MetaCacheEntry>()
+
+function sessionMeta(r: SessionInfo, wsPath: string): MetaCacheEntry {
+  const cached = _metaCache.get(r.id)
+  if (cached && cached.updatedAt === r.updatedAt) return cached
+  const meta = readSessionFileMeta(r.id, r.agentId, wsPath)
+  const entry: MetaCacheEntry = {
+    updatedAt: r.updatedAt,
+    contextTokens: meta?.contextTokens ?? 0,
+    outputTokens: meta?.totalOutputTokens ?? 0,
+    messageCount: meta?.messageCount ?? 0,
+  }
+  _metaCache.set(r.id, entry)
+  return entry
+}
+
 function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): ShowWorkspace {
   // All depths (parentId undefined = no filter), newest first, non-archived.
   const { sessions: rows } = sm.listSessions({ includeArchived: false, limit: SESSIONS_PER_WS })
@@ -131,6 +154,10 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
     const live = r.id === r.id.split('>')[0]
       ? sm.getCachedUIState(r.id)
       : null
+    // Live UIState only exists while this process drives the session; for
+    // everything else (idle/stopped/restarted) fall back to the persisted
+    // session-file header so tokens don't read as 0 the moment work pauses.
+    const meta = sessionMeta(r, wsPath)
     return {
       id: r.id,
       parentId: r.parentId,
@@ -141,8 +168,9 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
       lastTool,
       activeSkill,
       updatedAt: r.updatedAt,
-      contextTokens: live?.contextTokens ?? 0,
-      outputTokens: live?.outputTokens ?? 0,
+      contextTokens: (live?.contextTokens || meta.contextTokens) ?? 0,
+      outputTokens: (live?.outputTokens || meta.outputTokens) ?? 0,
+      messageCount: meta.messageCount,
     }
   })
   const wsSkills = scanSkills(path.join(wsPath, '.halo', 'skills'))
@@ -155,6 +183,20 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
     totalSessions: counts.total,
     skills: wsSkills,
   }
+}
+
+// Workspace directory creation time, memoized by path. A folder's birthtime is
+// immutable, so one stat per workspace serves every future poll. Used as the
+// stable sort key: oldest workspace first, newly-created ones always last,
+// independent of how busy each room currently is.
+const _birthCache = new Map<string, number>()
+function workspaceBirth(wsPath: string): number {
+  let b = _birthCache.get(wsPath)
+  if (b === undefined) {
+    try { b = fs.statSync(wsPath).birthtimeMs || fs.statSync(wsPath).ctimeMs } catch { b = 0 }
+    _birthCache.set(wsPath, b)
+  }
+  return b
 }
 
 /** Enumerate every workspace a full-access caller may see: those with a live
@@ -219,8 +261,10 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
         console.log(`[Show] skip workspace ${wsPath}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    // Stable ordering: most populated rooms first, then by key.
-    workspaces.sort((x, y) => y.counts.total - x.counts.total || x.key.localeCompare(y.key))
+    // Stable ordering: oldest workspace first, newly-created ones always
+    // last. Independent of session counts so a room never jumps forward
+    // just because work picked up there.
+    workspaces.sort((x, y) => workspaceBirth(x.path) - workspaceBirth(y.path) || x.key.localeCompare(y.key))
 
     return c.json({
       serverTime: Date.now(),
@@ -229,6 +273,58 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
       skills: scanSkills(GLOBAL_SKILLS_DIR),
       workspaces,
     })
+  })
+
+  // GET /api/show/session?ws=<path>&id=<sessionId> — read-only session detail
+  //   for the show's inspector: trimmed message log + real token caps. Scoped
+  //   like /show/state: non-full tokens may only read their own workspace.
+  app.get('/show/session', async (c) => {
+    const a = auth(c)
+    if (!a.ok) return a.response
+    const { account } = a
+
+    const wsPath = c.req.query('ws') ?? ''
+    const id = c.req.query('id') ?? ''
+    if (!wsPath || !id) return c.json({ error: 'ws and id required' }, 400)
+    if (account.accessLevel !== 'full') {
+      let allowed = false
+      try { allowed = fs.realpathSync(wsPath) === fs.realpathSync(account.workspacePath) } catch { /* bad path */ }
+      if (!allowed) return c.json({ error: 'forbidden' }, 403)
+    }
+
+    try {
+      const sm = registry.getOrCreate(wsPath)
+      const view = await sm.getSessionView(id)
+      if (!view) return c.json({ error: 'session not found' }, 404)
+      // Trim the log for the wire: the inspector shows a feed, not a full
+      // transcript. Last N messages, content capped, tool I/O reduced to
+      // name + a one-line input preview.
+      const MAX_MSGS = 40
+      const messages = view.messages.slice(-MAX_MSGS).map((m) => ({
+        id: m.id,
+        role: m.role,
+        type: m.type ?? null,
+        agentName: m.agentName ?? null,
+        content: (m.content || '').slice(0, 600),
+        timestamp: m.timestamp,
+        toolName: m.toolName ?? null,
+        toolInput: m.toolInput != null ? JSON.stringify(m.toolInput).slice(0, 200) : null,
+        durationMs: m.durationMs ?? null,
+        toolCalls: (m.toolCalls || []).map((tc) => ({ name: tc.name, input: (tc.input || '').slice(0, 200) })),
+      }))
+      return c.json({
+        id,
+        messages,
+        totalMessages: view.messages.length,
+        contextTokens: view.contextTokens,
+        outputTokens: view.outputTokens,
+        maxContextTokens: view.maxContextTokens,
+        isRunning: view.isRunning,
+      })
+    } catch (err) {
+      console.log(`[Show] session detail ${wsPath} ${id}: ${err instanceof Error ? err.message : String(err)}`)
+      return c.json({ error: 'failed to load session' }, 500)
+    }
   })
 
   return app
