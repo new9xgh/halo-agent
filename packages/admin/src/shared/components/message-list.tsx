@@ -97,7 +97,7 @@ function SubAgentReport({ content }: { content: string }) {
   const parsed = parseSubAgentReport(content)!
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
   return (
-    <div className="px-3 py-2 border-l-2 border-l-emerald-500/70 bg-emerald-950/20">
+    <div className="sticky top-0 z-10 px-3 py-2 border-b border-slate-900 border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
       <div className="mb-1 flex items-center gap-2 text-[10px] font-medium text-emerald-400">
         <span>Report from sub-session</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
