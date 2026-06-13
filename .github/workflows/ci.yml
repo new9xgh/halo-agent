@@ -1,0 +1,44 @@
+name: CI
+
+# 哨兵模式:push 到 main 或开 PR 时后台跑一遍,绿勾/红叉贴到 commit 上。
+# 不拦 push、不挡 merge —— 只判卷 + 跑红时 GitHub 发邮件提醒。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # corepack 直接读 package.json 里锁定的 pnpm@11.4.0,版本不用在这写死
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # frozen-lockfile:CI 必须按 pnpm-lock.yaml 装,锁文件和 package.json 对不上就直接失败,
+      # 而不是悄悄改锁文件 —— 保证 CI 装的依赖和你本地完全一致
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 跟根 package.json 的 build 一致:core→server→acp→cli 依次 tsc 编译。
+      # 不含 admin 的 next build(第一版求稳,以后要加再单开 job)。任一包 tsc 报错即红。
+      - name: Build (typecheck)
+        run: |
+          pnpm --filter @turmind/halo-core build
+          pnpm --filter @turmind/halo-server build
+          pnpm --filter @turmind/halo-acp-adapter build
+          pnpm --filter @turmind/halo-cli build
+
+      # server 是唯一有测试的包(130 用例)。挂一个即红。
+      - name: Test (server)
+        run: pnpm --filter @turmind/halo-server test
