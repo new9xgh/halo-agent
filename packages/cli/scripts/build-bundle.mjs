@@ -104,6 +104,11 @@ const EXTERNAL = readDepsList()
 // "did my new build actually deploy?" at a glance. A dirty tree gets a
 // `-dirty` marker. Falls back to the bare version if git isn't available
 // (e.g. building from an unpacked tarball).
+//
+// EXCEPT for an npm release (`HALO_RELEASE=1`): a `-<sha>` suffix is a semver
+// prerelease, which `npm install @turmind/halo` skips by default and never
+// becomes `latest`. A tagged release publishes the bare base version (`0.1.1`)
+// — the version number IS the identifier there, no sha needed.
 const BASE_VERSION = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'package.json'), 'utf-8')).version
 function gitVersion() {
   try {
@@ -114,8 +119,8 @@ function gitVersion() {
     return BASE_VERSION
   }
 }
-const PKG_VERSION = gitVersion()
-console.log(`[build-bundle] version: ${PKG_VERSION}`)
+const PKG_VERSION = process.env.HALO_RELEASE === '1' ? BASE_VERSION : gitVersion()
+console.log(`[build-bundle] version: ${PKG_VERSION}${process.env.HALO_RELEASE === '1' ? ' (release)' : ''}`)
 
 // Output an ESM bundle. We only bundle our own source (the workspace
 // packages); every npm dep (Hono, aws-sdk, ink, drizzle, etc.) stays external
