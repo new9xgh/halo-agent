@@ -236,8 +236,12 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const path = await import('node:path')
     const resolved = path.default.resolve(account.workspacePath, filePath)
 
-    // Prevent path traversal outside workspace
-    if (!resolved.startsWith(path.default.resolve(account.workspacePath))) {
+    // Prevent path traversal outside workspace. Match on a path-segment
+    // boundary, not a raw string prefix — otherwise a sibling dir whose name
+    // starts with the workspace name (e.g. `/ws-secret` vs `/ws`) passes
+    // startsWith and escapes the sandbox.
+    const root = path.default.resolve(account.workspacePath)
+    if (resolved !== root && !resolved.startsWith(root + path.default.sep)) {
       return c.json({ error: 'path traversal not allowed' }, 403)
     }
 
