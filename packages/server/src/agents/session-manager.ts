@@ -1065,7 +1065,7 @@ export class SessionManager implements SessionManagerInternals {
         // 2. Context overflow → local (no-LLM) compact then retry.
         // Overflow means the model already refused this payload, so calling an
         // LLM to summarize adds risk of a second stall. Local compaction is
-        // instant and deterministic; the next turn's 70% soft compact can still
+        // instant and deterministic; the next turn's 80% soft compact can still
         // produce a higher-quality LLM summary if the user continues talking.
         if (msg.includes('too many input tokens') || msg.includes('prompt_too_long') || msg.includes('ContextWindowOverflow')) {
           console.debug(`[SessionManager] Session ${session.id} context overflow (attempt ${attempt + 1}), local-compacting...`)

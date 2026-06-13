@@ -114,5 +114,7 @@ export function initLogger(): void {
     writeToFile(`${new Date().toISOString()} ERROR ${formatArgs(args)}\n`)
   }
 
-  writeToFile(`${new Date().toISOString()} INFO  [Logger] File logging initialized: ${logFile} (level: ${config.logging.level})\n`)
+  if (shouldLog('info')) {
+    writeToFile(`${new Date().toISOString()} INFO  [Logger] File logging initialized: ${logFile} (level: ${config.logging.level})\n`)
+  }
 }

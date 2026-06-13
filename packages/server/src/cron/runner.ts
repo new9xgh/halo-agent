@@ -267,12 +267,10 @@ function reconcileFromDb(): void {
   // the cron skill writing the db directly) reach the admin
   // UI through this path.
   const changedIds = new Set<string>()
-  const seenBefore = new Set(_fingerprint.keys())
   for (const job of rows) {
     liveIds.add(job.id)
     const fp = jobFingerprint(job)
     const prev = _fingerprint.get(job.id)
-    const isNew = !seenBefore.has(job.id)
     if (prev === fp && _active.has(job.id)) continue
     if (prev === fp && !_active.has(job.id) && job.enabled === 1) {
       // Edge case: in-memory cleared but fingerprint cached. Re-add.
@@ -287,10 +285,6 @@ function reconcileFromDb(): void {
     }
     _fingerprint.set(job.id, fp)
     changedIds.add(job.id)
-    if (isNew) {
-      // Brand-new row — admin should refresh its list.
-      // (Existing-but-changed broadcast falls through the same event.)
-    }
   }
   // Drop schedules for rows that have been deleted out from under us.
   for (const id of [..._active.keys()]) {
