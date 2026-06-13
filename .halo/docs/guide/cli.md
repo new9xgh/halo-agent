@@ -14,6 +14,33 @@ The binary is at `packages/cli/bin/halo.js`. For global access, link it:
 pnpm --filter @turmind/halo-cli link --global
 ```
 
+### Publishing to npm (maintainers)
+
+The published package is `@turmind/halo` — a self-contained esbuild bundle
+(CLI + server + admin-out + templates), staged under `packages/cli/dist-pub/`
+by `scripts/build-bundle.mjs`. The workspace `@turmind/halo-cli` can't be
+published directly (it has `workspace:*` deps); the bundle flattens them.
+
+```bash
+# 1. bump packages/cli/package.json "version" (e.g. 0.1.2)
+# 2. build the upstream artifacts the bundle consumes
+pnpm --filter @turmind/halo-core build
+pnpm --filter @turmind/halo-server build
+cd packages/admin && npx next build --no-lint && cd ../..
+# 3. stage the release bundle — HALO_RELEASE=1 stamps the bare version
+#    (0.1.2), NOT the default <version>-<sha>: a `-<sha>` suffix is a semver
+#    prerelease that `npm install` skips and never tags as `latest`.
+HALO_RELEASE=1 node packages/cli/scripts/build-bundle.mjs
+# 4. preview + publish
+cd packages/cli/dist-pub
+npm pack --dry-run        # inspect tarball contents
+npm publish               # @turmind/halo@<version>, tag latest, public
+```
+
+npm versions are immutable — a published version can never be overwritten,
+so bump first and verify with `npm pack --dry-run` before `npm publish`.
+End users then install with `npm install -g @turmind/halo`.
+
 ## CLI Mode (non-interactive)
 
 Run a one-shot prompt and exit:
