@@ -86,8 +86,8 @@ packages/desktop/dist-keep/
 # from cli/server/core package.json + dist outputs. Not human-edited.
 packages/cli/dist-pub/
 
-# Local-only packaging notes — host setup + China-region distribution findings
-# that shouldn't ship in git, but the committed desktop-packaging.md points here
-# so a future packaging run reads it. Single explicit path (the docs/ tree is
-# otherwise tracked).
+# Local-only docs — host-specific deployment details (HOME paths, systemd
+# units, CloudFront ids, tokens) that shouldn't ship in git. Explicit paths
+# (the docs/ tree is otherwise tracked).
 .halo/docs/dev/desktop-packaging.local.md
+.halo/docs/dev/dev-environment.local.md
