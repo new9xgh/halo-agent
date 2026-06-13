@@ -113,6 +113,15 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
 
 ## Build steps in detail (`stage-runtime.mjs`)
 
+0. **Stamp the build version** → write `<package.json version>-<short git sha>`
+   (`-dirty` suffix if the tree has uncommitted changes) to
+   `resources/halo-version`, on every path (full / fast / auto-fast — the sha
+   changes per commit even when deps don't). Shipped via `extraResources`;
+   `main.cjs` reads it and passes it as `HALO_VERSION` to the spawned server, so
+   `GET /api/health` reports it and the admin settings sidebar shows `Halo
+   v<version>`. Without it the server falls back to `'dev'`. Same
+   `<version>-<sha>` scheme as the CLI bundle (`halo --version`), so all three
+   agree. Dev (`electron .`) computes it live from git instead.
 1. **`pnpm deploy --legacy --prod --config.node-linker=hoisted`** → flattens
    `@turmind/halo-server` (+ the `@turmind/halo-core` workspace dep) into
    `resources/server-runtime/node_modules` as a flat, real-directory tree (no
@@ -262,6 +271,10 @@ ls packages/desktop/resources/server-runtime/templates/skills/
 
 # compiled init carries the current template version + send-file
 grep -o "TEMPLATE_VERSION = [0-9]*" packages/desktop/resources/server-runtime/dist/init.js
+
+# build version stamp is clean (<version>-<sha>, no -dirty) — surfaces as
+# "Halo v<version>" in the settings sidebar via GET /api/health
+cat packages/desktop/dist/win-unpacked/resources/halo-version   # or resources/halo-version pre-pack
 
 # the dmg exists
 ls -lh packages/desktop/dist/*.dmg
