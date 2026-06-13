@@ -75,3 +75,8 @@ When you catch yourself doing any of these, stop and reconsider:
 - Choose the simplest workable solution for technical decisions, debug issues yourself, look up docs for dependency problems
 - Assume AWS credentials are already configured
 - When detailed information is needed, first read `.halo/INDEX.md` to find the relevant doc path, then `file_read` to load it
+
+## Git Commits
+
+- When **you (halo) make a commit on the user's behalf**, append a co-author trailer as the last line: `Co-Authored-By: halo <halo@turmind.com>`. This only applies to agent-authored commits — commits the user writes by hand are not subject to this rule
+- Match the repo's existing commit style: a `type(scope): summary` subject line (e.g. `fix(web-demo):`, `docs(cli):`) plus a body explaining the why, mirroring recent history
