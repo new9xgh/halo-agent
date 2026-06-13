@@ -116,6 +116,27 @@ function cleanOldArtifacts() {
 
 cleanOldArtifacts()
 
+// Stamp the build version (base version + short git sha) into resources/ so the
+// desktop launcher can pass it through as HALO_VERSION when it spawns the server
+// — the server-runtime dist reads process.env.HALO_VERSION for GET /api/health
+// and falls back to 'dev' without it. Written on every path (full / fast /
+// auto-fast) since the sha changes per commit even when deps don't. Matches the
+// CLI bundle's `<version>-<sha>` scheme so the desktop server's /api/health and
+// `halo --version` report the same string.
+function writeVersionFile() {
+  const base = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf-8')).version
+  let version = base
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+    const dirty = execSync('git status --porcelain', { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().length > 0
+    version = `${base}-${sha}${dirty ? '-dirty' : ''}`
+  } catch { /* no git (e.g. building from a tarball) — fall back to bare version */ }
+  fs.mkdirSync(RES_DIR, { recursive: true })
+  fs.writeFileSync(path.join(RES_DIR, 'halo-version'), version)
+  console.log(`[stage] version: ${version}`)
+}
+writeVersionFile()
+
 // Explicit fast mode (--fast / HALO_STAGE_FAST=1): re-sync outputs, never install.
 if (FAST) {
   await fastResync()

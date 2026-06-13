@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences } = require('electron')
-const { spawn, execFile } = require('node:child_process')
+const { spawn, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -112,6 +112,21 @@ function resolveRuntimePaths() {
   }
 }
 
+// Build version for GET /api/health → shown in the admin settings sidebar.
+// Packaged: read the `halo-version` stamp staged by stage-runtime.mjs. Dev
+// (`electron .`): compute `<version>-<sha>` live from git, same scheme as the
+// staged stamp and the CLI bundle. Falls back to the bare package version.
+function resolveVersion() {
+  if (app.isPackaged) {
+    try { return fs.readFileSync(path.join(process.resourcesPath, 'halo-version'), 'utf8').trim() } catch {}
+  }
+  const base = require('../package.json').version
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+    return sha ? `${base}-${sha}` : base
+  } catch { return base }
+}
+
 function configHasPassword() {
   // Cheap regex over secrets/config.yaml. We don't pull in a yaml parser
   // here; the field is "      value: \"...\"" right under "  password:" and
@@ -212,6 +227,7 @@ function startServer() {
     ...process.env,
     HALO_FRONTEND_DIR: adminOut,
     HALO_PORT: String(PORT),
+    HALO_VERSION: resolveVersion(),
   }
   if (process.platform === 'darwin') {
     const cliDirs = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/local/sbin', '/opt/homebrew/sbin']

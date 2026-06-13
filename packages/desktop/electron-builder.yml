@@ -29,6 +29,10 @@ extraResources:
     to: cli-runtime
   - from: resources/admin-out
     to: admin-out
+  # Build version stamp (`<version>-<sha>`) written by stage-runtime.mjs; the
+  # launcher reads it and passes it through as HALO_VERSION to the server.
+  - from: resources/halo-version
+    to: halo-version
   # `node` (Unix) is staged on macOS / Linux builds; `node.exe` is staged
   # on Windows builds. electron-builder is fine with files that don't
   # exist (skipped silently), so listing both is safe regardless of
