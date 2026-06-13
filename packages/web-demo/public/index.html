@@ -383,9 +383,9 @@
             <div class="toolbar-sub" id="subAgents"></div>
           </div>
           <div class="toolbar-sep"></div>
-          <div class="toolbar-item" onclick="execCmd('/new')"><span>✨</span><span id="menuNew"></span></div>
-          <div class="toolbar-item" onclick="execCmd('/compact')"><span>🗜</span><span id="menuCompact"></span></div>
-          <div class="toolbar-item" onclick="execCmd('/stop')"><span>⏹</span><span id="menuStop"></span></div>
+          <div class="toolbar-item" onclick="execCmd('/session new')"><span>✨</span><span id="menuNew"></span></div>
+          <div class="toolbar-item" onclick="execCmd('/session compact')"><span>🗜</span><span id="menuCompact"></span></div>
+          <div class="toolbar-item" onclick="closeToolbar(); stopGeneration()"><span>⏹</span><span id="menuStop"></span></div>
           <div class="toolbar-item" onclick="promptWs()"><span>📂</span><span id="menuWs"></span></div>
           <div class="toolbar-item" onclick="execCmd('/help')"><span>❓</span><span id="menuHelp"></span></div>
         </div>
@@ -1167,7 +1167,7 @@
       closeToolbar()
       const path = prompt(T('toolbar.wsPrompt'))
       if (path === null) return
-      execCmd(path ? '/ws ' + path.trim() : '/ws')
+      execCmd(path ? '/ws switch ' + path.trim() : '/ws info')
     }
 
     async function showSub(type) {
@@ -1188,7 +1188,7 @@
         const res = await fetch('/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-session': session },
-          body: JSON.stringify({ message: '/list' }),
+          body: JSON.stringify({ message: '/session list' }),
         })
         if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
 
@@ -1207,7 +1207,7 @@
           const item = document.createElement('div')
           item.className = 'toolbar-item' + (isCurrent ? ' active' : '')
           item.textContent = (isCurrent ? '● ' : '') + label
-          item.onclick = () => { if (!isCurrent) execCmd('/switch ' + num) }
+          item.onclick = () => { if (!isCurrent) execCmd('/session switch ' + num) }
           container.appendChild(item)
         }
 
@@ -1222,7 +1222,7 @@
         const res = await fetch('/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-session': session },
-          body: JSON.stringify({ message: '/agents' }),
+          body: JSON.stringify({ message: '/agent list' }),
         })
         if (!res.ok) { container.innerHTML = '<div class="loading">' + T('toolbar.loadFailed') + '</div>'; return }
 
@@ -1240,7 +1240,7 @@
           const item = document.createElement('div')
           item.className = 'toolbar-item'
           item.textContent = name
-          item.onclick = () => execCmd('/agent ' + num)
+          item.onclick = () => execCmd('/agent switch ' + num)
           container.appendChild(item)
         }
 
