@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Model Providers
-- [ ] OpenAI (GPT series)
+- [x] OpenAI (GPT series)
 - [ ] Google Gemini
 - [ ] OpenRouter (multi-model aggregator)
 - [ ] Ollama (local models)
@@ -10,15 +10,15 @@ Extension interface is ready (`ModelRuntime`). Adding providers is integration w
 
 ## Channels
 - [ ] Discord
-- [ ] Slack
+- [x] Slack
 - [ ] Email
 - [ ] SMS
 
-Channel adapter pattern established (WeChat, Telegram already working). New channels follow the same `CommandContext` interface.
+Channel adapter pattern established (Web, WeChat, Telegram, Slack, Feishu already working). New channels follow the same `CommandContext` interface.
 
 ## CLI / TUI
-- [ ] CLI mode (headless, SSH-friendly)
-- [ ] TUI (terminal UI with interactive chat)
+- [x] CLI mode (headless, SSH-friendly)
+- [x] TUI (terminal UI with interactive chat)
 
 Enables usage without a browser. Important for SSH-into-server workflows.
 
