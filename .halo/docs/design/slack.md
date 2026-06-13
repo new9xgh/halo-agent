@@ -25,7 +25,7 @@ One bot (= one Slack app install) is bound to one workspace. A workspace can bin
 
 - **DMs: one Slack user → one ongoing session** (keyed by DM channel id, preserved across messages)
 - **Channels/groups: each thread → one session** (thread root message or explicit thread_ts anchors the session)
-- Session ID format: `slack:<channelId>:<rootTs>:<createdAtBase36>` (e.g. `slack:C0123:1700.0:m1abc`)
+- Session ID format: `slack_<channelId>:<rootTs>_<createdAtBase36>` (e.g. `slack_C0123:1700.0_m1abc`)
 - Sessions live under the bot's bound workspace and use the `default` agent
 - The web side sees these sessions in the session list (labelled `Slack: <channelId>/<threadTs>`)
 - Access level inherited from the bot account
@@ -44,15 +44,15 @@ Slack-specific config JSON fields: `botToken`, `appToken`, `botUserId`, `teamId`
 - `appToken` (xapp-…) — app-level token for Socket Mode; traded once for a wss:// URL
 - `botUserId` — the bot's own user id; fetched via `auth.test` at install to detect @-mentions
 - `teamId` — workspace id (preserved for analytics / symmetry)
-- `lastActiveChatId` — runtime cache of the most recent inbound thread (format: `<channelId>:<threadTs>` or just `<channelId>` for DMs), written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` with a per-process hash so unchanged values never touch the db. Used by cron-dispatcher as fallback when no explicit target is set.
+- `lastActiveChatId` — runtime cache of the most recent inbound thread (format: `<channelId>:<threadTs>` or just `<channelId>` for DMs), written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` with a per-process hash so unchanged values never touch the db. Not consumed by cron dispatch (see below).
 
 ### Proactive sending (cron)
 
-The slack cron-dispatcher (`channels/slack/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot. On a fire it requires an explicit `chatId` (format: `D0123` for a DM, `C0123` for a channel, `C0123:1700.0` for a thread):
+The slack cron-dispatcher (`channels/slack/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (format: `D0123` for a DM, `C0123` for a channel, `C0123:1700.0` for a thread):
 
-1. **Explicit `chatId` on the target** — set when the cron was created from inside a Slack chat. Sends only to that chat/thread.
-2. **`lastActiveChatId` fallback** — used when no explicit target is set; matches the most recent inbound the bot received.
-3. **Error if neither** — Slack has no "fan out to whitelist" model; every push needs an explicit destination or a fallback history.
+- Cron jobs created from inside a Slack chat via the `cron` skill auto-pin the current chat as `chatId`.
+- Admin-UI cron jobs that don't specify a target run silently — the result shows in the cron log, nothing is pushed.
+- Slack has no "fan out to whitelist" model; every push needs an explicit destination.
 
 ## Modules
 
@@ -63,7 +63,7 @@ Files: `packages/server/src/channels/slack/`
 - `handler.ts` — Socket Mode connection + event routing, mention filtering, session resolution, per-thread event listener bookkeeping
 - `event-adapter.ts` — AgentSessionEvent → Slack messages (buffer + flush; split at 35k chars)
 - `api.ts` — HTTP client (auth.test / openSocketModeConnection / chat.postMessage / files.upload / files.download / searchSlackTargets)
-- `cron-dispatcher.ts` — CronDispatcher registration; maps Slack targets to `lastActiveChatId` or explicit chatId
+- `cron-dispatcher.ts` — CronDispatcher registration; requires an explicit Slack chatId per dispatch
 
 Routes: `packages/server/src/routes/slack.ts`
 
@@ -147,7 +147,7 @@ Slack cron-dispatcher plugs into the unified cron/dispatcher.ts registry. At fir
 3. Call `postMessage()` with the chatId (and threadTs if present)
 4. Return dispatch result (ok / error)
 
-If no explicit chatId is provided and no lastActiveChatId is cached, dispatch fails with a clear message. This prevents silent failures in a shared-bot scenario where the "last messager" might be unrelated to whoever set up the cron.
+If no explicit chatId is provided, dispatch fails with a clear message. This prevents silent failures in a shared-bot scenario where the "last messager" might be unrelated to whoever set up the cron.
 
 ## SessionManager integration
 
@@ -203,9 +203,9 @@ Not supported: interactive messages (blocks/buttons/callbacks), slash commands i
 
 Slack-specific paths:
 
-- `packages/server/src/channels/slack/handler.ts:245` — `connect()` Socket Mode setup
-- `packages/server/src/channels/slack/handler.ts:384` — `handleInbound()` event dispatch
-- `packages/server/src/channels/slack/handler.ts:537` — `getOrCreateSessionForThread()` session keying
+- `packages/server/src/channels/slack/handler.ts:252` — `connect()` Socket Mode setup
+- `packages/server/src/channels/slack/handler.ts:391` — `handleInbound()` event dispatch
+- `packages/server/src/channels/slack/handler.ts:552` — `getOrCreateSessionForThread()` session keying
 - `packages/server/src/channels/slack/api.ts:265` — `openSocketModeConnection()` fetch wss:// URL
 - `packages/server/src/channels/slack/cron-dispatcher.ts:46` — `dispatch()` cron push logic
 - `packages/server/src/channels/slack/event-adapter.ts:90` — `dispatchChunk()` buffer flush + media extraction

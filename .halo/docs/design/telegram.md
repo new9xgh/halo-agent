@@ -43,21 +43,19 @@ Telegram bot accounts are stored in the unified channel DB: `~/.halo/secrets/cha
 
 Telegram-specific config JSON fields: `botToken`, `botUsername`, `allowedUsers`, `lastActiveChatId`.
 
-`lastActiveChatId` is a runtime cache of the most recent chat id the bot has exchanged messages with. Written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` on every inbound message, but with a per-process hash so unchanged values never touch the db (idempotent — on the hot path we skip the read-modify-write entirely after the first sight). Used by:
-- the telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) as the final fallback target when neither an explicit `chatId` (cron created from inside a chat) nor any numeric id in `allowedUsers` is available
-- channels with shared multi-user bots, where "reply to whoever talked last" is the right default
+`lastActiveChatId` is a runtime cache of the most recent chat id the bot has exchanged messages with. Written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` on every inbound message, but with a per-process hash so unchanged values never touch the db (idempotent — on the hot path we skip the read-modify-write entirely after the first sight). It is **not** used for cron dispatch (see below); it is kept as a runtime cache for any future "reply to whoever talked last" feature.
 
 ### Proactive sending (cron)
 
 Halo can send to a Telegram chat without that user having messaged the bot first — Telegram's Bot API allows `sendMessage(chatId, text)` for any known chat id. Halo only requires that the chat id come from a *trusted source*.
 
-The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot. On a fire it picks recipients in this order:
+The telegram cron-dispatcher (`channels/telegram/cron-dispatcher.ts`) registers itself with `cron/dispatcher.ts`'s registry at boot and **requires an explicit `chatId`** (numeric — Telegram private-chat ids equal user ids):
 
-1. **Explicit `chatId` on the target** — set when the cron was created from inside a chat (e.g. the `cron` skill activated from telegram defaults targets to `telegram:<account>:<chatId>`). Sends only to that chat.
-2. **Fan-out to every numeric id in `allowedUsers`** — Telegram's private-chat id == user id, so a whitelisted user is automatically a valid send target. Each recipient yields its own row in `cron_runs.dispatch_results` so the admin UI shows per-recipient ✓/✗ at a glance. `@username` entries are skipped (Bot API only accepts numeric ids).
-3. **`lastActiveChatId` fallback** — used when neither path yields a chat id, e.g. a single-user bot where the whitelist is empty.
+- Cron jobs created from inside a telegram chat via the `cron` skill auto-pin the current chat id (target `telegram:<account>:<chatId>`).
+- Admin-UI cron jobs that don't specify a target run silently — the result shows in the cron log, nothing is pushed.
+- `@username` entries are not accepted by `sendMessage`; the dispatcher rejects non-numeric values with a clear error.
 
-This is what makes cron jobs targeting a Telegram account work without the user "starting" a conversation each time, AND lets the same bot deliver to every whitelisted user from one job.
+Earlier drafts considered "fan-out to every id in `allowedUsers`" or "fall back to `lastActiveChatId`", but in practice both pushed the cron output to strangers' chats. The cron creator's intent is "reach me, the person who set this up" — so the only target is what the caller passes explicitly.
 
 ## Modules
 

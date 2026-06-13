@@ -123,12 +123,13 @@ Unknown `/` input falls through to normal message handling.
 
 ## Event coalescing (WeixinResponder)
 
-WeChat `sendMessage` is block-send, while LLMs stream. Coalesce strategy:
-- Accumulated ≥ 200 chars → flush
-- 3 s silence → flush
-- `complete` event → flush remainder
-- Tool calls are not forwarded (the user uses web for details); errors are forwarded
-- Media send: the `send-file` skill produces `MEDIA: <path>` markers, which the responder turns into actual media uploads
+WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "buffer the whole turn, flush as one message":
+- `stream` events accumulate in a single buffer
+- `complete` → flush the whole buffer as one (or more) messages
+- Hard cap `HARD_CHARS = 3500` (WeChat rejects >~4000) — when the buffer reaches it mid-stream, split at the nearest paragraph break and dispatch; remaining text keeps accumulating
+- `error` → immediate flush + send a `[错误] …` message; `system` → immediate flush + send a `[系统] …` message
+- Tool calls / tool results / thinking are dropped (detail lives in the web UI)
+- Media: the agent emits `MEDIA: <path>` markers, which the responder extracts and turns into actual media uploads
 
 ## Supported inbound media
 

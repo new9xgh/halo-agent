@@ -9,12 +9,12 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── global/                            # Non-sensitive config + data
 │   ├── INSTRUCTIONS.md                # Global instructions (injected into every agent)
 │   ├── USER.md                        # User profile (bootstrap-generated)
-│   ├── prompts/                       # System prompts (externalised)
+│   ├── prompts/                       # User-editable system prompts (externalised)
 │   │   ├── bootstrap/BOOTSTRAP.md     # First-run guidance
-│   │   ├── all/TOOL_GUIDELINES.md     # Every agent
-│   │   └── root/                      # Root agent only
-│   │       ├── PLATFORM_KNOWLEDGE.md
-│   │       └── ORCHESTRATOR_GUIDELINES.md
+│   │   ├── all/                       # Every agent (TOOL_GUIDELINES.md, TOOL_SHELL[.windows].md)
+│   │   └── root/                      # Root agent only — empty by default; user-set
+│   ├── builtin/                       # Server-owned, version-tied, NOT user-editable
+│   │   └── PLATFORM_KNOWLEDGE.md      # Halo self-description, prepended to root scope
 │   ├── agents/<id>/
 │   │   ├── agent.yaml                 # Agent config
 │   │   └── AGENT.md                   # Agent personality

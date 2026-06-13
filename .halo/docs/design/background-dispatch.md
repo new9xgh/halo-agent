@@ -36,7 +36,7 @@ State is NOT duplicated — all handlers read from `SessionManager.getUIState(ro
 
 ## `/session new` (session:clear) flow
 
-Source: `packages/server/src/commands/session-clear.ts`
+Source: `packages/server/src/ws/handler.ts` (`session:clear` case)
 
 ```
 User clicks /session new
@@ -126,7 +126,7 @@ disconnect handler
 | File | Relevant code |
 |---|---|
 | `packages/server/src/ws/background-handler.ts` | `createBackgroundHandler()` utility |
-| `packages/server/src/commands/session-clear.ts` | `session:clear` — inline bgHandler + `backgroundSaves` registration |
+| `packages/server/src/ws/handler.ts` | `session:clear` case — inline bgHandler + `backgroundSaves` registration |
 | `packages/server/src/ws/event-processor.ts` | `sendWsNotification()`, `bufferDetachedNotification()` |
 | `packages/server/src/agents/session-manager.ts` | `emitEvent()`, `reduceIntoUIState()`, `registerEventListener()` |
 | `packages/server/src/sessions/ui-log-builder.ts` | `applyEvent()`, `createSaveSnapshot()`, UIState type |

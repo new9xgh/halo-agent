@@ -198,7 +198,7 @@ Three entry points with different quality / safety trade-offs:
 
 | Trigger | Path | Compaction used | Rationale |
 |---|---|---|---|
-| 70% soft threshold (end-of-turn auto) | `commands/compact.ts` called from `onAutoCompact` on `complete` event | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. |
+| 80% soft threshold (end-of-turn auto) | `commands/compact.ts` called from `onAutoCompact` on `complete` event | **Self-compact** (`selfCompactSession`) — the agent summarizes its own context | The agent already has full context cached (prompt cache hit). No extra model call, no input duplication, no risk of losing tool_result semantics. |
 | Overflow mid-loop (`too many input tokens`) | `runAgentTurn` retry catch → `localCompactMessages` → retry | **Local** — `[role]: <first N chars>` concat, no network call | The model just refused this payload; an LLM round-trip now could stall the recovery path. Local is deterministic and instant; the next end-of-turn can re-summarize via self-compact. |
 | User `/session compact` (web, WeChat) | `commands/compact.ts` / `SessionManager.compactSession` | **Self-compact**, with **local fallback** on timeout/error | User explicitly requested it; self-compact reuses the cached context so it's fast. Falls back to local if anything goes wrong. |
 

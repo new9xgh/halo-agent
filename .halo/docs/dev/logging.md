@@ -6,7 +6,7 @@ File: `packages/server/src/logger.ts`
 
 ## Architecture
 
-On startup the logger intercepts `console.log` / `console.error` / `console.warn`. Every call writes twice:
+On startup the logger intercepts `console.log` / `console.error` / `console.warn` / `console.debug`. Every call writes twice:
 1. The original console (stdout/stderr) — live monitoring
 2. A disk log file — persistent history
 
@@ -27,7 +27,7 @@ When the WS handler receives a `subscribe` or `chat` with `projectId`, it calls 
 2026-04-19T10:30:02.567Z WARN  [Orchestrator] Context overflow, auto-compacting...
 ```
 
-Every line: `ISO timestamp` + `level (INFO/ERROR/WARN)` + `message`.
+Every line: `ISO timestamp` + `level (DEBUG/INFO/WARN/ERROR)` + `message`.
 
 ## Rotation
 

@@ -6,7 +6,7 @@ Unified command processing — all slash commands (built-in + skill) are dispatc
 
 Source: [commands/index.ts](../../../packages/server/src/commands/index.ts) (descriptors) + [channels/shared/commands.ts](../../../packages/server/src/channels/shared/commands.ts) (execution)
 
-Top-level slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/ws` `/cron` `/acp`.
+Top-level built-in slash commands: `/help` `/evo` `/session` `/agent` `/skill` `/ws`. (`/cron` and `/acp` look like top-level commands too but are provided by same-name skills — see the verb table below; they aren't registered in `commands/index.ts` or `DISPATCH_COMMANDS`.)
 
 | Name | Slash | Type | Purpose |
 |---|---|---|---|

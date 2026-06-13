@@ -44,7 +44,7 @@ Feishu bot accounts are stored in the unified channel DB: `~/.halo/secrets/chann
 
 Feishu-specific config JSON fields: `appId`, `appSecret`, `verificationToken` (legacy), `encryptKey` (optional), `botOpenId`, `lastActiveChatId`.
 
-- `lastActiveChatId` is a runtime cache of the most recent `<chatId>:<rootId>` pair. Written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` on every inbound message (idempotent). Used as a fallback for cron sends in edge cases where no explicit target is available.
+- `lastActiveChatId` is a runtime cache of the most recent `<chatId>:<rootId>` pair. Written by `rememberLastActiveChat()` in `channels/shared/accounts.ts` on every inbound message (idempotent). Not consumed by cron dispatch (the dispatcher requires an explicit `chatId`); it is kept as a runtime cache for any future "reply to whoever talked last" feature.
 
 ### Authentication model
 
@@ -57,7 +57,7 @@ Token caching is in-memory per-app in `api.ts:tokenCache`; refresh happens on-de
 
 ### Proactive sending (cron)
 
-The feishu cron-dispatcher (`channels/feishu/cron-dispatcher.ts`) requires an explicit `chatId` (no fallback to `lastActiveChatId` like Slack/WeChat). When a cron fires:
+The feishu cron-dispatcher (`channels/feishu/cron-dispatcher.ts`) requires an explicit `chatId` — there is no fallback to `lastActiveChatId`. When a cron fires:
 
 1. **Explicit `chatId` on the target** — set when the cron was created from inside a Feishu chat (e.g. cron created from a group thread auto-pins to that thread). Sends only to that chat (top-level message, not nested in the thread — Feishu's open API v1 doesn't support thread-targeting in sendMessage).
 2. **Admin-UI cron without explicit target** — runs silently if no chatId is provided.
@@ -171,7 +171,7 @@ Inbound images are downloaded via `/im/v1/messages/{messageId}/resources/{imageK
 | **Inbound delivery** | Long-connect (wss) | Webhook + slash commands | Long-polling |
 | **Session model** | Per-thread in groups, p2p anchored | Per-thread + channels | Per-user (one active) |
 | **Mention required** | Yes in groups, no in p2p | Yes in channels, no in DMs | No (all messages routed to agent) |
-| **Cron fallback** | Explicit chatId only | Explicit channel | Fallback to lastActiveChatId or allowedUsers |
+| **Cron target** | Explicit chatId only | Explicit chatId only (DM / channel / thread) | Explicit numeric chatId only |
 | **Media upload** | Separate image + file endpoints | Unified File upload API | Bot API sendPhoto / sendVideo / sendDocument |
 | **Text limit** | ~5000 chars | ~4000 chars | ~4000 chars |
 | **Thread support** | Native (root_id in messages) | Native (thread_ts replies) | N/A (group chats not supported) |

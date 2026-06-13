@@ -26,7 +26,7 @@ Workspace switch does **not** migrate existing terminals — they keep their ori
 
 When the WebSocket drops:
 
-1. PTYs are **not killed** — they move into a module-level `detachedTerminals` pool (`packages/server/src/ws/terminal-manager.ts`)
+1. PTYs are **not killed** — they stay in the module-level `terminals` map with `currentWs = null` (`packages/server/src/ws/terminal-manager.ts`)
 2. Output during detach is buffered (ring buffer, up to `config.limits.terminalOutputBuffer` = 50 KB per terminal)
 3. Grace period: `config.timeout.terminalGrace` (default 5 min)
 4. On reconnect, the client sends `terminal:reattach` (sent on initial mount **and** on every subsequent `_connected` event)
@@ -56,7 +56,7 @@ create ──▶│ in this WS  │
                  │ WS drops
                  ▼
           ┌─────────────┐
-          │  detached   │  (grace timer = 60s, ring buffer active)
+          │  detached   │  (grace timer = 5min, ring buffer active)
           │    pool     │
           └──┬───────┬──┘
    reattach  │       │  grace expires
@@ -69,7 +69,7 @@ create ──▶│ in this WS  │
 
 Close semantics:
 - Explicit `terminal:close` — PTY killed immediately, detach entry (if any) cleaned up
-- WS drop → 60 s no reattach → PTY killed
+- WS drop → grace expires (default 5 min) without reattach → PTY killed
 - Server shutdown — all PTYs die with the process
 
 ## WebSocket protocol

@@ -91,7 +91,7 @@ secrets: []
 
 ### General — built-in
 
-Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`.
+Declared in [packages/server/src/settings-schema.ts](../../../packages/server/src/settings-schema.ts) `generalSection()`. The server itself is the implicit declarer. Keys: `language`, `agent.*`, `session.*`, `compact.*`, `sandbox.*`, `logging.*`, `evolution.*`, `limits.*`.
 
 `evolution.*` controls the self-evolution subsystem (see [plans/self-evolution.md](../plans/self-evolution.md)). All `evolution.*` keys are `globalOnly` — they live in `~/.halo/secrets/settings.yaml` only, not workspace settings. Notable knobs: `evolution.level` (`L0` = off, `L1` = human + LLM assist), `evolution.max_concurrent_run` / `max_concurrent_apply` (wrapper concurrency caps), `evolution.run_timeout_minutes` / `apply_timeout_minutes` (heartbeat timeouts), `evolution.max_attempts` (per-row retry cap), `evolution.triggers.pre_compact` (snapshot session before compaction).
 

@@ -24,7 +24,7 @@ After a successful `_connected` event, all subscribers re-issue their session-re
 
 ## Client → Server
 
-Source: [handler.ts:150-200](../../../packages/server/src/ws/handler.ts#L150) switch statement + `MessageGateway.parseWsMessage`.
+Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `switch (msg.type)` in the connection handler.
 
 | Type | Purpose |
 |---|---|

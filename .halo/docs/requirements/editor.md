@@ -40,7 +40,7 @@ Open tabs and the active tab live in localStorage; survive refresh.
 ### Binary previews
 Non-text files go through `FilePreview`, which looks up a **plugin** in the preview registry by file extension. Built-in plugins:
 - **PDF** — browser-native iframe
-- **DOCX** — `mammoth` → HTML (parsed in a Web Worker so the UI stays responsive)
+- **DOCX / DOC** — `mammoth` → HTML (parsed in a Web Worker so the UI stays responsive)
 - **XLSX / XLS / CSV** — `xlsx` (SheetJS) → table (parsed in a Web Worker; CSV decoded as UTF-8 with BOM strip)
 - **PPTX / PPT** — `pptx-preview` list mode. Fidelity is approximate — complex animations / SmartArt / embedded fonts may not render perfectly; users can download for the exact source. Flagged `heavy: true` so only the *active* pptx mounts (canvas-based rendering needs the main thread)
 - **Images / video / audio** — native `<img>` / `<video>` / `<audio>`, supports HTTP Range for seek-without-full-download
@@ -78,5 +78,5 @@ Canvas (including Monaco instances, file tree, and open tab contents) stays moun
 |---|---|
 | Cmd/Ctrl + P | Quick Open (fuzzy file search) |
 | Cmd/Ctrl + S | Save current tab |
-| Cmd/Ctrl + W | Close current tab |
+| Alt + W | Close current tab (Cmd+W cannot be overridden in browsers) |
 | Esc | Exit maximized Canvas (when not inside an input / Monaco / Quick Open) |

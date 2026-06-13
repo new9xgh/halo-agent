@@ -48,6 +48,7 @@ All file operations validate the path stays inside the project root (prevents pa
 | GET | `/api/fs/home` | Returns server `homedir()` — fallback when the frontend has no `?folder=` URL param. Returns `{ home }`. |
 | GET | `/api/fs/exists?path=/abs` | Validates an absolute path exists and whether it's a directory. Returns `{exists, isDirectory?}`. |
 | GET | `/api/fs/browse?path=/abs` | Lists immediate directory children (hidden ones dropped). Returns `{path, parent, entries: [{name, path}]}`. |
+| POST | `/api/fs/workspace/resolve` | Resolve `{path}` to an absolute path and run `ensureWorkspaceHalo()`. Returns `{id, path}`. Used by the workspace-picker on switch. |
 
 Absolute paths only. Purpose: Explorer's workspace picker and switching validation. Reading/writing files still goes through `/api/files/*` and remains project-sandboxed.
 
@@ -89,6 +90,74 @@ File: `packages/server/src/routes/weixin.ts`
 
 See [design/wechat.md](../design/wechat.md).
 
+## Telegram Channel
+
+File: `packages/server/src/routes/telegram.ts`. Admin cookie auth. Mounted under `/api/`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/telegram/accounts` | List bot accounts. Each row carries `accountId`, `botUsername`, `workspacePath`, `workspaceMissing`, `label`, `enabled`, `accessLevel`, `allowedUsers`, `language`, timestamps |
+| POST | `/api/telegram/accounts` | Create / upsert. Body: `{botToken, workspacePath, label?, accessLevel?, allowedUsers?, language?}`. Validates the token via `getMe`; `accountId = botUsername.toLowerCase()`. (Re)starts long-poll. Returns `{accountId, botUsername, workspacePath}` |
+| PATCH | `/api/telegram/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `allowedUsers` / `language`. Stops then restarts the bot if still enabled |
+| DELETE | `/api/telegram/accounts/:id` | Stop long-poll and delete the row |
+
+`workspacePath` must be absolute and exist; `ensureWorkspaceHalo()` runs on POST/PATCH.
+
+## Slack Channel
+
+File: `packages/server/src/routes/slack.ts`. Admin cookie auth. Inbound events use Socket Mode (no webhook).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/slack/accounts` | List accounts. Row: `accountId`, `botUserId`, `teamId`, `workspacePath`, `workspaceMissing`, `label`, `enabled`, `accessLevel`, `language`, timestamps |
+| POST | `/api/slack/accounts` | Create / upsert. Body: `{botToken, appToken, workspacePath, label?, accessLevel?, language?}`. `appToken` must start with `xapp-`. Resolves identity via `auth.test`; `accountId = team_id.toLowerCase()`. Returns `{accountId, botUserId, teamId}` |
+| PATCH | `/api/slack/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `language` / `appToken` |
+| DELETE | `/api/slack/accounts/:id` | Stop Socket Mode connection and delete the row |
+| GET | `/api/slack/accounts/:id/search?q=` | Search users / channels visible to this bot's token (used by the cron form). Returns `{hits}` (max 20) |
+
+## Feishu Channel
+
+File: `packages/server/src/routes/feishu.ts`. Admin cookie auth. Inbound uses long-connect wss (no webhook).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/feishu/accounts` | List accounts. Row: `accountId`, `appId`, `botOpenId`, `hasEncryptKey`, `workspacePath`, `workspaceMissing`, `label`, `enabled`, `accessLevel`, `language`, timestamps |
+| POST | `/api/feishu/accounts` | Create / upsert. Body: `{appId, appSecret, verificationToken?, encryptKey?, workspacePath, label?, accessLevel?, language?}`. Resolves `botOpenId` via `/bot/v3/info`; `accountId = appId.toLowerCase()`. Returns `{accountId, appId, botOpenId}` |
+| PATCH | `/api/feishu/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `language` / `verificationToken` / `encryptKey`. `botOpenId` is **not** patchable — re-POST to re-resolve |
+| DELETE | `/api/feishu/accounts/:id` | Stop the wss stream and delete the row |
+| GET | `/api/feishu/accounts/:id/search?q=` | Search chats the bot is a member of (used by the cron form). Returns `{hits}` (max 20) |
+
+## Cron
+
+File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `cron_jobs` + read-only `cron_runs`. Mutations call `reloadAll()` / `scheduleJob()` / `unscheduleJob()` so in-memory croner stays in sync with the db. Each mutation also broadcasts `cron:job_changed`.
+
+### Jobs
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/cron/jobs?limit=&before=` | Cursor-paginated newest-first by `createdAt`. Default `limit` 20, max 100; `before` is a `createdAt` cursor. Returns `{jobs, hasMore, nextCursor}`. Each job has `targets` decoded and a live `nextRunAt` (computed from schedule/runAt) |
+| POST | `/api/cron/jobs` | Create a job. Body: `{label?, workspacePath, agentId, userPrompt, schedule, runAt?, timezone?, targets?, enabled?}`. Exactly one of `schedule` (5-field cron) or `runAt` (epoch ms, future) is required; mutually exclusive. Returns `{ok, id}` |
+| PUT | `/api/cron/jobs/:id` | Partial update over the same fields. Re-validates `schedule` / `runAt`; flips schedule/unschedule on `enabled`. Returns `{ok}` |
+| DELETE | `/api/cron/jobs/:id` | Unschedule, delete every `cron_runs` row for the job, then delete the job. Returns `{ok}` |
+| POST | `/api/cron/jobs/:id/run-now` | Fire the job immediately (fire-and-forget). Returns `{ok}` |
+| POST | `/api/cron/reload` | Re-read every job from db and rebuild schedules. Returns `{ok}` |
+
+`targets` is `Array<{channelType, accountId, chatId?}>`. New job ids look like `cron-<base36-ts>-<rand>`.
+
+### Runs
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/cron/jobs/:id/runs?limit=&before=` | Cursor-paginated newest-first by `cron_runs.id` (ISO-prefixed; sorts as text). Default `limit` 20, max 100. Returns `{runs, hasMore, nextCursor}`; each row has `dispatchResults` JSON-decoded |
+| GET | `/api/cron/runs/:runId/log` | Read the raw log file for one run. Returns `{log}` (string or null when the file is missing / past retention) |
+
+### Reference data (for the create form)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/cron/channel-targets` | List channel accounts available as targets, aggregated from the cron-dispatcher registry. Returns `{targets}` |
+| GET | `/api/cron/meta` | Server-side metadata. Returns `{hostTimezone}` — the IANA tz this server resolves an unset `cron_jobs.timezone` to |
+
 ## Web Channel
 
 File: `packages/server/src/routes/web.ts`
@@ -106,10 +175,11 @@ File: `packages/server/src/routes/web.ts`
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?}` |
+| POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`) |
 | POST | `/api/web/stop` | Stop running task → `{stopped: boolean}` |
 | GET | `/api/web/history` | Active session history → `{sessionId, messages[], running}` |
 | GET | `/api/web/subscribe` | Reconnect SSE to running session |
+| GET | `/api/web/file?path=` | Inline-serve a workspace-relative file (image / video / pdf etc.). Path-traversal-checked against the token's bound workspace. |
 
 See [design/web.md](../design/web.md).
 
@@ -123,6 +193,7 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/show/state` | Full-access token → every known workspace; otherwise the account's own. Returns `{ serverTime, uptime, accessLevel, skills[], workspaces[] }` |
+| GET | `/api/show/session?ws=&id=` | Inspector-panel detail for a single session. Trimmed message log (last 40, content/tool I/O capped) plus `contextTokens` / `outputTokens` / `maxContextTokens` / `isRunning`. Non-full tokens may only read their own workspace. |
 
 Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
 
@@ -192,6 +263,7 @@ File: `packages/server/src/routes/evolution.ts`. Surfaces the global `evolution_
 | GET | `/api/evolution/runs/:id` | Detail: db row + `patch.md` + `score.json` + `system-suggestions.md` (optional, evo writes when it has platform-level feedback) + `.skip.md` (when `status='skipped'`) + a snapshot summary (first user message + first assistant reply + message count). |
 | POST | `/api/evolution/runs/:id/approve` `{reviewerHint?}` | Move run from `awaiting_review` → `approved`, insert a pending `evolution_applies` row that the ticker will pick up. |
 | POST | `/api/evolution/runs/:id/reject` | Move run from `awaiting_review` → `rejected`. |
+| POST | `/api/evolution/runs/:id/retry` `{hint}` | Reset a finished run back to `pending` with the supplied (required) hint so the wrapper picks it up again. Rejected with 409 when the run is already `running` / `pending`. |
 | POST | `/api/evolution/runs/:id/hint` `{hint}` | Append text to `user_hint` — memo only, doesn't change status. |
 | DELETE | `/api/evolution/runs/:id` | Delete a finished run: its on-disk artifacts (run dir + archive zip) **and** the DB row. Rejected with 409 for in-flight states (`pending` / `running` / `approved`) so a live wrapper / queued apply isn't pulled out from under. Broadcasts `evolution:run_changed` with `kind:'deleted'`. |
 | GET | `/api/evolution/applies` | List apply rows (used for status badges). |

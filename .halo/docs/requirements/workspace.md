@@ -35,6 +35,8 @@ The Bottom Panel (Chat + Terminal) can also be **floated** into a draggable wind
 | Zap | Skills | Skill list | SkillsMain (full height) | — |
 | Bot | Agents | — | Agent config editor + Test (full width) | Chat + Terminal |
 | MessageCircle | Channels | Channel list | Channel config editor | Chat + Terminal |
+| Sparkles | Evolution | — | Evolution main (run/apply review) | Chat + Terminal |
+| Clock | Cron | — | Cron job list + run audit | Chat + Terminal |
 | Settings2 | Settings | — | Settings panel | Chat + Terminal |
 
 ## Resizable panels

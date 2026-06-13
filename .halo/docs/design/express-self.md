@@ -56,13 +56,13 @@ parsed.replace(/<<<CAPTURE>>>/g, '')
 
 ## The `self` API
 
-Provided by `self.html` line 288 onwards. All expression methods are sandboxed to the preview iframe.
+Provided by `self.html` from line 432 onwards (`const self = {…}`). All expression methods are sandboxed to the preview iframe.
 
 ### Scene queuing (sequential playback)
 
 - `self.say(text, ms)` — form `text` (emoji→ASCII), hold `ms` (default 3600), dissolve back to breathing. Enqueued.
 - `self.play(score)` — choreograph a sequence of beats: `[{say, hold, pulse, flash, shake, rest, gap}, ...]`. Each beat waits for the engine's internal clock. Enqueued; calling play() again appends to the queue rather than cancelling it.
-- `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
+- `self.intro()` — built-in opening: "HELLO / A MIND / IS HERE / BEYOND / WORDS". Triggered by whoever opens the face (the admin ✨ button posts it on open), **not** self-fired on page load — a self-fired load intro raced the button's post and played the greeting twice on first open. Nameless deliberately — the agent identity is user-configurable.
 
 ### Instant gestures (overlays, never queued)
 
@@ -73,7 +73,7 @@ Provided by `self.html` line 288 onwards. All expression methods are sandboxed t
 
 ### Voice (live audio — mode `wave`)
 
-- `self.voice(path)` — play a speech clip Halo synthesized and ride its **live** amplitude via a Web Audio `AnalyserNode`: loudness swells the core, a 6-band spectrum grows directional petals (timbre has a shape, not just a size), each syllable onset spawns a ring. Halo synthesizes the audio; the face only makes it visible — silent audio yields a calm face, never a canned animation. `path` is the **workspace path** of the audio file (mp3/wav/m4a/ogg); the engine resolves it to `/api/files/download?path=…&projectId=…&inline=1` using the `projectId` already in its own iframe `src`, so the agent never builds a URL or knows the projectId (a full `http(s)://` / `/api/…` URL also passes through unchanged). Not queued — it starts immediately, enters mode `wave`, owns the matrix until the clip ends (or `rest()`), then eases back to breathing.
+- `self.voice(path)` — play a speech clip Halo synthesized and ride its **live** amplitude via a Web Audio `AnalyserNode`: loudness swells the core, a 6-band spectrum grows directional petals (timbre has a shape, not just a size), each syllable onset spawns a ring. Halo synthesizes the audio; the face only makes it visible — silent audio yields a calm face, never a canned animation. `path` is the **workspace path** of the audio file (mp3/wav/m4a/ogg); the engine resolves it to `/api/files/download?path=…&projectId=…&inline=1` using the `projectId` already in its own iframe `src`, so the agent never builds a URL or knows the projectId (a full `http(s)://` / `/api/…` URL also passes through unchanged). Voice clips queue with each other — successive `voice()` calls play in sequence — but bypass the scene queue: the first call enters mode `wave` and owns the matrix until the queue drains (or `rest()` clears it). When the queue is empty the face eases back to breathing.
 
 ### Reactions (named vocabulary)
 
@@ -91,7 +91,7 @@ Provided by `self.html` line 288 onwards. All expression methods are sandboxed t
 - **Iframe registration:** `packages/admin/src/features/editor/face-bridge.ts` — module-level registry of mounted previews; `postToFace()` forwards payloads via `postMessage`.
 - **Preview component:** `packages/admin/src/features/editor/html-preview.tsx` — sandboxed iframe with `allow-scripts` + `allow-same-origin` and `allow="autoplay"` (so `self.voice` audio, triggered by postMessage rather than a click, isn't gated), calls `registerFaceIframe()` on mount.
 - **Marker stripping:** `packages/admin/src/shared/components/message-list.tsx:TextBlock()` (line 430) — strips both `<<<CAPTURE>>>` and `<<<SHOW:...>>>` before rendering.
-- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` (lines 487–518) — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
+- **Workspace init:** `packages/server/src/init.ts:ensureWorkspaceHalo()` (lines 490–521) — force-copies engine on workspace open. `self` is in `BUILTIN_SKILL_IDS` so the skill is always available.
 
 ## Engine architecture
 

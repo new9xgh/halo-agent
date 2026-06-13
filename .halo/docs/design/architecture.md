@@ -14,18 +14,24 @@
 │    channelDb: ChannelDb (~/.halo/secrets/channels/channels.db)     │
 │    wss: WebSocketServer                                             │
 │                                                                     │
-│  Route mounts:                                                      │
+│  Route mounts (direct):                                             │
 │    /api/auth/*        → createAuthRoutes()                          │
 │    /api/files/*       → createFileRoutes()                          │
 │    /api/fs/*          → createFileRoutes (home/exists/browse/resolve)│
 │    /api/agent-configs/*→ createAgentConfigRoutes()                  │
 │    /api/skills/*      → createSkillRoutes()                         │
 │    /api/settings/*    → createSettingsRoutes()                      │
+│    /api/evolution/*   → createEvolutionRoutes()                     │
+│    /api/cron/*        → createCronRoutes()                          │
 │    /api/sessions/*    → createSessionRoutes()                       │
+│    /api/show/*        → createShowRoutes() (halo-city snapshot)     │
 │    /api/commands      → createCommandRoutes()                       │
-│    /api/weixin/*      → createWeixinRoutes()                        │
-│    /api/telegram/*    → createTelegramRoutes()                      │
-│    /api/web/*         → createWebRoutes()                           │
+│  Route mounts (via bootChannels — registry-driven):                 │
+│    /api/web/*         (web descriptor)                              │
+│    /api/telegram/*    (telegram descriptor)                         │
+│    /api/weixin/*      (wechat descriptor)                           │
+│    /api/slack/*       (slack descriptor)                            │
+│    /api/feishu/*      (feishu descriptor)                           │
 │    /ws                → setupWebSocketHandler({wss,registry})       │
 │    /*                 → static frontend (Next.js out/)              │
 └─────────────────────────────────────────────────────────────────────┘
@@ -89,8 +95,8 @@ File: `ws/handler.ts`. See [design/ws.md](ws.md).
 One `ConnectedClient` per WS connection, holding: `sessionManager` / `agentSessionId` / `terminalManager` / `fileWatcher` / `backgroundSaves`. UI state (messageLog / streamBuffer / tokens) belongs to SessionManager's `UIState`, not the client.
 
 Message dispatch:
-- `chat` / `chat:stop` / `subscribe` / `session:clear` / `session:delete` → handled directly
-- `command:*` → routed through `MessageGateway` to the CommandRegistry
+- `chat` / `chat:stop` / `subscribe` / `session:clear` / `session:delete` → handled directly in `ws/handler.ts`
+- `command:*` → `dispatchCommand` (`channels/shared/commands.ts`) — same dispatcher every channel uses
 - `terminal:*` → TerminalManager
 
 ### EventProcessor — event translation
@@ -162,7 +168,7 @@ File: `ws/file-watcher.ts`. chokidar → 300ms debounce + per-path Map dedup →
 File: `ws/terminal-manager.ts`. Spawns a shell via node-pty. On disconnect, detaches with a 50KB ring buffer; replays on reconnect.
 
 ### Self-Evolution — workspace prompt-tuning loop
-Files: `evolution/{ticker,evo-wrapper,enqueue,spawn}.ts`, `db/evo-db.ts`, `routes/evolution.ts`. Internal agents `__evo_agent__` / `__score__` / `__apply_agent__` (in `templates/agents/`) drive a 12-phase orchestration: snapshot → evo drafts → wrapper dry-runs → scorer grades → reviewer approves → apply agent merges → wrapper history-snapshots + cps to main. Per-task wrapper Node child process owns all sub-cli calls; ticker is stateless and lives in the server. State in `~/.halo/global/evo.db`. See [plans/self-evolution.md](../plans/self-evolution.md).
+Files: `evolution/{ticker,evo-wrapper,enqueue,spawn,archive}.ts`, `db/evo-db.ts`, `routes/evolution.ts`. Internal agents `__evo_agent__` / `__score__` / `__apply_agent__` (in `templates/agents/`) drive a 12-phase orchestration: snapshot → evo drafts → wrapper dry-runs → scorer grades → reviewer approves → apply agent merges → wrapper history-snapshots + cps to main. Per-task wrapper Node child process owns all sub-cli calls; ticker is stateless and lives in the server. State in `~/.halo/global/evo.db`. See [plans/self-evolution.md](../plans/self-evolution.md).
 
 ## REST routes
 

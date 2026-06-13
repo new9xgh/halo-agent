@@ -19,15 +19,17 @@ The primary surface for talking to an agent.
 
 ### Slash commands
 
+The full command list is fetched from `GET /api/commands` per session and includes built-ins + skill commands. The following are always-present highlights for the chat surface:
+
 | Command | Type | Purpose |
 |---|---|---|
-| `/session new` | client | Start a new session |
-| `/clear` | client | Alias for `/session new` |
-| `/session context` | client | Show context window usage, agent info |
 | `/help` | client | List available commands |
+| `/clear` | client | Alias for `/session new` (admin-UI shortcut, no server registration) |
+| `/session new` | server | Start a new session |
+| `/session context` | server | Show context window usage, agent info |
 | `/session compact` | server | LLM-summary compact of the conversation |
-| `/model <id>` | server | Switch the current session's model |
-| `/retry` | client | Resend the last user message |
+
+See [requirements/command.md](command.md) for the full command surface.
 
 ### Graceful interrupt
 Sending a new message while the agent is generating **does not** abort — the message goes to the server queue, the agent finishes the current turn at the next safe checkpoint (after a tool call), and then runs the queued message. Queueing multiple messages is supported; they run in order.
@@ -45,7 +47,7 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 - Clipboard paste
 - File-picker button
 
-Images ride along as base64; multimodal supported. Pasted images are also persisted to `<workspace>/.halo/web/inbound/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
+Images ride along as base64; multimodal supported. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
 
 ### Inline media chips
 Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). Paths inside the active workspace or under `/tmp/` are previewable; everything else degrades to a non-clickable chip.
@@ -76,4 +78,4 @@ A second channel beyond text: a visual space the agent drives in real time to ex
 - **Identity.** Deliberately nameless ("HELLO / A MIND / IS HERE / BEYOND WORDS") — the conversational identity is user-configurable and the model may not be Claude, so the face never hard-codes a name.
 
 ### Token usage
-`TokenRing` shows live context window usage. Crossing `model.compressAt` (default 70%) auto-triggers compact.
+`TokenRing` shows live context window usage. Crossing `model.compressAt` (default 80%) auto-triggers compact.

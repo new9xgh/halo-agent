@@ -94,7 +94,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_SHELL_TIMEOUT` | `120000` | `config.yaml timeout.shell_exec` | Shell command timeout (ms) |
 | `HALO_WEB_FETCH_TIMEOUT` | `10000` | `config.yaml timeout.web_fetch` | web_fetch timeout |
 | `HALO_SESSION_GRACE` | `300000` | `config.yaml timeout.session_grace` | WS-disconnect session grace |
-| `HALO_TERMINAL_GRACE` | `60000` | `config.yaml timeout.terminal_grace` | Terminal disconnect grace |
+| `HALO_TERMINAL_GRACE` | `300000` | `config.yaml timeout.terminal_grace` | Terminal disconnect grace |
 | `HALO_MAX_CACHED_SESSIONS` | `50` | — | In-memory session cache |
 | `HALO_LOG_MAX_SIZE` | `10485760` | `config.yaml logging.max_file_size` | Log file size cap (10 MB) |
 | `HALO_LOG_MAX_FILES` | `5` | `config.yaml logging.max_files` | Retained rotated logs |
@@ -123,8 +123,14 @@ Hardcoded (config.ts, no override):
 - `auth.tokenMaxAge` — 14 days
 - `auth.refreshAfter` — 24 hours
 - `model.compressAt` — default 0.8 (auto-compact threshold; configurable via `general.compact.compress_at` in settings.yaml)
-- `limits.wsEventBuffer` — 5000
-- `limits.terminalOutputBuffer` — 50000
+
+settings.yaml-driven `general.limits.*` (no env override):
+- `general.limits.shell_output_bytes` (default 5 MiB)
+- `general.limits.web_fetch_bytes` (default 50 KiB)
+- `general.limits.grep_default_matches` (default 50)
+- `general.limits.tool_result_render_chars` (default 8000)
+- `general.limits.ws_event_buffer` (default 5000)
+- `general.limits.terminal_scrollback_bytes` (default 50000)
 
 Two ways to authenticate:
 

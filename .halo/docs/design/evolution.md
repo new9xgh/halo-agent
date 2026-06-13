@@ -109,7 +109,7 @@ Sandbox is whitelist-cp from main workspace (only: `INSTRUCTIONS.md`, `INDEX.md`
 ### Phase B — Dry-run + Fix Loop
 
 ```
-timeout 180 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox \
+timeout 600 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox \
   --access workspace <patch.testScenario.testMessage>
 ```
 
@@ -148,7 +148,7 @@ Dimensions (0-100, anchored at 50="neutral"):
 
 `avg = round((lint + behavior + scope) / 3)` — single sort key for admin UI.
 
-Scorer has only `file_write` (to score.json); no execution. Same scorer agent reused at apply time (phase B') as regression gate.
+Scorer is read+write only (`file_read` / `file_write` / `file_list` / `grep` / `glob`); no execution / no shell. Outputs only `score.json`. Same scorer agent reused at apply time (phase B') as regression gate.
 
 ## Wrapper Orchestration — Mode=Apply (merge + regress + sync)
 
@@ -167,7 +167,7 @@ Agent reads each source run's `patch.md` (latest version!), merges changes into 
 For each source_run_id:
 
 1. Read `testScenario` from source run's `patch.md`.
-2. Run `timeout 180 halo cli -a <agentId> -n -w <applyDir>/sandbox <testMessage>` against merged sandbox.
+2. Run `timeout 600 halo cli -a <agentId> -n -w <applyDir>/sandbox <testMessage>` against merged sandbox.
 3. Spawn `__score__` with regress-mode brief, write `regress/<runId>/score.json`.
 4. Any score with `lint < 50` or `behavior < 50` → regression, abort with `failed`.
 
@@ -255,11 +255,11 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 
 | File | Lines | Purpose |
 |---|---|---|
-| `/packages/server/src/evolution/enqueue.ts` | 404 | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
-| `/packages/server/src/evolution/ticker.ts` | 497 | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
-| `/packages/server/src/evolution/spawn.ts` | 37 | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
+| `/packages/server/src/evolution/enqueue.ts` | 403 | Snapshot session + prompt surface at trigger time. Write runDir/, INSERT evolution_runs. Both `/evo` and pre-compact hook call this. |
+| `/packages/server/src/evolution/ticker.ts` | 496 | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
+| `/packages/server/src/evolution/spawn.ts` | 36 | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
 | `/packages/server/src/evolution/evo-wrapper.ts` | 2000+ | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
-| `/packages/server/src/evolution/archive.ts` | 258 | Archive job: 14d → zip + delete, 30d → purge. Runs daily + at boot. Idempotent. |
+| `/packages/server/src/evolution/archive.ts` | 275 | Archive job: 14d → zip + delete, 30d → purge. Runs daily + at boot. Idempotent. |
 
 ## Sandbox Model
 
@@ -282,7 +282,7 @@ general:
     level: L0              # L0=disabled, L1=enabled
     max_concurrent_run: 1
     max_concurrent_apply: 1
-    run_timeout_minutes: 5
+    run_timeout_minutes: 12
     apply_timeout_minutes: 5
     max_attempts: 3        # retry budget per run/apply
     triggers:
@@ -308,7 +308,7 @@ Realtime updates via WebSocket (`evolution:run_changed`, `evolution:apply_change
 
 **Server restart**: Ticker re-evaluates db on first pass. Old `running` rows timeout naturally; `pending` rows continue to be picked up. Applies in `syncing` state are treated as resume candidates — ticker clears heartbeat and spawns wrapper which sees `status='syncing'` on entry and skips LLM phases.
 
-**Wrapper crash**: Heartbeat expires after `runTimeoutMinutes` (default 5min). If `attempts < maxAttempts`, ticker moves row back to `pending` for retry. For applies in `syncing`, row stays `syncing` and ticker spawns recovery wrapper that runs phase 12 publish only.
+**Wrapper crash**: Heartbeat expires after `runTimeoutMinutes` (default 12min). If `attempts < maxAttempts`, ticker moves row back to `pending` for retry. For applies in `syncing`, row stays `syncing` and ticker spawns recovery wrapper that runs phase 12 publish only.
 
 **Apply mid-publish crash**: Phase 12 preflight is idempotent; step 1 (diff + snapshot) is repeated harmlessly. Publish (`phaseApplyPublish`) is a simple file-by-file cp. If wrapper dies part-way through, main is half-applied, but `history/apply-<id>/` has the rollback. On recovery, wrapper re-runs publish (idempotent cp) to complete.
 

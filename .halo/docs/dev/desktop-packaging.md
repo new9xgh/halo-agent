@@ -1,6 +1,6 @@
 # Desktop Packaging (Electron / DMG)
 
-How to build the macOS desktop app (`Halo-0.1.0-arm64.dmg`). The desktop
+How to build the macOS desktop app (`Halo-0.1.1-arm64.dmg`). The desktop
 build is a thin Electron shell (`packages/desktop`) that bundles a self-
 contained server runtime + a private `node` binary + the admin static export,
 then spawns the server as a child process and points a `BrowserWindow` at it.
@@ -45,7 +45,7 @@ cd packages/desktop
 CI=true pnpm dist:arm64
 ```
 
-Output: `packages/desktop/dist/Halo-0.1.0-arm64.dmg` (~143 MB).
+Output: `packages/desktop/dist/Halo-0.1.1-arm64.dmg` (~143 MB).
 
 `pnpm dist:arm64` runs three steps (see `package.json` scripts):
 `gen-icon` → `prepack-dmg` (`scripts/stage-runtime.mjs`) → `electron-builder
@@ -251,8 +251,8 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   poisoned, discard it.** electron-builder honours the yml's `arm64` mac target
   even when you pass `--x64`, so it re-packages the *current* (x64/win-staged)
   `resources/` as an arm64 dmg. That dmg's native binaries are the wrong arch.
-  The real per-target artifacts are `Halo-0.1.0.dmg` (x64) and `Halo Setup
-  0.1.0.exe` (win); only trust the arm64 dmg from an actual `dist:arm64` run.
+  The real per-target artifacts are `Halo-0.1.1.dmg` (x64) and `Halo Setup
+  0.1.1.exe` (win); only trust the arm64 dmg from an actual `dist:arm64` run.
 
 ## Verifying a build
 

@@ -305,7 +305,7 @@ Default to `readonly` for any channel that doesn't have a strong identity verifi
 Per-account `access_level` column in your DAL, inherited into session creation:
 
 ```ts
-await sm.createSession('default', null, title, undefined, undefined, account.accessLevel)
+await sm.createSession('default', null, title, undefined, undefined, null, account.accessLevel)
 ```
 
 SessionManager enforces the rest: readonly sessions drop `file_write` / `file_edit` / `shell_exec` / `web_fetch` from the tool set automatically. Source: [dev/tools.md#access-level-per-session](tools.md#access-level-per-session).
