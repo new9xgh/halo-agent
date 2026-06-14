@@ -9,6 +9,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc",
+    "lint": "eslint src",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist dist-pub",
     "bundle": "node scripts/build-bundle.mjs"

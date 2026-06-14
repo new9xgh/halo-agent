@@ -553,13 +553,25 @@ export function App({ harness, verbose }: AppProps): ReactElement {
       })))
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harness, harness.workspace])
 
   // Cleanup any pending interrupt timer on unmount.
   useEffect(() => () => {
     if (interruptTimerRef.current) clearTimeout(interruptTimerRef.current)
   }, [])
+
+  // Open the session-log navigator. Shared by `/log` and the Ctrl+O shortcut —
+  // single source: the DB session tree (root + every sub-agent), so it's
+  // resume-safe and shows stopped sub-agents. Defined before useInput so the
+  // shortcut handler doesn't capture it before its declaration.
+  const openLog = () => {
+    const tree = harness.getSessionTree()
+    if (!tree) {
+      dispatch({ type: 'append-error', text: 'No session tree available.' })
+      return
+    }
+    setNavTree(tree)
+  }
 
   // Esc: interrupt running turn. Ctrl+C: graceful exit (twice = force).
   // Ctrl+O: open the session-log navigator — the keyboard shortcut for `/log`.
@@ -694,18 +706,6 @@ export function App({ harness, verbose }: AppProps): ReactElement {
 
   const placeholder = state.running ? 'send to interrupt current response…' : 'ask a question or describe a task'
   const hint = interruptArmed ? 'press Ctrl+C again to exit' : (state.running ? 'esc to interrupt' : '/help · /quit · /log (ctrl+o)')
-
-  // Open the session-log navigator. Shared by `/log` and the Ctrl+O shortcut —
-  // single source: the DB session tree (root + every sub-agent), so it's
-  // resume-safe and shows stopped sub-agents.
-  const openLog = () => {
-    const tree = harness.getSessionTree()
-    if (!tree) {
-      dispatch({ type: 'append-error', text: 'No session tree available.' })
-      return
-    }
-    setNavTree(tree)
-  }
 
   const handleNavPick = async (sessionId: string) => {
     setNavTree(null)

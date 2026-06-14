@@ -30,9 +30,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # eslint 仅作用于 server 包(admin/cli 的 react-hooks lint 是单独一档,未纳入)。
-      - name: Lint (server)
-        run: pnpm --filter @turmind/halo-server lint
+      # eslint 作用于 server + cli(react-hooks 仅在 cli 的 .tsx 上)。admin 的
+      # react-hooks lint 是单独一档(~100 findings),暂未纳入。
+      - name: Lint (server + cli)
+        run: |
+          pnpm --filter @turmind/halo-server lint
+          pnpm --filter @turmind/halo-cli lint
 
       # 跟根 package.json 的 build 一致:core→server→acp→cli 依次 tsc 编译。
       # 不含 admin 的 next build(第一版求稳,以后要加再单开 job)。任一包 tsc 报错即红。
