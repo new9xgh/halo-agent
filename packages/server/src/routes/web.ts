@@ -46,7 +46,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     const body = await c.req.json().catch(() => ({})) as {
       workspacePath?: string
       label?: string
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
@@ -78,7 +78,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
       label: string
       workspacePath: string
       enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly'
+      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
       language: string
     }>
     const patch: Record<string, unknown> = {}

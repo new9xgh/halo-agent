@@ -55,8 +55,11 @@ export function createMetricsRoutes(registry: SessionManagerRegistry) {
       return { ok: false as const, response: c.text('# invalid token\n', 401) }
     }
     clearFailures(TOKEN_BUCKET, ip)
-    if (account.accessLevel !== 'full') {
-      return { ok: false as const, response: c.text('# full-access token required\n', 403) }
+    // Metrics span all workspaces, so require a globally-scoped token: full, or
+    // observer — the read-only global role minted exactly for dashboards/scrapes
+    // (a workspace-scoped token shouldn't learn deployment-wide size).
+    if (account.accessLevel !== 'full' && account.accessLevel !== 'observer') {
+      return { ok: false as const, response: c.text('# global-scope token (full or observer) required\n', 403) }
     }
     return { ok: true as const }
   }

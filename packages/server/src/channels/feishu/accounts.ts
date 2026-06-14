@@ -63,7 +63,7 @@ export function insertAccount(db: ChannelDb, data: {
   botOpenId: string
   workspacePath: string
   label?: string
-  accessLevel?: 'full' | 'workspace' | 'readonly'
+  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
   language?: string
 }): void {
   sharedInsert(db, {

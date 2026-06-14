@@ -37,7 +37,7 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
       botToken?: string
       workspacePath?: string
       label?: string
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       allowedUsers?: string
       language?: string
     }
@@ -98,7 +98,7 @@ export function createTelegramRoutes(deps: { db: ChannelDb; channel: TelegramCha
       label: string
       workspacePath: string
       enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly'
+      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
       allowedUsers: string
       language: string
     }>

@@ -18,13 +18,20 @@ export function resolveAccountWorkspace(account: { workspacePath: string }): str
   return account.workspacePath
 }
 
+/** Account-level access. `observer` is read-only like `readonly` but
+ *  globally-scoped: it can see every workspace (halo-city / metrics / show)
+ *  without write or execute rights. Visibility-layer only — it never reaches
+ *  the sandbox, which only knows full/workspace/readonly (observer is
+ *  normalized to readonly the moment a session is built from it). */
+export type AccountAccessLevel = 'full' | 'workspace' | 'readonly' | 'observer'
+
 export interface ChannelAccount {
   accountId: string
   channelType: string
   workspacePath: string
   label: string
   enabled: number
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: AccountAccessLevel
   language: string
   config: Record<string, unknown>
   createdAt: number
@@ -40,7 +47,7 @@ function toAccount(row: typeof channelAccounts.$inferSelect): ChannelAccount {
     workspacePath: row.workspacePath,
     label: row.label,
     enabled: row.enabled,
-    accessLevel: (['full', 'workspace', 'readonly'].includes(row.accessLevel) ? row.accessLevel : 'readonly') as 'full' | 'workspace' | 'readonly',
+    accessLevel: (['full', 'workspace', 'readonly', 'observer'].includes(row.accessLevel) ? row.accessLevel : 'readonly') as AccountAccessLevel,
     language: row.language,
     config,
     createdAt: row.createdAt,
@@ -73,7 +80,7 @@ export function insertAccount(db: ChannelDb, data: {
   workspacePath: string
   label?: string
   enabled?: number
-  accessLevel?: 'full' | 'workspace' | 'readonly'
+  accessLevel?: AccountAccessLevel
   language?: string
   config?: Record<string, unknown>
 }): void {

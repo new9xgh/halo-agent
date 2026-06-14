@@ -64,7 +64,7 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
       appToken?: string
       workspacePath?: string
       label?: string
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
     if (!body.botToken) return c.json({ error: 'botToken required' }, 400)
@@ -129,7 +129,7 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
       label: string
       workspacePath: string
       enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly'
+      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
       language: string
       appToken: string
     }>

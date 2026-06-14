@@ -65,7 +65,7 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
       encryptKey?: string
       workspacePath?: string
       label?: string
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
     if (!body.appId) return c.json({ error: 'appId required' }, 400)
@@ -134,7 +134,7 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
       label: string
       workspacePath: string
       enabled: boolean
-      accessLevel: 'full' | 'workspace' | 'readonly'
+      accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
       language: string
       verificationToken: string
       encryptKey: string

@@ -124,6 +124,7 @@ export const zh: Record<string, string> = {
   'web.readonly': 'Readonly — 仅读取（默认）',
   'web.wsWrite': 'Workspace — workspace 内读写',
   'web.full': 'Full — 完整权限',
+  'web.observer': 'Observer — 全局只读（看板/监控）',
   'web.save': '保存',
   'web.cancel': '取消',
   'web.pathMissing': '(路径不存在)',

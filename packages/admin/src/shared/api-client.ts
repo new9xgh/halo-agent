@@ -489,7 +489,7 @@ export const api = {
         workspacePath: string
         label: string
         enabled: boolean
-        accessLevel: 'full' | 'workspace' | 'readonly'
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
         language: 'en' | 'zh'
         createdAt: number
         updatedAt: number
@@ -501,13 +501,13 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ sessionKey }) },
       )
     },
-    waitLogin(params: { sessionKey: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string; timeoutMs?: number }) {
+    waitLogin(params: { sessionKey: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string; timeoutMs?: number }) {
       return request<{ connected: boolean; accountId?: string; message: string }>(
         '/weixin/login/wait',
         { method: 'POST', body: JSON.stringify(params) },
       )
     },
-    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string }) {
+    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string }) {
       return request<{ ok: boolean }>(`/weixin/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
@@ -529,20 +529,20 @@ export const api = {
         workspaceMissing: boolean
         label: string
         enabled: number
-        accessLevel: 'full' | 'workspace' | 'readonly'
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
         allowedUsers: string
         language: string
         createdAt: number
         updatedAt: number
       }> }>('/telegram/accounts')
     },
-    createAccount(params: { botToken: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly'; allowedUsers?: string; language?: string }) {
+    createAccount(params: { botToken: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; allowedUsers?: string; language?: string }) {
       return request<{ accountId: string; botUsername: string; workspacePath: string }>(
         '/telegram/accounts',
         { method: 'POST', body: JSON.stringify(params) },
       )
     },
-    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly'; allowedUsers?: string; language?: string }) {
+    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; allowedUsers?: string; language?: string }) {
       return request<{ ok: boolean }>(`/telegram/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
@@ -564,19 +564,19 @@ export const api = {
         workspaceMissing: boolean
         label: string
         enabled: number
-        accessLevel: 'full' | 'workspace' | 'readonly'
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
         language?: 'en' | 'zh'
         createdAt: number
         updatedAt: number
       }> }>('/web/accounts')
     },
-    createAccount(params: { workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: 'en' | 'zh' }) {
+    createAccount(params: { workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: 'en' | 'zh' }) {
       return request<{ accountId: string; token: string; workspacePath: string }>(
         '/web/accounts',
         { method: 'POST', body: JSON.stringify(params) },
       )
     },
-    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: 'en' | 'zh' }) {
+    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: 'en' | 'zh' }) {
       return request<{ ok: boolean }>(`/web/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
@@ -599,19 +599,19 @@ export const api = {
         workspaceMissing: boolean
         label: string
         enabled: number
-        accessLevel: 'full' | 'workspace' | 'readonly'
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
         language: string
         createdAt: number
         updatedAt: number
       }> }>('/slack/accounts')
     },
-    createAccount(params: { botToken: string; appToken: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string }) {
+    createAccount(params: { botToken: string; appToken: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string }) {
       return request<{ accountId: string; botUserId: string; teamId: string }>(
         '/slack/accounts',
         { method: 'POST', body: JSON.stringify(params) },
       )
     },
-    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string; appToken?: string }) {
+    updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string; appToken?: string }) {
       return request<{ ok: boolean }>(`/slack/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
@@ -647,7 +647,7 @@ export const api = {
         workspaceMissing: boolean
         label: string
         enabled: number
-        accessLevel: 'full' | 'workspace' | 'readonly'
+        accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
         language: string
         createdAt: number
         updatedAt: number
@@ -657,7 +657,7 @@ export const api = {
       appId: string; appSecret: string;
       verificationToken?: string; encryptKey?: string;
       workspacePath: string; label?: string;
-      accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string
     }) {
       return request<{ accountId: string; appId: string; botOpenId: string }>(
         '/feishu/accounts',
@@ -666,7 +666,7 @@ export const api = {
     },
     updateAccount(accountId: string, patch: {
       label?: string; workspacePath?: string; enabled?: boolean;
-      accessLevel?: 'full' | 'workspace' | 'readonly'; language?: string;
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string;
       verificationToken?: string; encryptKey?: string
     }) {
       return request<{ ok: boolean }>(`/feishu/accounts/${encodeURIComponent(accountId)}`, {

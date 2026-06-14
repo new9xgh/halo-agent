@@ -17,7 +17,7 @@ interface FeishuAccount {
   workspaceMissing: boolean
   label: string
   enabled: number
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   language: string
   createdAt: number
   updatedAt: number
@@ -109,7 +109,7 @@ function AccountRow(props: {
   const { account, editing, onEdit, onCancelEdit, onSaved, onDeleted, onToggled } = props
   const [label, setLabel] = useState(account.label)
   const [workspacePath, setWorkspacePath] = useState(account.workspacePath)
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>(account.accessLevel)
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>(account.accessLevel)
   const [language, setLanguage] = useState<'en' | 'zh'>((account.language as 'en' | 'zh') || 'en')
   const [busy, setBusy] = useState(false)
 
@@ -179,7 +179,7 @@ function AccountRow(props: {
             <label className="text-[10px] text-[var(--muted-foreground)]">{t('feishu.accessLevel')}</label>
             <select
               value={accessLevel}
-              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
               className="mt-0.5 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs"
             >
               <option value="readonly">{t('feishu.readonly')}</option>
@@ -270,7 +270,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   const [encryptKey, setEncryptKey] = useState('')
   const [workspacePath, setWorkspacePath] = useState(activeProject?.path || '')
   const [label, setLabel] = useState('')
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>('readonly')
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>('readonly')
   const [language, setLanguage] = useState(lang)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -365,7 +365,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
             <label className="text-[11px] text-[var(--muted-foreground)]">{t('feishu.accessLevel')}</label>
             <select
               value={accessLevel}
-              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
               className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-xs"
             >
               <option value="readonly">{t('feishu.readonly')}</option>

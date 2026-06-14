@@ -124,6 +124,7 @@ export const en: Record<string, string> = {
   'web.readonly': 'Readonly — read only (default)',
   'web.wsWrite': 'Workspace — read-write within workspace',
   'web.full': 'Full — full access',
+  'web.observer': 'Observer — global read-only (dashboards/metrics)',
   'web.save': 'Save',
   'web.cancel': 'Cancel',
   'web.pathMissing': '(path does not exist)',

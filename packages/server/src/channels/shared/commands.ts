@@ -13,7 +13,7 @@ export interface CommandContext {
   sm: SessionManager
   userId: string
   sessionPrefix: string
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   channelLabel: string
   activeOverrides: Map<string, string>
   workspacePath: string
@@ -55,7 +55,7 @@ export function findActiveSessionId(
   userId: string,
   sessionPrefix: string,
   activeOverrides: Map<string, string>,
-  accessLevel?: 'full' | 'workspace' | 'readonly',
+  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer',
 ): string | null {
   const override = activeOverrides.get(userId)
 
@@ -135,7 +135,7 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
   // until the user sends a first message. Mirrors the cold-start fallback
   // in listAvailableSkillCommands.
   const helpAgentId = (active && ctx.sm.getSessionById(active)?.agentId) || 'default'
-  const skills = await ctx.sm.listAvailableSkillCommandsForAgent(helpAgentId, ctx.accessLevel)
+  const skills = await ctx.sm.listAvailableSkillCommandsForAgent(helpAgentId, capLevel(ctx.accessLevel))
 
   // Two-pass render so descriptions align: first compute each command's
   // "head" (slashName + argHint), then pad to the longest head before
@@ -439,7 +439,7 @@ async function routeObjectOrSkill(
     // recent admin-side change (readonly → workspace, etc.) takes effect
     // immediately. Without this we'd gate against the session row's stale
     // snapshot.
-    const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, ctx.accessLevel, ctx.lang)
+    const result = await execSkillCommand(command, arg, ctx.sm, active, ctx.workspacePath, ctx.channel, capLevel(ctx.accessLevel), ctx.lang)
     // 'ok' means execSkillCommand kicked sendUserMessage — the agent is now
     // running on `active`. Surface that so the channel keeps its event stream
     // open for the skill body's response.
@@ -517,7 +517,18 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
 }
 
 type Access = 'full' | 'workspace' | 'readonly'
-const RANK = { readonly: 0, workspace: 1, full: 2 } as const
+// observer ranks with readonly for command gating — globally-scoped but
+// read-only, so it's the capability floor (it can run only readonly-level verbs).
+const RANK = { readonly: 0, observer: 0, workspace: 1, full: 2 } as const
+
+/** Collapse observer→readonly for capability-layer consumers (skill listing,
+ *  skill exec, session building) that only know full/workspace/readonly.
+ *  observer's "global" is a visibility-layer concept; capability-wise it's
+ *  read-only. The single chokepoint enforcing the "observer never reaches the
+ *  sandbox as observer" invariant. */
+function capLevel(a: 'full' | 'workspace' | 'readonly' | 'observer'): 'full' | 'workspace' | 'readonly' {
+  return a === 'observer' ? 'readonly' : a
+}
 
 /** Is this slash command an object command (has builtin verbs)? */
 function isObjectCommand(command: string): boolean {

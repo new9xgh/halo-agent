@@ -16,7 +16,7 @@ interface WeixinAccount {
   workspacePath: string
   label: string
   enabled: boolean
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   language: 'en' | 'zh'
   createdAt: number
   updatedAt: number
@@ -25,7 +25,7 @@ interface WeixinAccount {
 interface LoginIntent {
   workspacePath: string
   label: string
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   language: 'en' | 'zh'
   /** When true, skip the config step and jump straight to QR scanning. */
   skipConfig: boolean
@@ -128,7 +128,7 @@ function AccountRow(props: {
   const { account, editing, onEdit, onCancelEdit, onSaved, onDeleted, onToggled, onRescan } = props
   const [label, setLabel] = useState(account.label)
   const [workspacePath, setWorkspacePath] = useState(account.workspacePath)
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>(account.accessLevel)
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>(account.accessLevel)
   const [language, setLanguage] = useState<'en' | 'zh'>(account.language)
   const [busy, setBusy] = useState(false)
 
@@ -198,7 +198,7 @@ function AccountRow(props: {
             <label className="text-[10px] text-[var(--muted-foreground)]">{t('wx.accessLevel')}</label>
             <select
               value={accessLevel}
-              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
               className="mt-0.5 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs"
             >
               <option value="readonly">{t('wx.readonly')}</option>
@@ -297,7 +297,7 @@ function LoginDialog(props: { intent: LoginIntent; onClose: () => void; onDone: 
   const [message, setMessage] = useState(t('wx.generatingQr'))
   const [workspacePath, setWorkspacePath] = useState(intent.workspacePath || activeProject?.path || '')
   const [label, setLabel] = useState(intent.label || '')
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>(intent.accessLevel)
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>(intent.accessLevel)
   const [language, setLanguage] = useState<'en' | 'zh'>(intent.language)
   const [step, setStep] = useState<'config' | 'scan'>(intent.skipConfig ? 'scan' : 'config')
   const cancelled = useRef(false)
@@ -393,7 +393,7 @@ function LoginDialog(props: { intent: LoginIntent; onClose: () => void; onDone: 
               <label className="text-[11px] text-[var(--muted-foreground)]">{t('wx.accessLevel')}</label>
               <select
                 value={accessLevel}
-                onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+                onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
                 className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-xs"
               >
                 <option value="readonly">{t('wx.readonly')}</option>

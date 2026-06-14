@@ -313,7 +313,7 @@ function findActiveWxSession(
   sm: import('../../agents/session-manager.js').SessionManager,
   fromUserId: string,
   activeOverrides: Map<string, string>,
-  accessLevel?: 'full' | 'workspace' | 'readonly',
+  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer',
 ): string | null {
   return sharedFindActive(sm, fromUserId, buildWxSessionPrefix(fromUserId), activeOverrides, accessLevel)
 }

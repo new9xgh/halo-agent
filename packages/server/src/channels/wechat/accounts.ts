@@ -10,7 +10,7 @@ import {
   type ChannelAccount,
 } from '../shared/accounts.js'
 
-export type AccessLevel = 'full' | 'workspace' | 'readonly'
+export type AccessLevel = 'full' | 'workspace' | 'readonly' | 'observer'
 
 export interface WeixinAccount {
   accountId: string

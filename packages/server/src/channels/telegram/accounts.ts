@@ -48,7 +48,7 @@ export function insertAccount(db: ChannelDb, data: {
   botUsername: string
   workspacePath: string
   label?: string
-  accessLevel?: 'full' | 'workspace' | 'readonly'
+  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
   allowedUsers?: string
   language?: string
 }): void {

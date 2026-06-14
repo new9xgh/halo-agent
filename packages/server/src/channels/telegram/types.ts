@@ -5,7 +5,7 @@ export interface TelegramAccount {
   workspacePath: string
   label: string
   enabled: number
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   allowedUsers: string
   language: string
   createdAt: number

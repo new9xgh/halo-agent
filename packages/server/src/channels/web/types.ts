@@ -4,7 +4,7 @@ export interface WebAccount {
   workspacePath: string
   label: string
   enabled: number
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   language: string
   createdAt: number
   updatedAt: number

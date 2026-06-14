@@ -47,7 +47,7 @@ export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel
       sessionKey?: string
       workspacePath?: string
       label?: string
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
       timeoutMs?: number
     }
@@ -104,7 +104,7 @@ export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel
       label?: string
       workspacePath?: string
       enabled?: boolean
-      accessLevel?: 'full' | 'workspace' | 'readonly'
+      accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
     if (body.workspacePath !== undefined && !path.isAbsolute(body.workspacePath)) {

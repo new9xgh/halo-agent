@@ -15,7 +15,7 @@ interface WebAccount {
   workspaceMissing: boolean
   label: string
   enabled: number
-  accessLevel: 'full' | 'workspace' | 'readonly'
+  accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
   language?: 'en' | 'zh'
   createdAt: number
   updatedAt: number
@@ -108,7 +108,7 @@ function AccountRow(props: {
   const t = useT()
   const [label, setLabel] = useState(account.label)
   const [workspacePath, setWorkspacePath] = useState(account.workspacePath)
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>(account.accessLevel)
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>(account.accessLevel)
   const [language, setLanguage] = useState<'en' | 'zh'>(account.language || 'en')
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -186,10 +186,11 @@ function AccountRow(props: {
             <label className="text-[10px] text-[var(--muted-foreground)]">{t('web.accessLevel')}</label>
             <select
               value={accessLevel}
-              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
               className="mt-0.5 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs"
             >
               <option value="readonly">{t('web.readonly')}</option>
+              <option value="observer">{t('web.observer')}</option>
               <option value="workspace">{t('web.wsWrite')}</option>
               <option value="full">{t('web.full')}</option>
             </select>
@@ -225,10 +226,11 @@ function AccountRow(props: {
           <span className={cn(
             'rounded px-1.5 py-0.5 text-[9px] font-medium',
             account.accessLevel === 'readonly' ? 'bg-emerald-500/15 text-emerald-300'
+              : account.accessLevel === 'observer' ? 'bg-teal-500/15 text-teal-300'
               : account.accessLevel === 'workspace' ? 'bg-blue-500/15 text-blue-300'
               : 'bg-amber-500/15 text-amber-300',
           )}>
-            {account.accessLevel === 'readonly' ? 'Readonly' : account.accessLevel === 'workspace' ? 'Workspace' : 'Full'}
+            {account.accessLevel === 'readonly' ? 'Readonly' : account.accessLevel === 'observer' ? 'Observer' : account.accessLevel === 'workspace' ? 'Workspace' : 'Full'}
           </span>
         </div>
         <div className="mt-0.5 flex items-center gap-2">
@@ -283,7 +285,7 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
   const activeProject = useProjectStore((s) => s.activeProject)
   const [workspacePath, setWorkspacePath] = useState(activeProject?.path || '')
   const [label, setLabel] = useState('')
-  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly'>('readonly')
+  const [accessLevel, setAccessLevel] = useState<'full' | 'workspace' | 'readonly' | 'observer'>('readonly')
   const [language, setLanguage] = useState<'en' | 'zh'>(lang)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -364,10 +366,11 @@ function AddDialog(props: { onClose: () => void; onDone: () => void }) {
             <label className="text-[11px] text-[var(--muted-foreground)]">{t('web.accessLevel')}</label>
             <select
               value={accessLevel}
-              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly')}
+              onChange={(e) => setAccessLevel(e.target.value as 'full' | 'workspace' | 'readonly' | 'observer')}
               className="mt-1 w-full rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-xs"
             >
               <option value="readonly">{t('web.readonly')}</option>
+              <option value="observer">{t('web.observer')}</option>
               <option value="workspace">{t('web.wsWrite')}</option>
               <option value="full">{t('web.full')}</option>
             </select>

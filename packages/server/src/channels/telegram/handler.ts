@@ -401,7 +401,7 @@ function findActiveTgSession(
   sm: import('../../agents/session-manager.js').SessionManager,
   userId: number,
   activeOverrides: Map<string, string>,
-  accessLevel?: 'full' | 'workspace' | 'readonly',
+  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer',
 ): string | null {
   return sharedFindActive(sm, String(userId), buildTgSessionPrefix(userId), activeOverrides, accessLevel)
 }

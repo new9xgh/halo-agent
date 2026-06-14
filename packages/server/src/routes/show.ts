@@ -247,7 +247,10 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     if (!a.ok) return a.response
     const { account } = a
 
-    const targets = account.accessLevel === 'full'
+    // observer is read-only but globally-scoped: like full, it sees every
+    // workspace (that's its whole purpose — a global read-only dashboard token).
+    const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
+    const targets = globalView
       ? discoverWorkspaces(registry)
       : new Map<string, string>([[account.workspacePath, account.label || path.basename(account.workspacePath)]])
 
@@ -286,7 +289,10 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     const wsPath = c.req.query('ws') ?? ''
     const id = c.req.query('id') ?? ''
     if (!wsPath || !id) return c.json({ error: 'ws and id required' }, 400)
-    if (account.accessLevel !== 'full') {
+    // full + observer have global read scope; everyone else is pinned to their
+    // own workspace.
+    const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
+    if (!globalView) {
       let allowed = false
       try { allowed = fs.realpathSync(wsPath) === fs.realpathSync(account.workspacePath) } catch { /* bad path */ }
       if (!allowed) return c.json({ error: 'forbidden' }, 403)
