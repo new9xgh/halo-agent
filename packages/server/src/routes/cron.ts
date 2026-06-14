@@ -47,7 +47,6 @@ function newJobId(): string {
  *  short so the UI surfaces it inline. */
 function validateSchedule(expr: string): string | null {
   try {
-    // eslint-disable-next-line no-new
     new Cron(expr, { paused: true })
     return null
   } catch (err) {

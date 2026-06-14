@@ -91,7 +91,7 @@ function convertRawMessages(raw: RawMessage[], agentName: string): DisplayMessag
       const texts: string[] = []
       for (const block of blocks) {
         if (block.text && !block.toolResult && block.type !== 'tool_result') {
-          let text = block.text
+          const text = block.text
             .replace(/^\[Session [^\]]+\]\s*\n*/i, '')
             .replace(/^\[(?:Message|Report) from [^\]]+\]\s*\n*/i, '')
             .trim()
