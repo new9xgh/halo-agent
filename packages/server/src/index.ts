@@ -19,6 +19,7 @@ import { createSettingsRoutes, onSettingsChange } from './routes/settings.js'
 import { createEvolutionRoutes } from './routes/evolution.js'
 import { createSessionRoutes } from './routes/sessions.js'
 import { createShowRoutes } from './routes/show.js'
+import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
@@ -329,6 +330,9 @@ app.route('/api', sessionRoutes)
 // PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).
 const showRoutes = createShowRoutes(registry)
 app.route('/api', showRoutes)
+
+const metricsRoutes = createMetricsRoutes(registry)
+app.route('/api', metricsRoutes)
 
 const commandRoutes = createCommandRoutes(commandRegistry, registry)
 app.route('/api', commandRoutes)
