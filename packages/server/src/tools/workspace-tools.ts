@@ -13,6 +13,7 @@ import { homedir } from 'node:os'
 import { sandboxExec, sandboxReadFile, sandboxReadBinaryFile, sandboxWriteFile, sandboxStat, sandboxReaddir, assertPathAllowed, isBwrapCached } from './sandbox.js'
 import type { AccessLevel, SandboxOptions } from './sandbox.js'
 import { loadMergedSettings } from '../prompts/md-vars.js'
+import { inferImageMime } from '../channels/shared/media-store.js'
 import { TOOL_ERROR_MARKER, TOOL_WARN_MARKER } from '../agents/agent-loop.js'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', '.halo'])
@@ -368,18 +369,16 @@ export function createWorkspaceTools(
       const input = _input as { path: string }
       const fullPath = resolvePath(input.path, workspaceRoot)
       const ext = path.extname(fullPath).toLowerCase()
-      const mimeByExt: Record<string, string> = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-      }
-      const mediaType = mimeByExt[ext]
-      if (!mediaType) {
+      const supportedExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+      if (!supportedExts.has(ext)) {
         return `${TOOL_WARN_MARKER}\nError: unsupported image type "${ext}". Supported: png, jpg, jpeg, gif, webp.`
       }
       const buf = await sandboxReadBinaryFile(fullPath, sbOpts)
+      // The extension only gates which files we accept — the media_type we
+      // hand the model must come from the actual bytes. A jpeg saved as .png
+      // (common with screenshots/downloads) otherwise gets tagged image/png
+      // and the vision API rejects the whole request ("appears to be jpeg").
+      const mediaType = inferImageMime(buf)
       const md5 = crypto.createHash('md5').update(buf).digest('hex').slice(0, 8)
 
       // Anthropic caps a single image at ~5 MB of *base64* (not raw bytes), and
