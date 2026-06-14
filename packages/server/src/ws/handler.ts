@@ -14,7 +14,6 @@ import type { AgentSessionEvent } from '../agents/agent-events.js'
 import type { UIState } from '../sessions/ui-log-builder.js'
 import { createSaveSnapshot } from '../sessions/ui-log-builder.js'
 import { config } from '../config.js'
-import { setLogDir } from '../logger.js'
 import { WorkspaceWatcher } from './file-watcher.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
@@ -433,7 +432,6 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const projectPath = resolveProjectPath(projectId)
       if (projectPath) {
         client.sessionManager = getSessionManager(projectPath)
-        setLogDir(projectPath)
         // Keep the file watcher pinned to the active workspace. Without this,
         // a chat that lands without a prior `subscribe` (e.g. after a page
         // reload) leaves the watcher idle and the explorer never gets
@@ -610,7 +608,6 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       const subProjectPath = resolveProjectPath(msg.projectId ?? '')
       if (subProjectPath) {
         client.sessionManager = getSessionManager(subProjectPath)
-        setLogDir(subProjectPath)
         void client.fileWatcher.start(subProjectPath)
       }
 

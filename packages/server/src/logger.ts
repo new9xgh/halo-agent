@@ -1,9 +1,16 @@
 /**
- * File-based logger — intercepts console.log/error/warn and writes to .halo/logs/server.log.
+ * File-based logger — intercepts console.log/error/warn and writes to
+ * ~/.halo/global/logs/server.log.
  *
- * Log location:
- *   - Default: ~/.halo/logs/server.log
- *   - When workspace is open: {workspaceRoot}/.halo/logs/server.log
+ * Always global: a single server process serves many workspaces, so a
+ * per-workspace log dir (the old setLogDir) would cross-contaminate — whichever
+ * workspace last opened won the global path and stole everyone else's lines.
+ * Logs are a runtime/ops artifact, not part of a workspace's portable `.halo/`.
+ *
+ * Line format is logfmt-flavored: `time=… level=… <message>`. time/level are
+ * parseable key=value fields; the message keeps its `[Module]` prefix convention
+ * for readability (promoting module to a real field would mean touching every
+ * call site — deferred until a log pipeline actually needs it).
  *
  * Rotation: when file exceeds MAX_SIZE, rotates to server.log.1, .2, ... up to MAX_FILES.
  */
@@ -14,8 +21,8 @@ import { config } from './config.js'
 
 const LOG_FILENAME = 'server.log'
 
-let logDir = path.join(homedir(), '.halo', 'global', 'logs')
-let logFile = path.join(logDir, LOG_FILENAME)
+const logDir = path.join(homedir(), '.halo', 'global', 'logs')
+const logFile = path.join(logDir, LOG_FILENAME)
 let currentSize = -1 // -1 = not yet measured
 
 function ensureDir(): void {
@@ -65,14 +72,9 @@ function formatArgs(args: unknown[]): string {
     .join(' ')
 }
 
-/** Switch log directory to workspace-specific path */
-export function setLogDir(workspaceRoot: string): void {
-  const newDir = path.join(workspaceRoot, '.halo', 'logs')
-  if (newDir === logDir) return
-  logDir = newDir
-  logFile = path.join(newDir, LOG_FILENAME)
-  currentSize = -1
-  console.log(`Log file switched to: ${logFile}`)
+/** logfmt-flavored line: `time=<iso> level=<level> <message>\n`. */
+function formatLine(level: LogLevel, args: unknown[]): string {
+  return `time=${new Date().toISOString()} level=${level} ${formatArgs(args)}\n`
 }
 
 const LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 } as const
@@ -93,28 +95,28 @@ export function initLogger(): void {
   console.debug = (...args: unknown[]) => {
     if (!shouldLog('debug')) return
     origDebug(...args)
-    writeToFile(`${new Date().toISOString()} DEBUG ${formatArgs(args)}\n`)
+    writeToFile(formatLine('debug', args))
   }
 
   console.log = (...args: unknown[]) => {
     if (!shouldLog('info')) return
     origLog(...args)
-    writeToFile(`${new Date().toISOString()} INFO  ${formatArgs(args)}\n`)
+    writeToFile(formatLine('info', args))
   }
 
   console.warn = (...args: unknown[]) => {
     if (!shouldLog('warn')) return
     origWarn(...args)
-    writeToFile(`${new Date().toISOString()} WARN  ${formatArgs(args)}\n`)
+    writeToFile(formatLine('warn', args))
   }
 
   console.error = (...args: unknown[]) => {
     if (!shouldLog('error')) return
     origError(...args)
-    writeToFile(`${new Date().toISOString()} ERROR ${formatArgs(args)}\n`)
+    writeToFile(formatLine('error', args))
   }
 
   if (shouldLog('info')) {
-    writeToFile(`${new Date().toISOString()} INFO  [Logger] File logging initialized: ${logFile} (level: ${config.logging.level})\n`)
+    writeToFile(formatLine('info', [`[Logger] File logging initialized: ${logFile} (level: ${config.logging.level})`]))
   }
 }
