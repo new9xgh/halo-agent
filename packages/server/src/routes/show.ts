@@ -213,7 +213,10 @@ function discoverWorkspaces(registry: SessionManagerRegistry): Map<string, strin
   for (const { workspacePath } of registry.list()) add(workspacePath, path.basename(workspacePath))
   try {
     const rows = getChannelDb().select().from(channelAccounts).all()
-    for (const row of rows) add(row.workspacePath, row.label || path.basename(row.workspacePath))
+    // The building name is the workspace's own directory name, never a channel
+    // account's label — a workspace can be bound to several accounts (web /
+    // telegram / …) and the label names the chat account, not the workspace.
+    for (const row of rows) add(row.workspacePath, path.basename(row.workspacePath))
   } catch { /* channel db not ready */ }
   return out
 }
@@ -252,7 +255,7 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     const globalView = account.accessLevel === 'full' || account.accessLevel === 'observer'
     const targets = globalView
       ? discoverWorkspaces(registry)
-      : new Map<string, string>([[account.workspacePath, account.label || path.basename(account.workspacePath)]])
+      : new Map<string, string>([[account.workspacePath, path.basename(account.workspacePath)]])
 
     const workspaces: ShowWorkspace[] = []
     for (const [wsPath, label] of targets) {
