@@ -53,7 +53,7 @@ function inferExtFromBytes(buf: Buffer): string {
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[^\w.\-]+/g, '_').slice(0, 120) || 'file'
+  return name.replace(/[^\w.-]+/g, '_').slice(0, 120) || 'file'
 }
 
 export interface SaveMediaParams {

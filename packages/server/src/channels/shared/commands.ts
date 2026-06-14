@@ -7,7 +7,6 @@ import { getDisabledSet, toggleDisabled } from '../../db/index.js'
 import { t, type Lang } from './i18n.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
-import { config } from '../../config.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
 
 export interface CommandContext {
@@ -582,18 +581,6 @@ async function skillCommandAvailable(ctx: CommandContext, command: string): Prom
   if (!yamlConfig?.skills?.includes(skillId)) return false
   if (getDisabledSet(ctx.sm.getDb(), 'skill').has(skillId)) return false
   return true
-}
-
-/** Lowest access level that can use ANY verb — a command's /help visibility
- *  threshold. undefined → some verb is open to everyone (always visible). */
-function minAccess(accessByVerb: Map<string, Access | undefined>): Access | undefined {
-  let min: number | undefined
-  for (const ra of accessByVerb.values()) {
-    const r = ra ? RANK[ra] : 0
-    min = min === undefined ? r : Math.min(min, r)
-  }
-  if (min === undefined || min === 0) return undefined
-  return min === RANK.full ? 'full' : 'workspace'
 }
 
 // ── /agent builtin verbs ─────────────────────────────────────────────────────

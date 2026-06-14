@@ -5,7 +5,6 @@
  * Used by both Orchestrator and SessionManager.
  */
 import type { ToolDef } from './bedrock-agent.js'
-import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { TOOL_WARN_MARKER } from './agent-loop.js'
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'

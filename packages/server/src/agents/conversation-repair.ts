@@ -17,7 +17,7 @@
  *
  * Shared by Orchestrator and SessionManager.
  */
-import type { AnthropicMessage, ContentBlock } from './bedrock-agent.js'
+import type { AnthropicMessage } from './bedrock-agent.js'
 
 /**
  * Extract tool_use id from a content block (Anthropic format).

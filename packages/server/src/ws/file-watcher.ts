@@ -13,7 +13,6 @@
  */
 import watcher, { type AsyncSubscription } from '@parcel/watcher'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 
 /**

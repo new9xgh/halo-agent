@@ -16,10 +16,7 @@ import { config, modelSupportsImage } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
 import { localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
-import {
-  loadAgentYaml,
-  type AgentYamlConfig,
-} from './agent-loader.js'
+import { loadAgentYaml } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
 import { createDb, type HaloDb } from '../db/index.js'
