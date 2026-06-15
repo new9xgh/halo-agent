@@ -48,7 +48,17 @@ function loadModelsRegistry(): { providers: Array<Record<string, unknown>> } {
   return { providers }
 }
 
-const _modelsRegistry = loadModelsRegistry()
+// Lazy, not eager: `ensureHaloHome` seeds/refreshes `{global}/models/*.yaml`
+// inside `main()`, but ES module imports evaluate first. An eager
+// `loadModelsRegistry()` at import time therefore reads the models dir
+// *before* a freshly-added provider yaml lands, so the new provider is
+// missing until a second restart. Loading on first access (always after
+// `ensureHaloHome`) closes that startup race.
+let _modelsRegistryCache: { providers: Array<Record<string, unknown>> } | null = null
+function modelsRegistry(): { providers: Array<Record<string, unknown>> } {
+  if (!_modelsRegistryCache) _modelsRegistryCache = loadModelsRegistry()
+  return _modelsRegistryCache
+}
 const _systemConfig = loadYamlFile(path.join(HALO_SECRETS_DIR, 'config.yaml'))
 
 /** Lazy + mtime-watched settings cache. UI saves rewrite the file; bumping
@@ -407,7 +417,7 @@ export function reloadSandboxConfig(): { hiddenDirs: string[]; hiddenFiles: stri
 /** Look up a model entry from the registry by ID */
 function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number; capabilities?: Record<string, unknown> } | undefined {
   try {
-    const providers = (_modelsRegistry as { providers?: Array<{ models?: Array<Record<string, unknown>> }> }).providers
+    const providers = (modelsRegistry() as { providers?: Array<{ models?: Array<Record<string, unknown>> }> }).providers
     if (providers) {
       for (const provider of providers) {
         for (const model of provider.models ?? []) {
@@ -516,5 +526,5 @@ export function modelSupportsAudio(modelId: string, override?: boolean): boolean
 
 /** Get the loaded models registry (for API endpoints) */
 export function getModelsRegistry(): Record<string, unknown> {
-  return _modelsRegistry
+  return modelsRegistry()
 }
