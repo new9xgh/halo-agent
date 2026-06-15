@@ -12,6 +12,7 @@ import { wsClient } from '@/shared/ws-client'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
+import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
 import { cn } from '@/shared/utils'
@@ -31,6 +32,11 @@ function AgentSelector() {
   const [agents, setAgents] = useState<AgentOption[]>([])
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  // Re-fetch when the agent list changes (enable/disable/create/delete in the
+  // Agents tab calls bumpAgentBus). Without this the selector keeps a stale
+  // snapshot: disable every agent then re-enable, and the dropdown never
+  // reappears because this effect never re-runs.
+  const busVersion = useAgentBus((s) => s.version)
 
   useEffect(() => {
     if (!activeProject?.path) return
@@ -59,7 +65,7 @@ function AgentSelector() {
     // pre-session mode (just selecting an agent in the dropdown), key off
     // selectedAgentId so the popup matches what they're about to start.
     refreshCommands(activeProject.path, sessionId ?? undefined, selectedAgentId ?? undefined).catch(() => {})
-  }, [activeProject?.path, sessionId, selectedAgentId])
+  }, [activeProject?.path, sessionId, selectedAgentId, busVersion])
 
   useEffect(() => {
     if (!open) return
