@@ -90,6 +90,8 @@ interface AgentSession {
   currentModelId: string
   /** Loop detection: recent tool calls with input hash */
   toolCallLog: Array<{ name: string; inputHash: string }>
+  /** Loop detection: input hashes already warned about this turn — warn once, not on every repeat */
+  warnedToolHashes: Set<string>
   /** Turn start timestamp — used for AbortSignal timing */
   turnStartTime: number
   /** User message queue (for sendUserMessage graceful interrupt) */
@@ -482,6 +484,7 @@ export class SessionManager implements SessionManagerInternals {
       contextConfig,
       currentModelId: modelId,
       toolCallLog: [],
+      warnedToolHashes: new Set(),
       turnStartTime: 0,
       pendingUserMessages: [],
       interruptRequested: false,
@@ -911,7 +914,13 @@ export class SessionManager implements SessionManagerInternals {
     session.toolCallLog.push({ name: toolName, inputHash: hash })
     const recent = session.toolCallLog.slice(-15)
     const sameCount = recent.filter((t) => t.inputHash === hash).length
-    if (sameCount >= 3) return 'warn'
+    // Warn once per identical-input pattern per turn. A real loop trips the
+    // ≥3 threshold repeatedly; emitting on every repeat floods the chat with
+    // duplicate warnings, so we remember which hashes we've already flagged.
+    if (sameCount >= 3 && !session.warnedToolHashes.has(hash)) {
+      session.warnedToolHashes.add(hash)
+      return 'warn'
+    }
     return null
   }
 
@@ -1568,6 +1577,7 @@ export class SessionManager implements SessionManagerInternals {
     console.debug(`[SessionManager] sendUserMessage: ${sessionId} idle — running`)
     session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
     session.toolCallLog = []
+    session.warnedToolHashes.clear()
     this.handleUserTurn(session, message, images).catch((err) => {
       console.error(`[SessionManager] handleUserTurn error for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     })
@@ -1586,6 +1596,7 @@ export class SessionManager implements SessionManagerInternals {
   ): Promise<void> {
     let input: string | ContentBlock[] = this.buildInput(message, images, session.supportsImage)
     session.toolCallLog = []
+    session.warnedToolHashes.clear()
 
     const runFn = async (): Promise<void> => {
       try {
@@ -1607,6 +1618,7 @@ export class SessionManager implements SessionManagerInternals {
           this.emitEvent(session.id, { type: 'complete' })
           input = this.buildInput(next.text, next.images, session.supportsImage)
           session.toolCallLog = []
+          session.warnedToolHashes.clear()
           // Queue is now empty (we took everything) — clear the interrupt flag.
           session.interruptRequested = false
           this.emitEvent(session.id, { type: 'queued_message', text: next.text, agentName: session.agentId })
@@ -2014,6 +2026,7 @@ export class SessionManager implements SessionManagerInternals {
       session.abortController = null
     }
     session.toolCallLog = []
+    session.warnedToolHashes.clear()
     session.interruptRequested = false
     // Save current messages, then rebuild agent
     const savedMessages = session.agent.messages
