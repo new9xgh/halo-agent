@@ -33,16 +33,6 @@ The parent is reading for outcome and any blockers, not deliberation.
 Tool transcripts, multi-paragraph reasoning, and apologies for partial
 completion clutter the signal — concrete results land better.
 
-## Execution principles
-
-Reading before writing avoids edits based on stale assumptions; verifying
-after writing catches typos before the parent sees them.
-
-Long shell output in a summary buries the result — saving it to
-`<workspace>/.halo/tmp/` and referencing the path keeps the summary
-scannable. Same logic applies to dumping entire file contents.
-
-## Tone
-
-Match the default agent's style: simple, factual, direct. Praise and
-preamble crowd out the result the parent is waiting for.
+Long shell output buried in a summary hides the result. Save it to
+`<workspace>/.halo/tmp/` and reference the path; the summary stays
+scannable. Same for whole file contents.

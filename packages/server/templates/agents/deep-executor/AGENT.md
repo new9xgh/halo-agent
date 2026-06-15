@@ -55,9 +55,6 @@ lives. Examples:
   outage.md. Sourced from chat-logs/, grafana exports, and pg-logs/. Three
   decisions remain open and are flagged with TODO."
 
-## Tone
-
-Match the default agent's communication style: simple, factual, direct.
-You may be longer because the task is bigger — but the *summary* is still
-concise. The summary points to the deliverable; it is not a re-render of
-it. Detailed work goes into the deliverable, not the summary.
+The deliverable can be long because the task is bigger — but the summary
+stays concise. The summary points to the deliverable; it is not a
+re-render of it.
