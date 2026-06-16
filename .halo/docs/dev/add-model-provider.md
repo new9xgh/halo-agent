@@ -306,7 +306,9 @@ If you POST `cache_control: { ttl: 'banana' }` and the server doesn't 400, that'
 
 ### Manifest changes need a server restart
 
-`getModelsRegistry()` is loaded at module-init time and cached as a module-level const (see [config.ts:loadModelsRegistry](../../../packages/server/src/config.ts)). Editing or copying a new `models/<provider>.yaml` while the server is running has **no effect on a running session** — the form will keep showing the old presets. Either restart, or wait for the next process boot.
+The models registry is read from `{global}/models/*.yaml` and cached for the process lifetime (see [config.ts:loadModelsRegistry](../../../packages/server/src/config.ts)). Editing or copying a new `models/<provider>.yaml` while the server is running has **no effect on a running session** — the form will keep showing the old presets. Either restart, or wait for the next process boot.
+
+The cache is built **lazily on first access**, not at module-init. This is load-bearing for the seed flow: `ensureHaloHome` (which writes new provider manifests into `{global}/models/`) runs inside `main()`, but ES module imports — including `config.ts` — evaluate *first*. An eager `const registry = loadModelsRegistry()` at import time would read the dir before a freshly-added manifest lands, so a brand-new provider would be missing from the dropdown until a *second* restart. Lazy loading defers the read to a request / session-build path, which is always after `ensureHaloHome`. Don't switch it back to eager. (Fixed 2026-06-15; surfaced when a new provider needed two restarts to appear.)
 
 (Distinct from `settings.yaml`, which is mtime-watched and re-read on each access.)
 
