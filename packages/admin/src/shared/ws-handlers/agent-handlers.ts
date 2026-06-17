@@ -47,10 +47,11 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
     wsClient.on('agent:tool_call', (data) => {
       const msg = data as { tool: string; input: unknown; agentName?: string; taskId?: string; turnId?: string }
       const agentName = msg.agentName ?? 'default'
-      const inputStr = typeof msg.input === 'string' ? msg.input :
-        JSON.stringify(msg.input ?? {}).slice(0, 1000)
+      // Store the full input — truncation is the render layer's job
+      // (InlineToolCall previews collapsed and shows everything on expand).
+      const inputStr = typeof msg.input === 'string' ? msg.input : JSON.stringify(msg.input ?? {})
       useChatStore.getState().addToolCallToLastAssistant(
-        { name: msg.tool, input: inputStr.slice(0, 500) },
+        { name: msg.tool, input: inputStr },
         agentName,
         msg.taskId,
         msg.turnId,
@@ -62,22 +63,10 @@ export function registerAgentHandlers(wsClient: WsClient): () => void {
     wsClient.on('agent:tool_result', (data) => {
       const msg = data as { result: unknown; agentName?: string; taskId?: string; durationMs?: number }
       const agentName = msg.agentName ?? 'default'
-      let preview = ''
-      if (typeof msg.result === 'string') {
-        try {
-          const parsed = JSON.parse(msg.result)
-          if (parsed.toolResult?.content) {
-            preview = parsed.toolResult.content.map((c: { text?: string }) => c.text ?? '').filter(Boolean).join('\n').slice(0, 500)
-          } else {
-            preview = (msg.result as string).slice(0, 500)
-          }
-        } catch {
-          preview = (msg.result as string).slice(0, 500)
-        }
-      } else {
-        preview = JSON.stringify(msg.result).slice(0, 500)
-      }
-      useChatStore.getState().updateLastToolCallResult(preview, agentName, msg.taskId)
+      // Store the full result — truncation is the render layer's job
+      // (InlineToolCall previews at 120 chars; expand shows everything).
+      const fullResult = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result ?? '')
+      useChatStore.getState().updateLastToolCallResult(fullResult, agentName, msg.taskId)
     }),
   )
 

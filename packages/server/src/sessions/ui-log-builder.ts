@@ -63,13 +63,15 @@ export function genId(): string {
 // ── Formatters ──────────────────────────────────────────────────────
 
 export function formatToolInput(input: unknown): string {
+  // Store the full input — truncation is the render layer's job (the admin
+  // chat panel previews in the collapsed row and shows everything on expand).
   if (!input) return ''
-  if (typeof input === 'string') return input.slice(0, 300)
+  if (typeof input === 'string') return input
   const obj = input as Record<string, unknown>
-  if (obj.input && typeof obj.input === 'string') return obj.input.slice(0, 300)
+  if (obj.input && typeof obj.input === 'string') return obj.input
   if (obj.path && typeof obj.path === 'string') return obj.path
-  if (obj.command && typeof obj.command === 'string') return obj.command.slice(0, 300)
-  return JSON.stringify(input).slice(0, 300)
+  if (obj.command && typeof obj.command === 'string') return obj.command
+  return JSON.stringify(input)
 }
 
 export function formatToolResult(result: unknown): string {
@@ -118,7 +120,10 @@ function addToolCall(target: TurnState, entry: ToolCallEntry, msg: SessionMessag
   target.messageLog.push(msg)
 }
 
-function setToolResult(target: TurnState, resultStr: string, durationMs?: number): void {
+function setToolResult(target: TurnState, rawResult: unknown, durationMs?: number): void {
+  // Store the full result string — truncation is the render layer's job
+  // (InlineToolCall already previews at 120 chars; expand shows everything).
+  const resultStr = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult ?? '')
   if (target.turnToolCalls.length > 0) {
     const last = target.turnToolCalls[target.turnToolCalls.length - 1]
     last.output = resultStr; last.durationMs = durationMs
@@ -353,12 +358,16 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
     }
 
     case 'tool_result': {
-      const resultStr = formatToolResult(event.toolResult)
       const target = getTarget(state, taskId)
-      setToolResult(target, resultStr, event.durationMs)
+      // Pass raw result — setToolResult stores the full string.
+      // formatToolResult (500-char truncation) is kept only for the human-readable
+      // `content` summary line; the actual output stored in toolCalls[].output
+      // and toolOutput is always complete.
+      setToolResult(target, event.toolResult, event.durationMs)
+      const resultSummary = formatToolResult(event.toolResult)
       target.messageLog.push({
         id: genId(), type: 'tool_result', role: 'system',
-        content: `Result: ${resultStr}`,
+        content: `Result: ${resultSummary}`,
         timestamp: Date.now(), agentName, taskId,
         toolOutput: event.toolResult, durationMs: event.durationMs,
       })

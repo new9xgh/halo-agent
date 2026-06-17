@@ -477,7 +477,10 @@ function formatToolInput(name: string, input: string): { summary: string; detail
       case 'delegate_task': { const a = String(obj.agent_id ?? ''); const t = String(obj.task ?? obj.input ?? ''); const preview = t.length > 100 ? t.slice(0, 100) + '...' : t; return { summary: a ? `→ ${a}: ${preview}` : preview } }
     }
   }
-  return { summary: input.length > 120 ? input.slice(0, 120) + '...' : input }
+  // Full input — the collapsed row CSS-truncates it to one line, and the
+  // expanded IN box wants the whole thing (e.g. a multi-line shell_exec
+  // command persisted as a raw string by the snapshot path).
+  return { summary: input }
 }
 
 function formatToolOutput(_name: string, output: string): string {

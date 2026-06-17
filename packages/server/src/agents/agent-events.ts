@@ -9,6 +9,9 @@ export interface AgentSessionEvent {
   toolName?: string
   toolInput?: unknown
   toolResult?: string
+  /** Full (un-truncated) tool result — for UI display. LLM-facing rawMessages
+   *  always use the truncated `toolResult` (capped at toolResultMax). */
+  toolResultFull?: string
   error?: string
   agentName?: string
   taskId?: string

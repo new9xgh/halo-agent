@@ -327,6 +327,7 @@ export const config = {
     get webFetchMaxBody(): number { return settingsInt('general.limits.web_fetch_bytes', 50 * 1024) },
     get grepDefaultMax(): number { return settingsInt('general.limits.grep_default_matches', 50) },
     get toolResultMax(): number { return settingsInt('general.limits.tool_result_render_chars', 8000) },
+    get toolResultUiMax(): number { return settingsInt('general.limits.tool_result_ui_chars', 64 * 1024) },
     get wsEventBuffer(): number { return settingsInt('general.limits.ws_event_buffer', 5000) },
     get terminalOutputBuffer(): number { return settingsInt('general.limits.terminal_scrollback_bytes', 50_000) },
   },

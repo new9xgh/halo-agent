@@ -65,6 +65,8 @@ export interface AgentEvent {
   toolUseId?: string
   toolInput?: unknown
   toolResult?: string
+  /** Full untruncated result for UI display; toolResult carries the LLM-capped copy. */
+  toolResultFull?: string
   durationMs?: number
   stopReason?: StopReason
   usage?: {
@@ -227,6 +229,15 @@ export abstract class AgentLoop {
         // unbounded. Now both paths see the same trimmed value, and the
         // appended marker tells the LLM the output was cut so it can grep
         // / re-run with narrower scope when it needs more.
+        // Preserve the result for UI display before applying the (smaller)
+        // LLM cap. The UI path gets its own, far larger cap: a normal command's
+        // full output stays visible, but a multi-MB `cat` is bounded so it can't
+        // bloat the session file / WS payload / browser render.
+        const uiCap = config.limits.toolResultUiMax
+        const resultTextFull = resultText.length > uiCap
+          ? resultText.slice(0, uiCap) + `\n\n[Content truncated: ${resultText.length} chars total, showing first ${uiCap}. Use file_read for the complete content.]`
+          : resultText
+
         const cap = config.limits.toolResultMax
         const truncationNote = (origLen: number) =>
           `\n\n[Content truncated: ${origLen} chars total, showing first ${cap}. Re-run with narrower scope (e.g. grep / file_read with offset+limit) to see specific sections.]`
@@ -257,7 +268,7 @@ export abstract class AgentLoop {
         toolResults.push({
           type: 'tool_result',
           tool_use_id: tu.id,
-          content: resultContent,
+          content: resultContent,   // truncated — LLM-facing only
           ...(isError ? { is_error: true } : {}),
         })
 
@@ -265,7 +276,8 @@ export abstract class AgentLoop {
           type: 'tool_result',
           toolName: tu.name,
           toolUseId: tu.id,
-          toolResult: resultText,
+          toolResult: resultText,           // truncated (LLM cap applied)
+          toolResultFull: resultTextFull,   // full — for UI display
           durationMs,
         }
       }
