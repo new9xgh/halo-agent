@@ -419,6 +419,16 @@ export const api = {
       const qs = params.toString() ? `?${params}` : ''
       return request<{ ok: boolean }>(`/sessions/logs/${sessionId}${qs}`, { method: 'DELETE' })
     },
+    /** Rename a session (admin-only — updates the log file's title) */
+    rename(sessionId: string, title: string, projectId?: string) {
+      const params = new URLSearchParams()
+      if (projectId) params.set('projectId', projectId)
+      const qs = params.toString() ? `?${params}` : ''
+      return request<{ ok: boolean }>(`/sessions/logs/${sessionId}${qs}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title }),
+      })
+    },
   },
 
   commands: {

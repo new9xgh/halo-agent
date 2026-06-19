@@ -332,3 +332,25 @@ export async function findAndDeleteSessionFile(sessionId: string, projectPath?: 
     }
   } catch { /* base dir doesn't exist */ }
 }
+
+/** Find a session file by ID (scans all agent dirs) and overwrite its `title`.
+ *  The JSON file is the source of truth the admin listing reads, so the rename
+ *  lands here (read-merge-write, same atomic path the other writers use).
+ *  Returns true when a file was found and updated. */
+export function findAndUpdateSessionTitle(sessionId: string, title: string, projectPath?: string | null): boolean {
+  try {
+    const baseDir = getSessionsBaseDir(projectPath)
+    const agentDirs = fsSync.readdirSync(baseDir)
+    const fileName = `${fileSegment(sessionId)}.json`
+    for (const agentDir of agentDirs) {
+      const filePath = path.join(baseDir, agentDir, fileName)
+      try {
+        const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+        data.title = title
+        atomicWriteJsonSync(filePath, JSON.stringify(data, null, 2))
+        return true
+      } catch { /* not in this agent's dir, or unreadable — try next */ }
+    }
+  } catch { /* base dir doesn't exist */ }
+  return false
+}

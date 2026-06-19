@@ -8,7 +8,7 @@ import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
 import { cn } from '@/shared/utils'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
-import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw } from 'lucide-react'
+import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw, Pencil } from 'lucide-react'
 import type { ChatMessage } from '@/shared/types'
 import { wsClient } from '@/shared/ws-client'
 
@@ -213,6 +213,10 @@ export function AgentSessionsSidebar() {
   const [loadingGroups, setLoadingGroups] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const restoredProjectRef = useRef<string | null>(null)
+  // Inline title rename (admin-only). `editingId` is the session whose title
+  // is being edited; `editingTitle` holds the in-progress text.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
 
   // Clear cross-project selection so we don't flash another project's session
   useEffect(() => {
@@ -455,6 +459,34 @@ export function AgentSessionsSidebar() {
     }
   }, [currentSessionId, activeProject?.path, activeProject?.id, selectedSessionId, clearSelection])
 
+  // Enter inline rename mode for a session, seeding the input with its title.
+  const startRename = useCallback((e: React.MouseEvent, s: SessionItem) => {
+    e.stopPropagation()
+    setEditingId(s.id)
+    setEditingTitle(s.title || '')
+  }, [])
+
+  const cancelRename = useCallback(() => {
+    setEditingId(null)
+    setEditingTitle('')
+  }, [])
+
+  // Commit the new title. Optimistically patches the local tree, then PATCHes
+  // the server; the bus bump afterward syncs every list. No-op on empty/unchanged.
+  const commitRename = useCallback(async (sid: string) => {
+    const title = editingTitle.trim()
+    setEditingId(null)
+    if (!title || !activeProject?.path) return
+    setTree((prev) => prev.map((n) => (n.id === sid ? { ...n, title } : n)))
+    try {
+      await api.sessionLogs.rename(sid, title, activeProject.path)
+      bumpSessionBus()
+    } catch (err) {
+      console.error('[Sessions] Rename failed:', err)
+      bumpSessionBus()
+    }
+  }, [editingTitle, activeProject?.path])
+
   const totalSessions = tree.length
 
   // Infinite scroll. Mirrors evolution-sidebar.tsx: sentinel + IO with
@@ -548,9 +580,25 @@ export function AgentSessionsSidebar() {
                   )} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <p className="truncate text-[11px] font-medium text-[var(--foreground)]">
-                        {main.title || 'Untitled'}
-                      </p>
+                      {editingId === main.id ? (
+                        <input
+                          autoFocus
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); void commitRename(main.id) }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                          }}
+                          onBlur={() => commitRename(main.id)}
+                          className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[11px] text-[var(--foreground)] outline-none focus:border-blue-500"
+                        />
+                      ) : (
+                        <p className="truncate text-[11px] font-medium text-[var(--foreground)]">
+                          {main.title || 'Untitled'}
+                        </p>
+                      )}
                       {isCurrent && (
                         <span className="shrink-0 rounded bg-blue-900/50 px-1 py-0.5 text-[8px] text-blue-400">
                           active
@@ -569,6 +617,15 @@ export function AgentSessionsSidebar() {
                       {main.messageCount} msgs · {timeAgo(main.updatedAt)}
                     </p>
                   </div>
+                  {editingId !== main.id && (
+                    <button
+                      onClick={(e) => startRename(e, main)}
+                      title="Rename"
+                      className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:text-blue-400 transition-opacity"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => handleDeleteMain(e, main.id)}
                     className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"

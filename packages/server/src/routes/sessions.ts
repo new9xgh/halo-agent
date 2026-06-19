@@ -3,7 +3,8 @@ import { eq, desc } from 'drizzle-orm'
 import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { sessions, agentSessions } from '../db/schema.js'
-import { findSessionFileData, findAndDeleteSessionFile, readSessionFileMeta } from '../sessions/session-store.js'
+import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta } from '../sessions/session-store.js'
+import { broadcast } from '../ws/broadcast.js'
 
 /** Raw content block — supports both Bedrock and Anthropic API formats */
 interface RawContentBlock {
@@ -321,6 +322,25 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
       await findAndDeleteSessionFile(sid, workspacePath)
     }
     return c.json({ ok: true, deleted: allIds.length })
+  })
+
+  // PATCH /sessions/logs/:id?projectId=xxx — rename a session's title.
+  // The JSON log file is the source of truth the listing reads, so the
+  // new title lands there. Admin-only edit (no channel exposes this).
+  app.patch('/sessions/logs/:id', async (c) => {
+    const id = c.req.param('id')
+    const projectId = c.req.query('projectId')
+    if (!projectId) return c.json({ error: 'projectId required' }, 400)
+    const body = await c.req.json<{ title?: string }>().catch(() => ({} as { title?: string }))
+    const title = body.title?.trim()
+    if (!title) return c.json({ error: 'title required' }, 400)
+
+    const { workspacePath } = getWorkspaceDb(projectId)
+    const updated = findAndUpdateSessionTitle(id, title, workspacePath)
+    if (!updated) return c.json({ error: 'Session not found' }, 404)
+    // Push so every admin session list re-fetches the new title live.
+    broadcast({ type: 'session:changed' })
+    return c.json({ ok: true })
   })
 
   // ── Regular sessions (SQLite-based) ──

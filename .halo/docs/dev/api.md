@@ -63,6 +63,7 @@ Unified session log API — list + read session files across all agents.
 | GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-header dropdown) |
 | GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) |
 | DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log |
+| PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title |
 
 The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / messageCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens). The frontend builds the tree from `parentSessionId`.
 
