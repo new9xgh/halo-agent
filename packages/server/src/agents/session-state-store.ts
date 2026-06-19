@@ -12,6 +12,8 @@ import { getSessionDir, fileSegment, atomicWriteSessionFile } from '../sessions/
 export interface SavableSession {
   id: string
   agentId: string
+  /** Display name (agent.yaml `name`) — distinct from the slot `agentId`. */
+  agentName: string
   parentId: string | null
   description: string
   output: string
@@ -65,7 +67,7 @@ export class SessionStateStore {
       const now = new Date().toISOString()
       existing.id = session.id
       existing.agentId = session.agentId
-      if (!existing.agentName) existing.agentName = session.agentId
+      if (!existing.agentName) existing.agentName = session.agentName
       if (session.parentId) existing.parentSessionId = session.parentId
       if (!existing.title) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
       if (!existing.createdAt) existing.createdAt = now

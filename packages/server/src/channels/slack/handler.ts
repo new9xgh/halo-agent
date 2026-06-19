@@ -563,7 +563,9 @@ async function getOrCreateSessionForThread(args: {
   const existing = sharedFindActive(sm, tagKey, prefix, state.activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${prefix}${Date.now().toString(36)}`
-  await sm.createSession('default', null, `Slack: ${channelId}/${rootTs}`, 'default', newId, undefined, accessLevel)
+  // agentName omitted → createSession resolves the real agent.yaml `name`
+  // (e.g. a renamed `default` slot shows "Producer", not "default").
+  await sm.createSession('default', null, `Slack: ${channelId}/${rootTs}`, undefined, newId, undefined, accessLevel)
   state.activeOverrides.set(tagKey, newId)
   return newId
 }

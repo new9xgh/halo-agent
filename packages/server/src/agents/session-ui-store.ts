@@ -26,8 +26,9 @@ export interface SessionUIStoreHost {
   readonly workspaceRoot: string
   getDb(): HaloDb
   /** In-memory active session (if loaded) — used to source the accurate agentId
-   *  when persisting, including internal sessions that have no db row. */
-  getSession(id: string): { agentId: string } | undefined
+   *  and display name when persisting, including internal sessions that have no
+   *  db row. */
+  getSession(id: string): { agentId: string; agentName: string } | undefined
   getSessionById(id: string): { agentId: string; agentName: string } | null
   isSessionDeleted(id: string): boolean
   persistSessionFile(opts: SessionSaveOptions): void
@@ -273,7 +274,10 @@ export class SessionUIStore {
         contextTokens: state.contextTokens,
         outputTokens: state.outputTokens,
         agentId: inMem?.agentId ?? row?.agentId,
-        agentName: inMem?.agentId ?? row?.agentName ?? row?.agentId,
+        // Display name = the agent's yaml `name` (e.g. "Producer"), not the
+        // slot `agentId` — keep these two distinct so a renamed default slot
+        // shows correctly. (agentId still drives the directory above.)
+        agentName: inMem?.agentName ?? row?.agentName ?? row?.agentId,
       })
     } catch (err) {
       console.error(`[SessionUIStore] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)

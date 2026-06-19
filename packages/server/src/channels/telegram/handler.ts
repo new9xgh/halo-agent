@@ -415,6 +415,8 @@ async function getOrCreateActiveSession(
   const existing = findActiveTgSession(sm, userId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${buildTgSessionPrefix(userId)}${Date.now().toString(36)}`
-  await sm.createSession('default', null, `Telegram: ${userId}`, 'default', newId, undefined, accessLevel)
+  // agentName omitted → createSession resolves the real agent.yaml `name`
+  // (e.g. a renamed `default` slot shows "Producer", not "default").
+  await sm.createSession('default', null, `Telegram: ${userId}`, undefined, newId, undefined, accessLevel)
   return newId
 }

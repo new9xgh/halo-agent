@@ -214,7 +214,8 @@ export function createWebChannel(deps: {
     }
     if (!sessionExists) {
       const agentId = opts?.agentId || 'default'
-      await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, agentId, sessionId, undefined, accessLevel)
+      // agentName omitted → createSession resolves the real agent.yaml `name`.
+      await sm.createSession(agentId, null, `Web: ${account.label || account.accountId}`, undefined, sessionId, undefined, accessLevel)
       // Only flip the account's `active` pointer when no explicit session
       // was requested — otherwise an ACP adapter creating a side session
       // would clobber the browser tab's notion of "current session".

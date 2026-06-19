@@ -86,6 +86,14 @@ interface AgentSession {
 }
 ```
 
+### agentId vs agentName
+
+`agentId` is the **slot / directory id** (e.g. `default`, `researcher`) — it determines where session files are stored (`.halo/sessions/{agentId}/`) and is immutable for the lifetime of the session.
+
+`agentName` is the **display name** read from `agent.yaml → name` at session creation time (e.g. `Producer`, `Research Assistant`). When an operator renames the agent yaml (e.g. `name: default` → `name: Producer`), new sessions immediately show the new name while old sessions keep whatever was persisted in their DB row and JSON file.
+
+**Both must be stored separately.** Before this distinction was made explicit, `agentName` fell back to `agentId` at persist time — meaning a `default`-slot agent with `name: Producer` would show up as `default` in session lists. The fix: resolve `agentName` once at `createSession` (caller-provided → `createdYaml.name` → `agentId` as last resort) and carry it on `AgentSession` so all downstream writes (`session-state-store`, channel handlers, `session-ui-store`) use the real name, never the slot id.
+
 ### Session ID format
 
 Hierarchical encoding: `root_id>child_segment>grandchild_segment`.

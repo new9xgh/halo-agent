@@ -327,7 +327,9 @@ async function getOrCreateActiveSession(
   const existing = findActiveWxSession(sm, fromUserId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
   if (existing) return existing
   const newId = `${buildWxSessionPrefix(fromUserId)}${Date.now().toString(36)}`
-  await sm.createSession('default', null, `WeChat: ${fromUserId}`, 'default', newId, undefined, accessLevel)
+  // agentName omitted → createSession resolves the real agent.yaml `name`
+  // (e.g. a renamed `default` slot shows "Producer", not "default").
+  await sm.createSession('default', null, `WeChat: ${fromUserId}`, undefined, newId, undefined, accessLevel)
   return newId
 }
 

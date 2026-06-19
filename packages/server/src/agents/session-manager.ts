@@ -75,6 +75,10 @@ interface AgentSession {
   id: string
   parentId: string | null
   agentId: string
+  /** Display name (agent.yaml `name`, e.g. "Producer") — distinct from
+   *  `agentId` which is the folder/slot id (e.g. "default"). Used wherever
+   *  agentName is persisted so it reflects the real agent, not the slot. */
+  agentName: string
   agent: ModelRuntime
   description: string
   output: string
@@ -465,7 +469,7 @@ export class SessionManager implements SessionManagerInternals {
 
   /** Create default AgentSession fields */
   private createAgentSession(
-    id: string, parentId: string | null, agentId: string, agent: ModelRuntime,
+    id: string, parentId: string | null, agentId: string, agentName: string, agent: ModelRuntime,
     description: string, contextConfig: { maxTokens: number; compressAt: number },
     modelId: string, systemPrompt: string, thinkingEffort: string = 'off',
     workingDir: string | null = null,
@@ -475,7 +479,7 @@ export class SessionManager implements SessionManagerInternals {
     draftReset: (() => void) | null = null,
   ): AgentSession {
     return {
-      id, parentId, agentId, agent, description,
+      id, parentId, agentId, agentName, agent, description,
       draftReset,
       output: '',
       promise: null,
@@ -558,8 +562,11 @@ export class SessionManager implements SessionManagerInternals {
       }
 
       const resumedImageOverride = (resumedYaml?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
+      // Prefer the persisted display name; fall back to the live yaml `name`
+      // (covers rows written before this field carried the real name), then id.
+      const resumedAgentName = meta.agentName ?? resumedYaml?.name ?? meta.agentId
       const session = this.createAgentSession(
-        sessionId, meta.parentId, meta.agentId, agent,
+        sessionId, meta.parentId, meta.agentId, resumedAgentName, agent,
         meta.description ?? '', contextConfig, modelId, systemPrompt, thinkingEffort,
         restoredWorkingDir ?? null,
         restoredAccessLevel,
@@ -634,11 +641,17 @@ export class SessionManager implements SessionManagerInternals {
 
     const { agent, yamlConfig: createdYaml, contextConfig, modelId, systemPrompt, thinkingEffort, meta, draftReset } = await this.buildAgentInstance(agentId, sessionId, parentId, workingDir ?? undefined, accessLevel)
 
+    // Resolve the display name once: an explicit caller-provided name wins
+    // (sub-agents pass the yaml name already), else the agent.yaml `name`
+    // (so a `default`-slot agent renamed to e.g. "Producer" shows that, not
+    // the slot id), else the id as last resort.
+    const resolvedAgentName = agentName ?? createdYaml?.name ?? agentId
+
     this.db.insert(agentSessions).values({
       id: sessionId,
       parentId,
       agentId,
-      agentName: agentName ?? agentId,
+      agentName: resolvedAgentName,
       description,
       workingDir: workingDir ? path.relative(this.workspaceRoot, workingDir) : null,
       accessLevel,
@@ -648,7 +661,7 @@ export class SessionManager implements SessionManagerInternals {
 
     const createdImageOverride = (createdYaml?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
     const session = this.createAgentSession(
-      sessionId, parentId, agentId, agent,
+      sessionId, parentId, agentId, resolvedAgentName, agent,
       description, contextConfig, modelId, systemPrompt, thinkingEffort,
       workingDir ?? null,
       accessLevel,
@@ -659,7 +672,7 @@ export class SessionManager implements SessionManagerInternals {
     this.sessions.set(sessionId, session)
 
     // Emit context event on creation (system prompt for debug viewing)
-    this.emitEvent(sessionId, { type: 'context', agentId, agentName: agentName ?? agentId, systemPrompt, taskId: parentId ? sessionId : undefined })
+    this.emitEvent(sessionId, { type: 'context', agentId, agentName: resolvedAgentName, systemPrompt, taskId: parentId ? sessionId : undefined })
 
     console.debug(`[SessionManager] Created session ${sessionId} for agent "${agentId}" (parent: ${parentId ?? 'none'}, workingDir: ${workingDir ?? 'project root'})`)
 
@@ -931,7 +944,10 @@ export class SessionManager implements SessionManagerInternals {
    * modelId, and tool result truncation.
    */
   private processSessionEvent(session: AgentSession, event: AgentEvent): void {
-    const agentName = session.agentId
+    // Per-message speaker label = the agent's display name (yaml `name`),
+    // not the slot id — so a renamed `default` slot shows "Producer" on
+    // every assistant/tool/usage line in the transcript, not "default".
+    const agentName = session.agentName
     const taskId = session.parentId ? session.id : undefined
 
     switch (event.type) {
@@ -1086,7 +1102,7 @@ export class SessionManager implements SessionManagerInternals {
         // 3a. Account-level errors (insufficient balance, suspended, invalid key) → unrecoverable, don't retry
         if (msg.includes('insufficient balance') || msg.includes('suspended') || msg.includes('invalid api key') || msg.includes('Invalid API Key') || msg.includes('Unauthorized') || msg.includes('authentication')) {
           console.error(`[SessionManager] Session ${session.id} account error: ${msg}`)
-          this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentId, taskId: session.parentId ? session.id : undefined })
+          this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
           resultText = `Error: ${msg}`
           break
         }
@@ -1159,7 +1175,7 @@ export class SessionManager implements SessionManagerInternals {
 
         // 5. Unrecoverable
         console.error(`[SessionManager] Session ${session.id} error (attempt ${attempt + 1}/${maxRetries}): ${msg}`)
-        this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentId, taskId: session.parentId ? session.id : undefined })
+        this.emitEvent(session.id, { type: 'error', error: msg, agentName: session.agentName, taskId: session.parentId ? session.id : undefined })
         resultText = `Error: ${msg}`
         break
       }
@@ -1274,7 +1290,7 @@ export class SessionManager implements SessionManagerInternals {
     console.debug(`[SessionManager] Auto-report: ${session.id} → parent ${session.parentId} — result: ${result.slice(0, 150)}`)
 
     this.emitEvent(session.parentId, {
-      type: 'agent_done', agentName: session.agentId, agentId: session.agentId,
+      type: 'agent_done', agentName: session.agentName, agentId: session.agentId,
       taskId: session.id, sessionId: session.id, text: result.slice(0, 500),
     })
 
@@ -1295,7 +1311,7 @@ export class SessionManager implements SessionManagerInternals {
       this.emitEvent(session.id, { type: 'user', text: prefix + queued.text, agentName: 'user', report: true, taskId })
 
       if (session.parentId === null) {
-        this.emitEvent(session.id, { type: 'queued_message', text: queued.text.slice(0, 200), agentName: session.agentId })
+        this.emitEvent(session.id, { type: 'queued_message', text: queued.text.slice(0, 200), agentName: session.agentName })
       }
 
       try {
@@ -1620,7 +1636,7 @@ export class SessionManager implements SessionManagerInternals {
           session.warnedToolHashes.clear()
           // Queue is now empty (we took everything) — clear the interrupt flag.
           session.interruptRequested = false
-          this.emitEvent(session.id, { type: 'queued_message', text: next.text, agentName: session.agentId })
+          this.emitEvent(session.id, { type: 'queued_message', text: next.text, agentName: session.agentName })
         }
       } finally {
         session.promise = null
@@ -2046,7 +2062,7 @@ export class SessionManager implements SessionManagerInternals {
     // interrupt path), rather than running the first and leaving the rest.
     const next = this.drainPendingAsOneInput(session)
     if (!next) return
-    this.emitEvent(sessionId, { type: 'queued_message', text: next.text, agentName: session.agentId })
+    this.emitEvent(sessionId, { type: 'queued_message', text: next.text, agentName: session.agentName })
     await this.handleUserTurn(session, next.text, next.images)
   }
 
