@@ -226,17 +226,14 @@ export async function resolveDefaultAgentId(sm: SessionManager, workspacePath: s
 }
 
 export async function execNew(ctx: CommandContext): Promise<CommandResult> {
-  const disabledSet = getDisabledSet(ctx.sm.getDb(), 'agent')
-  const all = await scanAvailableAgents(ctx.workspacePath, disabledSet)
-  // Internal agents (self-evolution etc.) are delegated to by other agents,
-  // never started directly by a channel user — skip them when picking a default.
-  const top = all.filter((a) => !a.disabled && !a.internal).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]
-  const agentId = top?.id ?? 'default'
-  const agentName = top?.name ?? 'default'
+  // Same entry-agent resolution as channel auto-create (resolveDefaultAgentId):
+  // highest-priority non-disabled, non-internal agent, workspace wins ties.
+  // agentName omitted → createSession resolves the real agent.yaml `name`.
+  const agentId = await resolveDefaultAgentId(ctx.sm, ctx.workspacePath)
   const newId = `${ctx.sessionPrefix}${Date.now().toString(36)}`
   const accessLevel = ctx.accessLevel === 'full' ? null : ctx.accessLevel === 'workspace' ? 'workspace' : 'readonly'
   try {
-    await ctx.sm.createSession(agentId, null, ctx.channelLabel, agentName, newId, undefined, accessLevel)
+    await ctx.sm.createSession(agentId, null, ctx.channelLabel, undefined, newId, undefined, accessLevel)
     ctx.activeOverrides.set(ctx.userId, newId)
     return { text: t('new.done', ctx.lang), switchTo: newId }
   } catch (err) {
