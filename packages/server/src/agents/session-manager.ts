@@ -1299,6 +1299,50 @@ export class SessionManager implements SessionManagerInternals {
     })
   }
 
+  /** Root has no parent, so tryReportToParent early-returns for it — root never
+   *  learns whether its OTHER children are still running, and may wrap up early
+   *  after consuming just one child's report. When root consumes a child report,
+   *  append a sibling-status line so the root LLM waits for the rest.
+   *
+   *  "All done" requires BOTH conditions: no sibling still running in the DB
+   *  (stoppedAt IS NULL) AND no sibling report still queued in memory
+   *  (messageQueue) — a child can be stopped while its report is still waiting in
+   *  the queue, so the DB check alone would falsely declare "all done". No
+   *  identity-based exclusion of the reporting child is needed: it stamped its
+   *  own stoppedAt in tryReportToParent before this report was delivered, so it
+   *  is already excluded by `stoppedAt IS NULL` — unless it was re-dispatched a
+   *  new task (resume clears stoppedAt), in which case it SHOULD count as running.
+   *
+   *  Per-child timestamps (created + last active) let a capable model reason
+   *  about whether a still-running sibling was dispatched AFTER an earlier
+   *  wrap-up (a fresh task) rather than being a leftover from the original batch.
+   *
+   *  Mid-tier parents are intentionally excluded (parentId !== null): their
+   *  tryReportToParent bubble-up already gates them on a fully-drained subtree. */
+  private siblingStatusSuffix(session: AgentSession): string {
+    if (session.parentId !== null) return ''
+    const nowIso = new Date().toISOString()
+    const stillRunning = this.db.select({
+        agentName: agentSessions.agentName,
+        description: agentSessions.description,
+        createdAt: agentSessions.createdAt,
+        updatedAt: agentSessions.updatedAt,
+      })
+      .from(agentSessions)
+      .where(and(
+        eq(agentSessions.parentId, session.id),
+        isNull(agentSessions.stoppedAt),
+        isNull(agentSessions.archivedAt),
+      )).all()
+    if (stillRunning.length === 0 && session.messageQueue.length === 0) {
+      return `\n\n[System @ ${nowIso}] All sub-agents you dispatched have completed. This is the final report — you may now consolidate and wrap up.`
+    }
+    const list = stillRunning
+      .map((c) => `  - ${c.agentName} (created ${new Date(c.createdAt).toISOString()}, last active ${new Date(c.updatedAt).toISOString()}): ${c.description.slice(0, 80)}`)
+      .join('\n')
+    return `\n\n[System @ ${nowIso}] Do NOT wrap up yet — ${stillRunning.length} sub-agent(s) still running, ${session.messageQueue.length} report(s) still queued.\nStill running:\n${list}`
+  }
+
   /** Drain queued agent-to-agent messages after a session finishes a turn */
   private async drainQueue(session: AgentSession): Promise<void> {
     while (session.messageQueue.length > 0) {
@@ -1315,7 +1359,7 @@ export class SessionManager implements SessionManagerInternals {
       }
 
       try {
-        await this.runAgentTurn(session, prefix + queued.text)
+        await this.runAgentTurn(session, prefix + queued.text + this.siblingStatusSuffix(session))
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.error(`[SessionManager] Drain run error for ${session.id}: ${errMsg}`)
@@ -1466,7 +1510,7 @@ export class SessionManager implements SessionManagerInternals {
       this.emitEvent(targetSessionId, { type: 'queued_message', text: message.slice(0, 200), agentName: target.agentId })
     }
 
-    this.runSession(targetSessionId, prefix + message).catch((err) => {
+    this.runSession(targetSessionId, prefix + message + this.siblingStatusSuffix(target)).catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error(`[SessionManager] Query run error for ${targetSessionId}: ${errMsg}`)
     })
