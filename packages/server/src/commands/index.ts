@@ -31,6 +31,7 @@ commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', des
   { name: 'interrupt', builtin: true, desc: 'Interrupt the running task' },
   { name: 'compact', builtin: true, desc: 'Compress conversation context' },
   { name: 'context', builtin: true, desc: 'Show context window + agent info' },
+  { name: 'info', builtin: true, desc: 'Show the session tree (descendants)' },
 ] })
 commandRegistry.registerDescriptor({ name: 'workspace', slashName: '/workspace', description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
   { name: 'info', builtin: true, desc: 'Show the current workspace' },

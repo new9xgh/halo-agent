@@ -30,7 +30,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'verb.session.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
   'verb.session.compact':   { zh: '压缩上下文', en: 'Compress conversation context' },
   'verb.session.context':   { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
-  'verb.session.info':      { zh: '查看完整会话树（root + 所有子 agent）', en: 'show the full session tree (root + all sub-agents)' },
+  'verb.session.info':      { zh: '查看完整会话树（root + 所有子 agent）', en: 'Show the full session tree (root + all sub-agents)' },
 
   // ── /agent builtin verb descriptions (shown in `/agent help`) ──
   'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },
