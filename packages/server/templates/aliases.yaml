@@ -6,12 +6,16 @@
 top:
   "/s": "/session"
   "/a": "/agent"
-  "/sk": "/skill"
   "/h": "/help"
+  "/w": "/workspace"
   "/ss": "/session switch"
   "/sl": "/session list"
   "/si": "/session info"
-  "/ws": "/workspace"
+  "/sn": "/session new"
+  "/ws": "/workspace switch"
+  "/wi": "/workspace info"
+  "/as": "/agent switch"
+  "/al": "/agent list"
 verb:
   sw: switch
   ls: list
