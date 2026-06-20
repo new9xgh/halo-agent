@@ -35,7 +35,7 @@ commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', des
 ] })
 commandRegistry.registerDescriptor({ name: 'workspace', slashName: '/workspace', description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
   { name: 'info', builtin: true, desc: 'Show the current workspace' },
-  { name: 'switch', builtin: true, desc: 'Switch workspace (absolute path)' },
+  { name: 'switch', builtin: true, desc: 'Switch workspace (absolute path / a name under $HOME / ~/)' },
   { name: 'setup', desc: 'Set up the .halo knowledge files' },
   { name: 'tidy', desc: 'Tidy/prune the .halo knowledge files' },
   { name: 'share', desc: 'Package the workspace config as a shareable zip' },

@@ -13,11 +13,11 @@ const messages: Record<string, Record<Lang, string>> = {
 
   // ── /workspace builtin verbs ──
   'verb.workspace.info':   { zh: '显示当前 workspace', en: 'Show the current workspace' },
-  'verb.workspace.switch': { zh: '切换 workspace（绝对路径）', en: 'Switch workspace (absolute path)' },
+  'verb.workspace.switch': { zh: '切换 workspace（绝对路径 / $HOME 下的名字 / ~/）', en: 'Switch workspace (absolute path / a name under $HOME / ~/)' },
   'verb.workspace.setup':  { zh: '初始化 .halo 知识库（workspace skill）', en: 'Set up the .halo knowledge files (workspace skill)' },
   'verb.workspace.tidy':   { zh: '整理/清理 .halo 知识库（workspace skill）', en: 'Tidy/prune the .halo knowledge files (workspace skill)' },
   'verb.workspace.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
-  'workspace.switch_usage': { zh: '用法：/workspace switch <绝对路径>', en: 'Usage: /workspace switch <absolute path>' },
+  'workspace.switch_usage': { zh: '用法：/workspace switch <路径>（绝对路径，或相对 $HOME 的名字 / ~/）', en: 'Usage: /workspace switch <path> (absolute, or a name / ~/ relative to $HOME)' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
   'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },
@@ -99,7 +99,6 @@ const messages: Record<string, Record<Lang, string>> = {
   // ── /workspace ──
   'workspace.current': { zh: '当前 workspace:\n{path}', en: 'Current workspace:\n{path}' },
   'workspace.readonly': { zh: '⚠️ readonly 模式不允许切换 workspace', en: '⚠️ Readonly mode cannot switch workspace' },
-  'workspace.must_abs': { zh: 'workspace 必须是绝对路径', en: 'Workspace must be an absolute path' },
   'workspace.not_found': { zh: '路径不存在：{path}', en: 'Path does not exist: {path}' },
   'workspace.same': { zh: '已经在这个 workspace 了', en: 'Already in this workspace' },
   'workspace.done': { zh: '✅ 已切换到：\n{path}', en: '✅ Switched to:\n{path}' },
