@@ -1,0 +1,22 @@
+# 命令别名 / Command aliases.
+# 服务端收到别名后自动展开为完整命令。两类：
+#   - top: 整条前缀替换，"别名": "完整命令"（别名匹配第一段斜杠命令）
+#   - verb: 第二段动词缩写，"缩写": "完整动词"
+# 改完即时生效（每次命令都重新读取），不需重启。删掉本文件则无别名。
+top:
+  "/s": "/session"
+  "/a": "/agent"
+  "/sk": "/skill"
+  "/h": "/help"
+  "/ss": "/session switch"
+  "/sl": "/session list"
+  "/si": "/session info"
+  "/ws": "/workspace"
+verb:
+  sw: switch
+  ls: list
+  i: info
+  n: new
+  ctx: context
+  st: stop
+  int: interrupt

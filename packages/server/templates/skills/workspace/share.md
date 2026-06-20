@@ -19,8 +19,8 @@ file selection, secret redaction, manifest. You orchestrate it and confirm with 
 ### 1. Locate the helper
 
 The script lives at one of these paths (workspace wins if both exist):
-- \`<workspace-root>/.halo/skills/ws/stage.py\`
-- \`~/.halo/global/skills/ws/stage.py\`
+- \`<workspace-root>/.halo/skills/workspace/stage.py\`
+- \`~/.halo/global/skills/workspace/stage.py\`
 
 The two paths above are deterministic, so \`glob\` / \`find\` searches add latency
 without finding anything new. \`file_list\` the workspace skill dir first; if
@@ -29,7 +29,7 @@ no \`stage.py\` there, fall back to the global path.
 ### 2. Run the staging script
 
 The argument is the **workspace root** (the directory containing \`.halo/\`). This is the
-project the user is currently in — same path you'd see in \`/ws\`. Passing \`/home/<user>\`
+project the user is currently in — same path you'd see in \`/workspace\`. Passing \`/home/<user>\`
 or any parent traverses far more than the workspace and pulls in noise.
 
 ```bash

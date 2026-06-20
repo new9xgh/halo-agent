@@ -9,15 +9,15 @@ const messages: Record<string, Record<Lang, string>> = {
   'cmd.help':    { zh: '显示此帮助', en: 'Show available commands' },
   'cmd.clear':   { zh: '清空聊天（/session new 的别名）', en: 'Clear chat (alias for /session new)' },
   'cmd.session': { zh: '管理会话', en: 'Manage sessions' },
-  'cmd.ws':      { zh: '管理 workspace', en: 'Manage the workspace' },
+  'cmd.workspace':      { zh: '管理 workspace', en: 'Manage the workspace' },
 
-  // ── /ws builtin verbs ──
-  'verb.ws.info':   { zh: '显示当前 workspace', en: 'Show the current workspace' },
-  'verb.ws.switch': { zh: '切换 workspace（绝对路径）', en: 'Switch workspace (absolute path)' },
-  'verb.ws.setup':  { zh: '初始化 .halo 知识库（ws skill）', en: 'Set up the .halo knowledge files (ws skill)' },
-  'verb.ws.tidy':   { zh: '整理/清理 .halo 知识库（ws skill）', en: 'Tidy/prune the .halo knowledge files (ws skill)' },
-  'verb.ws.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
-  'ws.switch_usage': { zh: '用法：/ws switch <绝对路径>', en: 'Usage: /ws switch <absolute path>' },
+  // ── /workspace builtin verbs ──
+  'verb.workspace.info':   { zh: '显示当前 workspace', en: 'Show the current workspace' },
+  'verb.workspace.switch': { zh: '切换 workspace（绝对路径）', en: 'Switch workspace (absolute path)' },
+  'verb.workspace.setup':  { zh: '初始化 .halo 知识库（workspace skill）', en: 'Set up the .halo knowledge files (workspace skill)' },
+  'verb.workspace.tidy':   { zh: '整理/清理 .halo 知识库（workspace skill）', en: 'Tidy/prune the .halo knowledge files (workspace skill)' },
+  'verb.workspace.share':  { zh: '打包 workspace 配置为可分享 zip（share-workspace skill）', en: 'Package the workspace config as a shareable zip (share-workspace skill)' },
+  'workspace.switch_usage': { zh: '用法：/workspace switch <绝对路径>', en: 'Usage: /workspace switch <absolute path>' },
   'cmd.evo':     { zh: '触发自我进化:分析当前会话、起草改进建议', en: 'Trigger self-evolution: analyze current session and draft improvement suggestions' },
   'cmd.agent':   { zh: '管理 agent', en: 'Manage agents' },
   'cmd.skill':   { zh: '管理 skill', en: 'Manage skills' },
@@ -30,6 +30,7 @@ const messages: Record<string, Record<Lang, string>> = {
   'verb.session.interrupt': { zh: '打断当前任务（排队消息会在下一轮处理）', en: 'Interrupt the running task (queued messages run next)' },
   'verb.session.compact':   { zh: '压缩上下文', en: 'Compress conversation context' },
   'verb.session.context':   { zh: '查看上下文窗口与 agent 信息', en: 'Show context window + agent info' },
+  'verb.session.info':      { zh: '查看完整会话树（root + 所有子 agent）', en: 'show the full session tree (root + all sub-agents)' },
 
   // ── /agent builtin verb descriptions (shown in `/agent help`) ──
   'verb.agent.list':   { zh: '列出可用的 agent', en: 'List usable agents' },
@@ -95,14 +96,14 @@ const messages: Record<string, Record<Lang, string>> = {
   'switch.readonly': { zh: '⚠️ readonly 模式不允许切换到别人的会话', en: "⚠️ Readonly mode can't switch to others' sessions" },
   'switch.done': { zh: '✅ 已切换到会话 {idx}（{time}）\n{desc}', en: '✅ Switched to session {idx} ({time})\n{desc}' },
 
-  // ── /ws ──
-  'ws.current': { zh: '当前 workspace:\n{path}', en: 'Current workspace:\n{path}' },
-  'ws.readonly': { zh: '⚠️ readonly 模式不允许切换 workspace', en: '⚠️ Readonly mode cannot switch workspace' },
-  'ws.must_abs': { zh: 'workspace 必须是绝对路径', en: 'Workspace must be an absolute path' },
-  'ws.not_found': { zh: '路径不存在：{path}', en: 'Path does not exist: {path}' },
-  'ws.same': { zh: '已经在这个 workspace 了', en: 'Already in this workspace' },
-  'ws.done': { zh: '✅ 已切换到：\n{path}', en: '✅ Switched to:\n{path}' },
-  'ws.failed': { zh: '切换失败：{error}', en: 'Failed to switch: {error}' },
+  // ── /workspace ──
+  'workspace.current': { zh: '当前 workspace:\n{path}', en: 'Current workspace:\n{path}' },
+  'workspace.readonly': { zh: '⚠️ readonly 模式不允许切换 workspace', en: '⚠️ Readonly mode cannot switch workspace' },
+  'workspace.must_abs': { zh: 'workspace 必须是绝对路径', en: 'Workspace must be an absolute path' },
+  'workspace.not_found': { zh: '路径不存在：{path}', en: 'Path does not exist: {path}' },
+  'workspace.same': { zh: '已经在这个 workspace 了', en: 'Already in this workspace' },
+  'workspace.done': { zh: '✅ 已切换到：\n{path}', en: '✅ Switched to:\n{path}' },
+  'workspace.failed': { zh: '切换失败：{error}', en: 'Failed to switch: {error}' },
 
   // ── Unknown command ──
   'cmd.unknown': { zh: '未知命令: {cmd}\n发 /help 查看可用命令', en: 'Unknown command: {cmd}\nSend /help to see available commands' },

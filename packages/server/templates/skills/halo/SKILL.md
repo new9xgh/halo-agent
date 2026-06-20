@@ -31,10 +31,10 @@ Changes take effect on the next conversation or session reset.
 
 ## Organizing the workspace
 
-The `ws` skill handles both initial setup and ongoing cleanup of `.halo/INDEX.md`, `INSTRUCTIONS.md`, and `memory/`.
+The `workspace` skill handles both initial setup and ongoing cleanup of `.halo/INDEX.md`, `INSTRUCTIONS.md`, and `memory/`.
 
-- **No INDEX.md yet** and the user starts engaging with the project's structure or goals (not casual browsing) → suggest `/ws setup`. Drafts INDEX.md + INSTRUCTIONS.md from the README and a few questions.
-- **INDEX.md already exists** and the user wants to "clean up / reorganize" the workspace → `/ws tidy`. Reviews what's there, prunes stale entries, fixes broken links, and reshapes sections without rewriting from scratch.
+- **No INDEX.md yet** and the user starts engaging with the project's structure or goals (not casual browsing) → suggest `/workspace setup`. Drafts INDEX.md + INSTRUCTIONS.md from the README and a few questions.
+- **INDEX.md already exists** and the user wants to "clean up / reorganize" the workspace → `/workspace tidy`. Reviews what's there, prunes stale entries, fixes broken links, and reshapes sections without rewriting from scratch.
 
 ## Editing Scope Rule
 

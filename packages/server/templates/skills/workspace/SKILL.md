@@ -1,7 +1,7 @@
 ---
-name: ws
+name: workspace
 description: Workspace maintenance — set up or tidy the `.halo/` knowledge files (INDEX.md / INSTRUCTIONS.md / memory), or package the workspace config into a shareable zip. Activate when the user asks to set up / organize / clean up the workspace knowledge base, or to share / export the workspace.
-command: /ws
+command: /workspace
 verbs:
   # builtin verbs — access is set in code (SUBCOMMAND_ROUTES); shown here for reference
   - { name: info,   builtin: true, desc: Show the current workspace }
@@ -12,9 +12,9 @@ verbs:
   - { name: share, requiresAccess: full, desc: Package the workspace config as a shareable zip }
 ---
 
-# ws
+# workspace
 
-Workspace maintenance. `info` / `switch` are handled directly by the `/ws`
+Workspace maintenance. `info` / `switch` are handled directly by the `/workspace`
 command and never reach here. This body dispatches the skill verbs — the
 requested action is **`$1`** (full args: `$ARGUMENTS`); with natural-language
 activation, infer it from the request.

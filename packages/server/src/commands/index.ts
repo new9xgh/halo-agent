@@ -32,7 +32,7 @@ commandRegistry.registerDescriptor({ name: 'session', slashName: '/session', des
   { name: 'compact', builtin: true, desc: 'Compress conversation context' },
   { name: 'context', builtin: true, desc: 'Show context window + agent info' },
 ] })
-commandRegistry.registerDescriptor({ name: 'ws',      slashName: '/ws',      description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
+commandRegistry.registerDescriptor({ name: 'workspace', slashName: '/workspace', description: 'Manage the workspace', type: 'server', argHint: '<verb>', source: 'builtin', verbs: [
   { name: 'info', builtin: true, desc: 'Show the current workspace' },
   { name: 'switch', builtin: true, desc: 'Switch workspace (absolute path)' },
   { name: 'setup', desc: 'Set up the .halo knowledge files' },

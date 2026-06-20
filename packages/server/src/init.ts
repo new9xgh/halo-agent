@@ -56,7 +56,7 @@ function resolveDocsSource(): string | null {
  *  this against the marker in `~/.halo/global/.template-version` and re-runs
  *  `ensureHaloHome` when it's behind, so users get docs/agents/skills updates
  *  without having to remember to run `halo setup`. */
-export const TEMPLATE_VERSION = 32
+export const TEMPLATE_VERSION = 34
 const VERSION_FILE = '.template-version'
 
 /** Read the seed version stamped into `~/.halo/global/.template-version`.
@@ -87,7 +87,7 @@ const BUILTIN_AGENT_IDS = new Set([
 const BUILTIN_SKILL_IDS = new Set([
   'agent',
   'skill',
-  'ws',
+  'workspace',
   'cron',
   // Meta-skill: walks the user through generating a per-remote
   // `ask-<label>` ACP binding skill. The generated bindings live in
@@ -466,6 +466,15 @@ export function ensureHaloHome(haloHome: string): void {
   // re-applies them on every startup so updates propagate.
   syncOptionalSkills(globalDir)
 
+  // One-time migration: the `ws` skill was renamed to `workspace`. Remove the
+  // stale `ws` skill dir so it doesn't surface a duplicate /ws command. Safe to
+  // run every startup — no-op once gone.
+  const staleWsSkill = path.join(globalDir, 'skills', 'ws')
+  if (fs.existsSync(staleWsSkill)) {
+    fs.rmSync(staleWsSkill, { recursive: true, force: true })
+    console.log('[Init] Removed stale `ws` skill (renamed to `workspace`)')
+  }
+
   // ── Bundled platform docs ──────────────────────────────────────────────
 
   const docsSrc = resolveDocsSource()
@@ -489,6 +498,12 @@ export function ensureHaloHome(haloHome: string): void {
   // settings.yaml — create empty placeholder if missing; never touch
   // afterwards. Defaults live in settings-schema.ts.
   writeIfMissing(path.join(secretsDir, 'settings.yaml'), '')
+
+  // Command aliases — seed once, never overwritten (user-editable).
+  const aliasesSrc = path.join(TEMPLATES_DIR, 'aliases.yaml')
+  if (fs.existsSync(aliasesSrc)) {
+    writeIfMissing(path.join(globalDir, 'aliases.yaml'), fs.readFileSync(aliasesSrc, 'utf-8'))
+  }
 
   // ── Bookkeeping ───────────────────────────────────────────────────────
 

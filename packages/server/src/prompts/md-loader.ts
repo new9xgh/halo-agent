@@ -215,7 +215,7 @@ export function composeMdPrompt(contents: MdContents, roster = ''): string {
     )
   }
   // When INDEX.md is missing, we inject nothing here — the root agent's
-  // PLATFORM_KNOWLEDGE prompt tells it to suggest /ws setup when the
+  // PLATFORM_KNOWLEDGE prompt tells it to suggest /workspace setup when the
   // user engages with project structure.
 
   return sections.join('\n\n---\n\n')

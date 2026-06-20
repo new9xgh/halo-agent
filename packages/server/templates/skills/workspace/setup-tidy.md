@@ -14,7 +14,7 @@ memory/). The requested mode arrives as **`$1`**:
 
 `file_read .halo/INDEX.md`. If it exists with substantive content, tidy is the
 right mode; if missing or trivially empty, setup is. If this contradicts the
-requested `$1` (e.g. `/ws setup` on an already-initialized workspace), say so
+requested `$1` (e.g. `/workspace setup` on an already-initialized workspace), say so
 and confirm before overwriting anything.
 
 INSTRUCTIONS.md existing alone (without INDEX.md) still means setup — init the

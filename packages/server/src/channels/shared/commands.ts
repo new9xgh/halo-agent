@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
+import YAML from 'yaml'
 import type { SessionManager } from '../../agents/session-manager.js'
 import { scanAvailableAgents, GLOBAL_AGENTS_DIR, GLOBAL_SKILLS_DIR, loadAgentYaml, parseSkillFrontmatter } from '../../agents/agent-loader.js'
 import { ensureWorkspaceHalo } from '../../init.js'
@@ -8,6 +10,55 @@ import { t, type Lang } from './i18n.js'
 import { execSkillCommand, getCommandSkillInfo } from '../../commands/skill-command.js'
 import { commandRegistry } from '../../commands/index.js'
 import { enqueueEvoRun } from '../../evolution/enqueue.js'
+
+// ── Command alias expansion ──────────────────────────────────────────────────
+
+const ALIASES_FILE = path.join(os.homedir(), '.halo', 'global', 'aliases.yaml')
+
+interface AliasCache {
+  mtime: number
+  top: Record<string, string>
+  verb: Record<string, string>
+}
+
+let aliasCache: AliasCache | null = null
+
+function loadAliases(): { top: Record<string, string>; verb: Record<string, string> } {
+  try {
+    const stat = fs.statSync(ALIASES_FILE)
+    const mtime = stat.mtimeMs
+    if (aliasCache && aliasCache.mtime === mtime) return aliasCache
+    const raw = fs.readFileSync(ALIASES_FILE, 'utf-8')
+    const parsed = YAML.parse(raw) ?? {}
+    aliasCache = { mtime, top: parsed.top ?? {}, verb: parsed.verb ?? {} }
+    return aliasCache
+  } catch {
+    return { top: {}, verb: {} }
+  }
+}
+
+/** Expand command alias. Returns potentially updated { command, arg }. */
+export function expandAlias(command: string, arg: string): { command: string; arg: string } {
+  const { top, verb } = loadAliases()
+  let cmd = command
+  let a = arg
+
+  // 1. top-level alias: "/ss" → "/session switch"
+  if (top[cmd]) {
+    const parts = top[cmd].split(/\s+/)
+    cmd = parts[0]
+    const prefix = parts.slice(1).join(' ')
+    a = prefix ? `${prefix} ${a}`.trim() : a
+  }
+
+  // 2. verb alias: first word of arg e.g. "sw" → "switch"
+  const firstWord = a.split(/\s+/)[0] ?? ''
+  if (firstWord && verb[firstWord]) {
+    a = `${verb[firstWord]}${a.slice(firstWord.length)}`
+  }
+
+  return { command: cmd, arg: a }
+}
 
 export interface CommandContext {
   sm: SessionManager
@@ -129,7 +180,7 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
   // a real chat message updated the row — confusingly hiding skills the
   // user just gave themselves permission for.
   // Resolve which agent's skills to list. With an active session, use its
-  // agent. Without one (e.g. right after a `/ws` switch — the channel
+  // agent. Without one (e.g. right after a `/workspace` switch — the channel
   // restarts with no session yet in the new workspace), fall back to
   // `default` so skill commands still show in /help instead of vanishing
   // until the user sends a first message. Mirrors the cold-start fallback
@@ -146,7 +197,7 @@ export async function execHelp(ctx: CommandContext, extraCommands?: Array<string
       const arg = d.argHint ? ` ${d.argHint}` : ''
       // Builtin descriptions live in i18n under `cmd.<name>`; skills keep
       // their SKILL.md description (currently English-only). A few commands
-      // have access-level-aware variants (e.g. /ws is read-only without
+      // have access-level-aware variants (e.g. /workspace is read-only without
       // `full`) — fall through to the generic key when no variant exists.
       let desc: string
       if (d.source === 'builtin') {
@@ -343,6 +394,44 @@ export function formatContextInfo(info: Awaited<ReturnType<SessionManager['getSe
   return lines.join('\n')
 }
 
+export function execSessionInfo(ctx: CommandContext): CommandResult {
+  const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
+  if (!active) return { text: t('list.empty', ctx.lang) }
+
+  const rootId = active.split('>')[0]
+
+  // Access check for non-full users: the root must belong to their prefix.
+  if (ctx.accessLevel !== 'full' && !rootId.startsWith(ctx.sessionPrefix)) {
+    return { text: t('switch.readonly', ctx.lang) }
+  }
+
+  const root = ctx.sm.getSessionById(rootId)
+  const descendants = ctx.sm.listDescendants([rootId])
+  const all = root ? [root, ...descendants] : descendants
+  if (all.length === 0) return { text: t('list.empty', ctx.lang) }
+
+  const locale = ctx.lang === 'zh' ? 'zh-CN' : 'en-US'
+  const rootTitle = ctx.sm.getSessionTitle(rootId)
+  const titleLabel = ctx.lang === 'zh' ? '会话树' : 'Session tree'
+  const lines: string[] = [
+    `🌳 ${titleLabel} · root: ${rootId.slice(-12)}${rootTitle ? ` · ${rootTitle.slice(0, 24)}` : ''}`,
+  ]
+
+  const createdLabel = ctx.lang === 'zh' ? '建' : 'new '
+  const activeLabel = ctx.lang === 'zh' ? '活' : 'act '
+  for (const s of all) {
+    const depth = s.id.split('>').length - 1
+    const agentLabel = s.agentName || ctx.sm.getSessionTitle(s.id) || s.agentId
+    const status = s.archivedAt ? '📦' : s.stoppedAt ? '⏹' : '🟢'
+    const created = new Date(s.createdAt).toLocaleString(locale, { hour12: false })
+    const updated = new Date(s.updatedAt).toLocaleString(locale, { hour12: false })
+    const bullet = depth === 0 ? '→ ' : `${'  '.repeat(depth)}├ `
+    lines.push(`${bullet}${agentLabel} · ${status} · ${createdLabel}${created} · ${activeLabel}${updated}`)
+  }
+
+  return { text: lines.join('\n') }
+}
+
 export async function execContext(ctx: CommandContext): Promise<CommandResult> {
   const active = findActiveSessionId(ctx.sm, ctx.userId, ctx.sessionPrefix, ctx.activeOverrides, ctx.accessLevel)
   if (!active) return { text: t('context.no_session', ctx.lang) }
@@ -405,7 +494,7 @@ export function execNote(ctx: CommandContext, arg: string): CommandResult {
  * channel's frontend or by WS handler before reaching dispatch).
  */
 export const DISPATCH_COMMANDS = [
-  '/help', '/ws', '/evo', '/session', '/agent', '/skill',
+  '/help', '/workspace', '/evo', '/session', '/agent', '/skill',
 ] as const
 
 export async function dispatchCommand(
@@ -414,9 +503,11 @@ export async function dispatchCommand(
   arg: string,
   opts?: { channelName?: string; extraHelpLines?: Array<string | { head: string; desc: string }> },
 ): Promise<CommandResult | null> {
+  // Expand aliases before routing — affects all channels uniformly.
+  ;({ command, arg } = expandAlias(command, arg))
   switch (command) {
     case '/help': return execHelp(ctx, opts?.extraHelpLines)
-    case '/ws': return routeObjectOrSkill(ctx, command, arg)
+    case '/workspace': return routeObjectOrSkill(ctx, command, arg)
     case '/evo': return execNote(ctx, arg)
     // Session lifecycle is an object command: /session new|list|switch|stop|…
     case '/session': return routeObjectOrSkill(ctx, command, arg)
@@ -489,12 +580,12 @@ interface BuiltinVerb {
  * can differ under one `/agent` command.
  */
 const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
-  '/ws': {
-    // info/switch are builtin; setup/tidy/share fall through to the `ws`
+  '/workspace': {
+    // info/switch are builtin; setup/tidy/share fall through to the `workspace`
     // skill (same name as the command — standard semantics), whose verbs:
     // declare their own access.
-    info: { handler: (ctx) => execWsInfo(ctx), descKey: 'verb.ws.info' },
-    switch: { handler: (ctx, subArg) => execWsSwitch(ctx, subArg), requiresAccess: 'full', descKey: 'verb.ws.switch' },
+    info: { handler: (ctx) => execWsInfo(ctx), descKey: 'verb.workspace.info' },
+    switch: { handler: (ctx, subArg) => execWsSwitch(ctx, subArg), requiresAccess: 'full', descKey: 'verb.workspace.switch' },
   },
   '/session': {
     // All open to readonly: new/switch operate within the caller's own access
@@ -502,6 +593,7 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     // interrupt/compact were never gated as top-level commands either.
     new: { handler: (ctx) => execNew(ctx), descKey: 'verb.session.new' },
     list: { handler: (ctx) => execList(ctx), descKey: 'verb.session.list' },
+    info: { handler: (ctx) => execSessionInfo(ctx), descKey: 'verb.session.info' },
     switch: { handler: (ctx, subArg) => execSwitch(ctx, subArg), descKey: 'verb.session.switch' },
     stop: { handler: (ctx) => execStop(ctx), descKey: 'verb.session.stop' },
     interrupt: { handler: (ctx) => execInterrupt(ctx), descKey: 'verb.session.interrupt' },
@@ -884,16 +976,24 @@ async function renderObjectHelp(ctx: CommandContext, command: string): Promise<C
 }
 
 export function execWsInfo(ctx: CommandContext): CommandResult {
-  return { text: t('ws.current', ctx.lang, { path: ctx.workspacePath }) }
+  return { text: t('workspace.current', ctx.lang, { path: ctx.workspacePath }) }
 }
 
 export function execWsSwitch(ctx: CommandContext, arg: string): CommandResult {
   // Access ('full') is gated at the router (SUBCOMMAND_ROUTES) before we get here.
-  if (!arg) return { text: t('ws.switch_usage', ctx.lang) }
-  if (!path.isAbsolute(arg)) return { text: t('ws.must_abs', ctx.lang) }
-  if (!fs.existsSync(arg)) return { text: t('ws.not_found', ctx.lang, { path: arg }) }
-  if (arg === ctx.workspacePath) return { text: t('ws.same', ctx.lang) }
-  ensureWorkspaceHalo(arg)
-  return { text: t('ws.done', ctx.lang, { path: arg }), workspace: { path: arg } }
+  if (!arg) return { text: t('workspace.switch_usage', ctx.lang) }
+
+  // Resolve path: bare name → $HOME/<name>, ~/... → $HOME/...
+  let target = arg.trim()
+  if (target.startsWith('~/')) {
+    target = path.join(os.homedir(), target.slice(2))
+  } else if (!target.startsWith('/')) {
+    target = path.join(os.homedir(), target)
+  }
+
+  if (!fs.existsSync(target)) return { text: t('workspace.not_found', ctx.lang, { path: target }) }
+  if (target === ctx.workspacePath) return { text: t('workspace.same', ctx.lang) }
+  ensureWorkspaceHalo(target)
+  return { text: t('workspace.done', ctx.lang, { path: target }), workspace: { path: target } }
 }
 

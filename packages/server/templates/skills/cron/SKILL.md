@@ -48,7 +48,7 @@ Sensible defaults if user didn't say:
 
 | Field      | Default                                                       |
 |------------|----------------------------------------------------------------|
-| workspace  | the user's current workspace (`pwd` / `/ws` output)           |
+| workspace  | the user's current workspace (`pwd` / `/workspace` output)    |
 | agent      | `default`                                                     |
 | timezone   | leave unset (host time)                                       |
 | targets    | none (log only — the run shows in admin Cron tab)             |

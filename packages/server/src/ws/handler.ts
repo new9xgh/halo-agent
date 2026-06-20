@@ -290,7 +290,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               }
               const cmdName = msg.type.slice('command:'.length)
               // Bind or create the session, just like the `chat` path does.
-              // Skill-backed commands (object verbs like /ws setup, or a
+              // Skill-backed commands (object verbs like /workspace setup, or a
               // skill's own slash command) call `sm.sendUserMessage` under
               // the hood, so a session must exist. Without this, such a
               // command in a fresh chat box errored with "No active session"
