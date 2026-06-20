@@ -20,7 +20,7 @@ The rest are noun-verb **object commands**: `/<obj> <verb> [args]`. Some verbs a
 | `/session` | new / list / info / switch \<n\> / stop / interrupt / compact / context — all built-in, all users (readonly can only switch / inspect its own sessions) |
 | `/agent` | list / switch / desc (built-in, no gate) · delete (built-in, full) · create / update (skill verb, full) |
 | `/skill` | list / desc (built-in, no gate) · disable / enable (built-in, workspace) · delete (built-in, full) · create / update (skill verb, full) |
-| `/workspace` | info (built-in, no gate) · switch (built-in, full) · setup / tidy (skill verb, workspace) · share (skill verb, full) — `/ws` is a built-in alias (see [Command aliases](#command-aliases)) |
+| `/workspace` | info (built-in, no gate) · switch (built-in, full) · setup / tidy (skill verb, workspace) · share (skill verb, full) — `/w` is a built-in alias (see [Command aliases](#command-aliases)) |
 | `/cron` | create / list / update / enable / disable / delete — all skill verbs, full |
 | `/acp` | kiro / claude (ask a local agent directly; question = rest of line) · add / list / remove (manage generated ask-* bindings) — all full |
 
@@ -44,17 +44,17 @@ Resolution starts from the caller's active session, walks up to its root (`id.sp
 
 Two expansion stages run in order (`expandAlias`):
 
-1. **`top`** — whole-prefix replacement of the first slash token. The alias value can carry a verb, which is prepended to the args. E.g. `/ss <n>` → `/session switch <n>`; `/ws` → `/workspace`.
+1. **`top`** — whole-prefix replacement of the first slash token. The alias value can carry a verb, which is prepended to the args. E.g. `/ss <n>` → `/session switch <n>`; `/w` → `/workspace`.
 2. **`verb`** — abbreviation of the first word of the args (the verb). E.g. `/session sw 2` → `/session switch 2`.
 
 The seeded defaults:
 
 | Stage | Alias → expansion |
 |---|---|
-| `top` | `/s`→`/session` · `/a`→`/agent` · `/sk`→`/skill` · `/h`→`/help` · `/ss`→`/session switch` · `/sl`→`/session list` · `/si`→`/session info` · `/ws`→`/workspace` |
+| `top` | `/s`→`/session` · `/a`→`/agent` · `/h`→`/help` · `/w`→`/workspace` · `/ss`→`/session switch` · `/sl`→`/session list` · `/si`→`/session info` · `/sn`→`/session new` · `/ws`→`/workspace switch` · `/wi`→`/workspace info` · `/as`→`/agent switch` · `/al`→`/agent list` |
 | `verb` | `sw`→`switch` · `ls`→`list` · `i`→`info` · `n`→`new` · `ctx`→`context` · `st`→`stop` · `int`→`interrupt` |
 
-So `/ws` (and its verbs) keeps working as a built-in alias for `/workspace info|switch|setup|tidy|share` even though the canonical command is now `/workspace`.
+The canonical command is `/workspace`; `/w` is its bare alias. `/ws` and `/wi` are shortcuts for the two built-in verbs (`/workspace switch` / `/workspace info`), mirroring the `/ss` / `/si` session shortcuts.
 
 ## Cross-channel commands
 
