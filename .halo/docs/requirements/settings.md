@@ -8,7 +8,7 @@ Global + workspace configuration. The shape mirrors VSCode's `contributes.config
 # ~/.halo/secrets/settings.yaml — values only
 general:                                  # built-in declarer (server itself)
   session:
-    max_queue_size: 3
+    max_queue_size: 256
     max_nesting_depth: 16
   compact:
     keep_messages: 5

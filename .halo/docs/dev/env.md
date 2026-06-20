@@ -100,7 +100,7 @@ Source: `packages/server/src/config.ts`
 | `HALO_LOG_MAX_FILES` | `5` | `config.yaml logging.max_files` | Retained rotated logs |
 
 settings.yaml only (no env override):
-- `general.session.max_queue_size` (default 3)
+- `general.session.max_queue_size` (default 256)
 - `general.session.max_nesting_depth` (default 16)
 - `general.agent.max_retries` (default 5)
 - `general.compact.keep_messages` (default 5) — recent messages to keep uncompacted

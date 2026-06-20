@@ -346,7 +346,7 @@ export const config = {
 
   session: {
     maxCachedSessions: envInt('HALO_MAX_CACHED_SESSIONS', 50),
-    maxQueueSize: settingsInt('general.session.max_queue_size', 3),
+    maxQueueSize: settingsInt('general.session.max_queue_size', 256),
     maxNestingDepth: settingsInt('general.session.max_nesting_depth', 16),
   },
 

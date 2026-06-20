@@ -136,7 +136,7 @@ Source: `packages/server/src/config.ts`
 | `model.compressAt` | 0.8 | Auto-compact threshold (80%) |
 | `agent.maxRetries` | 5 | Max retry count (settings: `general.agent.max_retries`) |
 | `session.maxCachedSessions` | 50 | In-memory session cache (env: `HALO_MAX_CACHED_SESSIONS`) |
-| `session.maxQueueSize` | 3 | inter-session message queue cap (settings: `general.session.max_queue_size`) |
+| `session.maxQueueSize` | 256 | inter-session message queue cap (settings: `general.session.max_queue_size`) |
 | `session.maxNestingDepth` | 16 | Max session nesting depth (settings: `general.session.max_nesting_depth`) |
 
 Note: there is no `model.defaultModelId` — model ID must be specified per-agent in `agent.yaml`.

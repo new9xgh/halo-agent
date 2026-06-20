@@ -128,7 +128,7 @@ function generalSection(): SchemaSection {
       // agent scaffold
       { key: 'agent.default_provider', type: 'enum', options: providerIds, description: 'Provider used when scaffolding a new agent. Model id, endpoint, prompt-caching TTL, and thinking defaults are read from that provider\'s YAML.', description_zh: '新建 agent 时使用的供应商。模型 id、endpoint、提示缓存 TTL、Thinking 默认值都从该供应商的 YAML 读取。', default: defaultProvider },
       // session
-      { key: 'session.max_queue_size', type: 'int', description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '3' },
+      { key: 'session.max_queue_size', type: 'int', description: 'Maximum queued messages per session', description_zh: '每个会话最大排队消息数', default: '256' },
       { key: 'session.max_nesting_depth', type: 'int', description: 'Maximum session nesting depth for agent delegation', description_zh: 'Agent 委派的最大会话嵌套深度', default: '16' },
       // compact
       { key: 'compact.compress_at', type: 'float', description: 'Auto-compact threshold as a fraction of max context (e.g. 0.8 = compact when 80% full)', description_zh: '自动压缩阈值，最大上下文的比例（如 0.8 表示用满 80% 时压缩）', default: '0.8' },

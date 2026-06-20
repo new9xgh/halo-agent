@@ -275,7 +275,7 @@ Layout follows VSCode's `contributes.configuration` model: schema lives with eac
 
 general:                                  # built-in declarer (the server itself)
   session:
-    max_queue_size: 3
+    max_queue_size: 256
     max_nesting_depth: 16
   compact:
     keep_messages: 5
@@ -326,7 +326,7 @@ A value of the form `<<ENV_NAME>>` is replaced at read time with `process.env.EN
 
 | Path | Default | Notes |
 |---|---|---|
-| `general.session.max_queue_size` | 3 | Max queued messages per session |
+| `general.session.max_queue_size` | 256 | Max queued messages per session |
 | `general.session.max_nesting_depth` | 16 | Sub-session nesting cap |
 | `general.compact.keep_messages` | 5 | Recent messages kept intact during compaction |
 | `general.compact.max_summary_input` | 15000 | Local truncation fallback total char cap |
