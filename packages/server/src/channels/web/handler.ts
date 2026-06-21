@@ -147,7 +147,9 @@ export function createWebChannel(deps: {
           const event = queue.shift()!
           const sse = processEvent(event)
           if (sse) yield sse
-          if (event.type === 'complete') { done = true; break }
+          // A batch-boundary complete is a per-turn flush, not the end of the
+          // response — keep the stream open (more drain turns follow).
+          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
           if (event.type === 'error') { done = true; break }
         }
       }
@@ -285,7 +287,9 @@ export function createWebChannel(deps: {
           const event = queue.shift()!
           const sse = processEvent(event)
           if (sse) yield sse
-          if (event.type === 'complete') { done = true; break }
+          // A batch-boundary complete is a per-turn flush, not the end of the
+          // response — keep the stream open (more drain turns follow).
+          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
           if (event.type === 'error') { done = true; break }
         }
       }
@@ -382,7 +386,9 @@ export function createWebChannel(deps: {
           const event = queue.shift()!
           const sse = processEvent(event)
           if (sse) yield sse
-          if (event.type === 'complete') { done = true; break }
+          // A batch-boundary complete is a per-turn flush, not the end of the
+          // response — keep the stream open (more drain turns follow).
+          if (event.type === 'complete' && !event.batchBoundary) { done = true; break }
           if (event.type === 'error') { done = true; break }
         }
       }
@@ -447,7 +453,11 @@ function createMediaBuffer() {
         return out
       }
       case 'complete': {
-        const out = flushAll() + sseData({ type: 'complete' })
+        // A batch-boundary complete flushes the just-finished drain turn's text
+        // (so it ships now, not buffered to the terminal complete) but emits NO
+        // `complete` SSE frame — the stream stays open for the next drain turn.
+        // Only the terminal complete closes the SSE response.
+        const out = flushAll() + (event.batchBoundary ? '' : sseData({ type: 'complete' }))
         return out
       }
       case 'error': {

@@ -204,7 +204,7 @@ No arguments. Returns JSON:
 
 ### query_session
 
-Send a message to another session. Idle = immediate run, busy = queued. Reply is delivered asynchronously.
+Send a message to another session. Idle = immediate run, busy = queued + soft interrupt. Reply is delivered asynchronously.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
@@ -212,9 +212,13 @@ Send a message to another session. Idle = immediate run, busy = queued. Reply is
 | `message` | string | yes | Message content |
 | `scope` | string | no | Workspace-relative directory whose `.halo/INSTRUCTIONS.md` (root→dir path) is injected into **this message only** — one-shot, doesn't persist to the target's later turns, doesn't change where tools run |
 
+**Busy = soft interrupt (merge-answer parity)**: when the target is busy, `query_session` enqueues the message **and** requests a soft interrupt (same as a user message arriving mid-turn) — the in-flight turn unwinds after its current tool, then every message that landed alongside it drains as **one merged turn**. So a sub-agent asked two questions while busy answers them **together**, not one-by-one — matching how root folds two user messages. No message is dropped. (Before 0.1.4 a busy `query_session` was pure no-interrupt enqueue, which made sub-agents reply one question at a time.)
+
+**Queue cap (backpressure)**: when the target is busy, `query_session` is rejected with `{"code": 1, "error": "...message queue is full (N/max)..."}` once the target's queued **agent-sourced** messages reach `session.maxQueueSize` (default 256, settings `general.session.max_queue_size`). The cap counts **only agent→agent entries** — user messages share the same queue but are immune to backpressure (a human can't hand-type up to the cap, and counting them would let user chatter consume the agents' budget). `interrupt_session` is a deliberate action and bypasses the cap entirely.
+
 ### interrupt_session
 
-Interrupt a running session **immediately** — aborts the in-flight task, including a command that is mid-execution (the abort signal propagates to `shell_exec`, which SIGTERMs the child process) — then re-runs with a new message. The conversation history is preserved (repaired, not discarded).
+Equivalent to `query_session` **plus an immediate abort** of the in-flight turn. The message is enqueued and traced right away (exactly like `query_session`); aborting then makes the queue drain **now** rather than after the current turn finishes, so the enqueued message is folded into the very next merged turn. The abort is hard — it propagates to `shell_exec` and SIGTERMs a command mid-execution (contrast the soft interrupt `query_session` and a busy user message trigger, which wait for the current `tool_result`). For a **compound** command (`sleep 60 && …`) under `full` access, the kill reaches the real worker because the command runs as a **process-group leader** and the whole group is signalled — before 0.1.4 the abort only hit the wrapping `/bin/sh`, leaving the worker to orphan and run to completion (which made `interrupt_session` look like it didn't interrupt). See [session.md → Process-group kill on abort](../design/session.md#process-group-kill-on-abort). Conversation history is preserved (repaired, not discarded), and `interrupt_session` bypasses the `query_session` queue cap.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|
@@ -224,7 +228,7 @@ Interrupt a running session **immediately** — aborts the in-flight task, inclu
 
 ### stop_session
 
-Abort the current task of a running session. Discards queued messages. The session stays usable — later `query_session` calls continue the conversation.
+Abort the current task of a running session. Any queued messages are **not** dropped — they are folded into the conversation history before the abort, so nothing said while the session was busy is lost. The session stays usable — later `query_session` calls continue the conversation.
 
 | Arg | Type | Required | Description |
 |---|---|---|---|

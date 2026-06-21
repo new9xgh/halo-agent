@@ -56,8 +56,8 @@ Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 
 | `createSession(agentId, parentId, description, agentName?, explicitId?, workingDir?, accessLevel?)` | Create a session (SQLite + memory). `workingDir` = absolute path at runtime, stored as workspace-relative in DB; null = project root. `accessLevel` = `'readonly'`, `'workspace'`, or `null` (full). |
 | `sendUserMessage(sessionId, text, images?)` | Send a message — run immediately if idle, queue if busy |
 | `compactSession(sessionId)` | LLM-summary compact |
-| `interruptSession(sessionId, newMessage)` | Abort + repair + asynchronously re-run with a new message |
-| `stopSession(sessionId)` | Abort + repair, no re-run, sets `stoppedAt` |
+| `interruptSession(sessionId)` | Abort the in-flight turn now (fire-and-forget); `interruptRequested` is set so the unwind repairs rather than errors, then the queued message drains. Shared by esc and the `interrupt_session` tool |
+| `stopSession(sessionId)` | Fold the whole `messageQueue` into `agent.messages` (preserve, don't drop), abort + repair, no re-run, sets `stoppedAt`. Cascades to descendants |
 | `deleteSession(sessionId)` | Cascade-delete a session and all descendants (SQLite) |
 | `ensureSession(sessionId)` | Restore agent from disk if not in memory (calls `loadAgentState` internally) |
 | `registerEventListener(rootSessionId, handler)` | Event routing per session tree |
@@ -75,12 +75,11 @@ interface AgentSession {
   output: string
   promise: Promise<string> | null  // non-null = running
   abortController: AbortController | null
-  messageQueue: QueuedMessage[]    // agent-to-agent queue
-  pendingUserMessages: Array<{text, images?}>
+  messageQueue: QueuedMessage[]    // single unified queue: user→agent AND agent→agent
   toolCallLog: Array<{name, inputHash}>   // loop detection
   contextConfig: { maxTokens, compressAt }
   isCompacting: boolean
-  skipRelease?: boolean            // keep instance alive during interrupt
+  interruptRequested: boolean      // soft-interrupt flag — abort after the current tool_result
   workingDir: string | null        // resolved working directory (null = project root)
   accessLevel: 'readonly' | 'workspace' | null   // non-null routes tool execution through bwrap sandbox; null = full access
 }
@@ -111,7 +110,7 @@ Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 
 - **Lazy loading**: agent instances are released after each turn finishes
 - **State persistence**: on release, `agent.messages` (rawMessages) + output land at `.halo/sessions/{agentId}/{sessionId}.json`
-- **Auto-report** (`tryReportToParent`): when `runSession` finishes and the session becomes idle (`promise = null`), the `runSession` finally-block checks `!skipRelease` first, then calls `tryReportToParent` which checks:
+- **Auto-report** (`tryReportToParent`): when `runSession` finishes and the session becomes idle (`promise = null`), the `runSession` finally-block sets `promise = null`, emits the terminal `complete` (root only), then calls `tryReportToParent` which checks:
   1. `parentId !== null`
   2. DB shows no active children
 
@@ -119,8 +118,41 @@ Hierarchical encoding: `root_id>child_segment>grandchild_segment`.
 
 - **Sibling-status injection for root** (`siblingStatusSuffix`): `tryReportToParent` early-returns for root (`parentId === null`) since there's no parent to bubble up to — so root never learns whether its *other* children are still running, and the root LLM could wrap up early after consuming just one child's report. When root consumes a child report (`querySession` idle branch + `drainQueue`), a sibling-status line is appended to the message fed to the LLM. "All sub-agents done" requires **both** no sibling running in the DB (`parentId = root AND stoppedAt IS NULL`) **and** an empty in-memory `messageQueue` — a child can be stopped while its report is still queued, so the DB check alone would falsely declare completion. The reporting child needs no identity exclusion: it stamped `stoppedAt` before the report was delivered, so `stoppedAt IS NULL` already excludes it (unless re-dispatched a new task, which clears `stoppedAt` — then it correctly counts as running). The line carries per-child `created` + `last active` timestamps so a capable model can tell a freshly dispatched sibling from an original-batch leftover. Mid-tier parents are excluded by design — their `tryReportToParent` bubble-up already gates them on a fully-drained subtree.
 
-- **interruptSession**: abort + wait for the old run to end + repair. Clears `stoppedAt`. Does not re-run — the caller fires a new `runSession` asynchronously.
-- **skipRelease flag**: blocks both the `runSession` finally-block release and auto-report, so `interrupt` can keep the instance in memory for the re-run.
+- **interruptSession**: fire-and-forget abort of the in-flight turn — it sets `interruptRequested` so `runAgentTurn`'s unwind repairs (not errors), then aborts. It does **not** await or re-run: once the aborted turn unwinds, `runSession`'s finally sees the non-empty queue and `drainQueue` folds the queued message into one merged follow-up turn. The `interrupt_session` tool reaches this via `querySession(..., interrupt=true)` (enqueue + abort), so there is no separate re-run path or `skipRelease` bookkeeping.
+
+### Message queue and drain
+
+> **History**: earlier builds ran **two** parallel queues — `messageQueue` for agent→agent (`query_session` / `interrupt_session` / auto-report) and `pendingUserMessages` for user→agent (channel sends during a busy turn), each with its own enqueue / drain / stop-clear / fold paths. They are now unified into a **single `messageQueue` + single `drainQueue` + single `runSession` loop**. Entries keep their meaningful differences (a `sourceSessionId` marks agent entries; user entries carry `images` and no source), but they share one queue and one drain path.
+
+A `QueuedMessage` is `{ text, sourceSessionId?, images? }`: `sourceSessionId` is set for agent→agent entries (drives the `(from: session X)` prefix and the sibling-status suffix) and absent for user messages; `images` is the user multimodal payload (agent entries have none).
+
+**runSession loop** (`runSession(sessionId, message)`, `message: string | ContentBlock[]`): runs the opening turn when there is one, then drains. An empty **string** message means "the work is already in `messageQueue`" (the `querySession` idle path) — it skips the opening turn and goes straight to drain. The per-turn reset (fresh `toolCallLog` / `warnedToolHashes`, `interruptRequested = false`) runs before the opening turn; `drainQueue` repeats the same reset before each merged batch so a stale interrupt flag never leaks across turns.
+
+**drainQueue** folds the **whole queue** into ONE merged follow-up turn per round, re-checking after each round (a fresh interrupt or a sibling's report can land mid-drain):
+- The batch is `splice(0)`'d; agent entries keep a `(from: session X)` prefix, user entries fold raw, and all entries' `images` are merged in.
+- The `siblingStatusSuffix` is appended **only** when the batch carries at least one agent report (`batch.some(sourceSessionId)`) — a pure-user batch must not trigger "all sub-agents completed" noise.
+- **`queued_message` is emitted here and only here** — once per merged batch, root only (it opens a fresh streaming assistant bubble; the text is cosmetic, downstream reads only `{chat:followup, agentName}`). `querySession`'s enqueue path emits just a `type:'user'` trace, never `queued_message`, so N reports folding into one turn produce **one** bubble, not N ghost bubbles.
+
+**`complete` invariants** (root only):
+- The **terminal** `complete` is emitted from `runSession`'s `finally`, and `promise = null` is set **before** emitting it — the CLI / web stream-close logic gates on `complete && !hasRunningSessions()`, which reads `promise !== null`; emitting `complete` first would leave the session still "running" at the moment the client decides whether to close.
+- **`batchBoundary` complete**: when a merged round finishes **and the queue still has a next round**, `drainQueue` emits `{ type: 'complete', batchBoundary: true }`. This is a per-round flush signal for **block-oriented channels** (wechat / telegram / slack / feishu), which buffer streamed text and only ship a message on `complete` — without it, N drain rounds buffer into one blob that lands only at the terminal `complete` ("8 reports in one lump"). **Stream-terminating consumers (web-channel SSE, ACP) must ignore `batchBoundary` and keep the stream open** — the root is still running and more output follows; only the terminal (unmarked) `complete` closes the stream. See [web.md](web.md) and the per-channel coalescing notes (e.g. [wechat.md](wechat.md)). The field is **not** carried into the WS protocol — admin closes its bubble on `chat:complete` either way.
+
+**Three-tier interrupt model** — two **soft** paths and one **hard** path, distinguished by *when* the abort fires, never by whether the message is kept (all three preserve the queue):
+1. **`query_session` while busy — soft interrupt.** `querySession(..., interrupt=false)` enqueues **and** sets `interruptRequested` (same as a user message). This is what makes a sub-agent fold two queued questions into **one merged answer** instead of replying one-by-one: the in-flight turn unwinds after its current tool, then `drainQueue`'s `splice(0)` folds every message that landed alongside it into a single round — matching how root handles two user messages. An **idle** target has no turn to interrupt, so it just runs the message directly.
+2. **User message while busy — soft interrupt.** `sendUserMessage` (busy branch) pushes the message and sets `interruptRequested`. The graceful point is **after a `tool_result`**: `runAgentTurn` aborts only once the current tool finishes, so a mid-flight `shell_exec` is **not** killed — it runs to completion, then the turn unwinds and `drainQueue` folds the message into the next round.
+3. **`interrupt_session` — hard interrupt.** `querySession(..., interrupt=true)` enqueues, then `interruptSession` aborts **immediately** (not at the next `tool_result`), so a mid-flight command **is** SIGTERM'd. For this to actually kill a *compound* command (`sleep 60 && …`), the `full`-access shell path runs the command as a **process-group leader** and signals the whole group — see [Process-group kill](#process-group-kill-on-abort) below. The enqueued message drains on the same wake-up.
+
+**Stop preserves, archive discards.** Both `stopSession` and `stopUserSession` (the user Stop button) fold the **whole** `messageQueue` into `agent.messages` as a user turn (user entries raw, agent entries with their `(from: session X)` prefix) **before** aborting, then `repairConversationMessages` — a stop **parks** the work, it never drops a queued message (mirrors interrupt, which also never loses one). `archiveSession`, by contrast, clears the queue without folding — archiving a subtree is a deliberate discard.
+
+#### Process-group kill on abort
+
+A hard interrupt aborts the turn's `AbortSignal`, which `agent-loop.ts` forwards into the tool callback (`shell_exec` → `sandboxExec`). For the abort to actually stop the running command, the kill has to reach the **real worker process**, not just the shell wrapping it:
+
+- **`full` access (non-Windows)** spawns via `spawn(command, { shell: true, detached: true })` so the command becomes a **process-group leader** (`pgid === child.pid`). On abort *or* timeout, `process.kill(-pid, 'SIGTERM')` signals the **whole group**, so a compound command's worker dies with the shell.
+- **Why not `execAsync(command, { signal })`** (the previous implementation): `exec` wraps the command in `/bin/sh -c "<command>"` and, on abort, only SIGTERMs that `sh`. A compound command (`sleep 60 && …`) has already forked the real worker (`sleep`) as a child of `sh` — the signal never reaches it, so it **reparents to init (PPID 1) and runs to completion as an orphan**. The agent turn unwinds correctly (the promise rejects), but the command keeps running, which made `interrupt_session` *look* like it didn't really interrupt. Single non-compound commands didn't expose it (Node optimizes them to a direct `exec` with no `sh` layer).
+- **`workspace` / `readonly` access** run under `bwrap` with `--die-with-parent`, a kernel-level guarantee that the sandboxed child dies with its parent — that path was never affected and is unchanged. **Windows** `full` keeps the `execAsync` path (no process groups; the orphan case doesn't arise the same way).
+
+The `spawnGroupExec` helper preserves `promisify(exec)`'s contract exactly: resolve `{ stdout, stderr }` on exit 0; reject with an `Error` carrying `.message` / `.stdout` / `.stderr` / `.code` otherwise (abort rejects with `name: 'AbortError'`). Covered by `test/sandbox-process-group.test.ts`, which asserts by side effect — a sentinel file the orphaned worker *would* create must never appear after the abort.
 
 ### Event routing
 

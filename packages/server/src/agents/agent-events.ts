@@ -46,6 +46,13 @@ export interface AgentSessionEvent {
    *  local desktop/admin send). Must NOT be echoed back over WS or the user's
    *  message shows up twice. */
   localEcho?: boolean
+  /** Marks a `complete` emitted BETWEEN drain batches (drainQueue runs N merged
+   *  turns; each but the last is a batch boundary). Block-oriented channels
+   *  (wechat/telegram/slack/feishu) flush their text buffer per `complete`, so
+   *  this lets them ship each turn as its own message instead of one blob.
+   *  Stream-terminating consumers (web-channel SSE, ACP) must NOT end on it —
+   *  the root session is still running and more output follows. */
+  batchBoundary?: boolean
 }
 
 /** @deprecated Use AgentSessionEvent — kept as alias during migration */

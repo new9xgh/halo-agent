@@ -3,7 +3,7 @@
  * Linux: bubblewrap (bwrap) — filesystem + env isolation.
  * Other platforms: no-op passthrough (app-level validation is the fallback).
  */
-import { exec, execFile } from 'node:child_process'
+import { exec, execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -56,6 +56,90 @@ async function bwrapExec(args: string[], opts?: { timeout?: number; maxBuffer?: 
     e.message = stripBwrapArgs(e.message)
     throw e
   }
+}
+
+/**
+ * Run a command via `spawn(command, { shell: true, detached: true })` so it
+ * becomes a process-GROUP leader, then kill the WHOLE group on abort/timeout.
+ *
+ * Why not `execAsync(command, { signal })`: exec wraps the command in
+ * `/bin/sh -c "<command>"` and, on abort, only SIGTERMs that `sh`. For a
+ * compound command (`sleep 60 && …`) sh has already forked the real worker
+ * (`sleep`), which does NOT receive the signal — it reparents to init and runs
+ * to completion as an orphan. The agent turn unwinds (the promise rejects), but
+ * the mid-flight command keeps running. `interrupt_session`'s hard-abort then
+ * looks like it "didn't really interrupt". detached:true puts the command in
+ * its own group (pgid === child.pid); `process.kill(-pid, …)` signals every
+ * member, so the worker dies with the shell.
+ *
+ * Contract mirrors promisify(exec): resolve `{ stdout, stderr }` on exit 0;
+ * reject with an Error carrying `.message`/`.stdout`/`.stderr`/`.code` otherwise.
+ */
+function spawnGroupExec(
+  command: string,
+  opts: { cwd: string; timeout?: number; maxBuffer?: number; signal?: AbortSignal },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, { shell: true, detached: true, cwd: opts.cwd })
+    let stdout = ''
+    let stderr = ''
+    let killReason: 'timeout' | 'abort' | null = null
+    let settled = false
+    const maxBuffer = opts.maxBuffer ?? 1024 * 1024
+
+    // Negative pid → signal the whole process group. Guarded: the group is gone
+    // once the child exits, so a late kill throws ESRCH which we swallow.
+    const killGroup = (sig: NodeJS.Signals): void => {
+      try { if (child.pid) process.kill(-child.pid, sig) } catch { /* already dead */ }
+    }
+
+    const timer = opts.timeout
+      ? setTimeout(() => { killReason = 'timeout'; killGroup('SIGTERM') }, opts.timeout)
+      : null
+    const onAbort = (): void => { killReason = 'abort'; killGroup('SIGTERM') }
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort()
+      else opts.signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', onAbort)
+    }
+    const settle = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      fn()
+    }
+
+    child.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString('utf-8')
+      if (stdout.length > maxBuffer) { stdout = stdout.slice(0, maxBuffer); killReason = 'timeout'; killGroup('SIGTERM') }
+    })
+    child.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString('utf-8')
+      if (stderr.length > maxBuffer) { stderr = stderr.slice(0, maxBuffer); killReason = 'timeout'; killGroup('SIGTERM') }
+    })
+
+    child.on('error', (err) => {
+      settle(() => reject(Object.assign(err, { stdout, stderr })))
+    })
+    child.on('close', (code, signal) => {
+      settle(() => {
+        if (killReason === 'abort') {
+          // Match execAsync's abort shape so callers detect cancellation.
+          reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError', stdout, stderr, code }))
+        } else if (killReason === 'timeout') {
+          reject(Object.assign(new Error(`Command timed out`), { stdout, stderr, killed: true, signal }))
+        } else if (code === 0) {
+          resolve({ stdout, stderr })
+        } else {
+          reject(Object.assign(new Error(`Command failed: ${command}`), { stdout, stderr, code }))
+        }
+      })
+    })
+  })
 }
 
 export type AccessLevel = 'full' | 'workspace' | 'readonly'
@@ -326,13 +410,15 @@ export async function sandboxExec(command: string, opts: SandboxOptions): Promis
         stderr: decodeWinOutput(result.stderr as unknown as Buffer),
       }
     }
-    const result = await execAsync(command, {
+    // Non-Windows full access: spawn as a process-group leader so a hard abort
+    // (interrupt_session) / timeout kills the whole tree, not just the wrapping
+    // `/bin/sh` — otherwise a compound command's real worker orphans and runs on.
+    return spawnGroupExec(command, {
       cwd: opts.workspaceRoot,
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       signal: opts.signal,
     })
-    return { stdout: result.stdout, stderr: result.stderr }
   }
 
   const bwrapOk = await isBwrapAvailable()

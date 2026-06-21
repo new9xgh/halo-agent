@@ -136,7 +136,16 @@ export abstract class AgentLoop {
     const userContent: ContentBlock[] = typeof input === 'string'
       ? [{ type: 'text', text: input }]
       : input
-    this.messages.push({ role: 'user', content: userContent })
+    // Coalesce into a trailing user message rather than pushing a second one:
+    // Anthropic rejects consecutive same-role messages. A dangling user turn
+    // can be left by an aborted turn (assistant stripped on abort) or parked by
+    // stopSession's queue-preservation fold — the next run must merge into it.
+    const last = this.messages[this.messages.length - 1]
+    if (last?.role === 'user' && Array.isArray(last.content)) {
+      last.content.push(...userContent)
+    } else {
+      this.messages.push({ role: 'user', content: userContent })
+    }
 
     while (true) {
       if (options?.cancelSignal?.aborted) return

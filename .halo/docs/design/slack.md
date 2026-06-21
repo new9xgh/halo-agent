@@ -116,6 +116,7 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
    - Extract `MEDIA: <path>` markers (sent as native file uploads)
    - Convert CommonMark → Slack's mrkdwn format
    - Post as a single message (or series of messages if split)
+   - This fires on **any** `complete`; the responder ignores its `batchBoundary` flag, so a multi-round queue drain posts each merged turn as its own message rather than one blob (see [session.md](session.md#message-queue-and-drain))
 4. Errors and system notices flush immediately (don't wait for complete)
 5. Sub-agent events (taskId set) are dropped (visible in web UI only)
 

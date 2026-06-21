@@ -53,7 +53,7 @@ function ctxFor(sm: SessionManager, accessLevel: 'full' | 'workspace' | 'readonl
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'halo-cmdroute-'))
-  writeAgent('default', ['skill', 'ws'])
+  writeAgent('default', ['skill', 'workspace'])
 })
 afterEach(() => { rmSync(ws, { recursive: true, force: true }) })
 
@@ -135,9 +135,9 @@ describe('/skill verbs', () => {
 
 describe('skill verb fallback (create/update style)', () => {
   beforeEach(() => {
-    // Object skill `ws` with a workspace-gated skill verb `setup`.
-    writeSkill('ws', [
-      'name: ws', 'description: workspace maintenance', 'command: /ws',
+    // Object skill `workspace` with a workspace-gated skill verb `setup`.
+    writeSkill('workspace', [
+      'name: workspace', 'description: workspace maintenance', 'command: /workspace',
       'verbs:',
       '  - { name: info, builtin: true, desc: i }',
       '  - { name: setup, requiresAccess: workspace, desc: s }',
@@ -145,23 +145,23 @@ describe('skill verb fallback (create/update style)', () => {
   })
 
   it('skill verb below gate is rejected at the router (before any session lookup)', async () => {
-    const res = await dispatchCommand(ctxFor(new SessionManager(ws), 'readonly'), '/ws', 'setup')
+    const res = await dispatchCommand(ctxFor(new SessionManager(ws), 'readonly'), '/workspace', 'setup')
     expect(res?.text).toMatch(/requires workspace/)
   })
 
   it('skill verb with access + active session activates the skill (startedTurn)', async () => {
     const sm = new SessionManager(ws)
     seedSession(sm, 'web_s1')
-    const res = await dispatchCommand(ctxFor(sm, 'full'), '/ws', 'setup')
+    const res = await dispatchCommand(ctxFor(sm, 'full'), '/workspace', 'setup')
     expect(res?.startedTurn).toBe(true)
     expect(res?.sessionId).toBe('web_s1')
   })
 
   it('skill verb without whitelist is refused by execSkillCommand', async () => {
-    writeAgent('default', []) // ws not whitelisted
+    writeAgent('default', []) // workspace skill not whitelisted
     const sm = new SessionManager(ws)
     seedSession(sm, 'web_s2')
-    const res = await dispatchCommand(ctxFor(sm, 'full'), '/ws', 'setup')
+    const res = await dispatchCommand(ctxFor(sm, 'full'), '/workspace', 'setup')
     expect(res?.text).toMatch(/not available/)
   })
 })

@@ -125,7 +125,7 @@ Unknown `/` input falls through to normal message handling.
 
 WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "buffer the whole turn, flush as one message":
 - `stream` events accumulate in a single buffer
-- `complete` → flush the whole buffer as one (or more) messages
+- `complete` → flush the whole buffer as one (or more) messages. The responder flushes on **any** `complete` and does not read its `batchBoundary` flag — so when the root drains a multi-message queue across several merged turns (see [session.md](session.md#message-queue-and-drain)), each round's batch-boundary `complete` ships that round as its own message instead of buffering every round into one blob that lands only at the terminal `complete` (the "8 reports in one lump" bug)
 - Hard cap `HARD_CHARS = 3500` (WeChat rejects >~4000) — when the buffer reaches it mid-stream, split at the nearest paragraph break and dispatch; remaining text keeps accumulating
 - `error` → immediate flush + send a `[错误] …` message; `system` → immediate flush + send a `[系统] …` message
 - Tool calls / tool results / thinking are dropped (detail lives in the web UI)

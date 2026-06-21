@@ -10,8 +10,6 @@
  * Adding a new sub-agent tool? Add a `ToolDef` here and include it in the
  * returned array. SessionManager.createSessionTools just delegates here.
  */
-import { eq } from 'drizzle-orm'
-import { agentSessions } from '../db/schema.js'
 import { config } from '../config.js'
 import { loadAgentYaml, scanAvailableAgents, loadSkillMetadata, isAgentDisabled } from './agent-loader.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
@@ -178,26 +176,17 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
           if (scopeBlock) message = `${scopeBlock}\n\n${message}`
         }
 
-        // Abort the sub-agent's current turn and wait for it to unwind before
-        // re-running, so the fresh runSession below doesn't race the aborted
-        // turn's finally over session.promise.
-        await sm.interruptSessionForRerun(params.session_id)
-
-        // Clear stoppedAt in case it was set by a previous stop or tryReportToParent
-        sm.getDb().update(agentSessions).set({ stoppedAt: null }).where(eq(agentSessions.id, params.session_id)).run()
-
         const sessionInfo = sm.getSessionById(params.session_id)
         const agentName = sessionInfo?.agentName ?? sessionInfo?.agentId ?? 'unknown'
         const agentId = sessionInfo?.agentId ?? 'unknown'
 
         sm.emitEvent(sessionId, { type: 'agent_start', agentName, agentId, text: params.message.slice(0, 200), taskId: params.session_id, sessionId: params.session_id })
 
-        sm.runSession(params.session_id, message).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error(`[SessionManager] Interrupted session ${params.session_id} failed: ${msg}`)
-        })
-
-        return JSON.stringify({ code: 0, message: `Session ${params.session_id} interrupted. New task started.` })
+        // interrupt_session === query_session + abort the current loop. The
+        // message is enqueued and traced immediately; aborting makes the queue
+        // drain now instead of after the current turn finishes. No self-run /
+        // skipRelease dance — same path as query, so no race over the promise.
+        return await sm.querySession(params.session_id, sessionId, message, true)
       } catch (err) {
         return JSON.stringify({ code: 1, error: err instanceof Error ? err.message : String(err) })
       }

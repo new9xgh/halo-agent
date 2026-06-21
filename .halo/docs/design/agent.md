@@ -56,8 +56,8 @@ Agents manage other sessions with these tools (enable them by name in `agent.yam
 | `start_session` | Start a new sub-session asynchronously; auto-reports to its parent when done |
 | `session_list` | List the current session's children and their status |
 | `query_session` | Send a message to another session (runs immediately if idle, queues if busy) |
-| `interrupt_session` | Abort + repair + asynchronously re-run with a new message |
-| `stop_session` | Abort + repair, no re-run; clears the queue |
+| `interrupt_session` | Enqueue a message + immediately abort the in-flight turn so the queue drains now (= `query_session` + abort) |
+| `stop_session` | Fold the queue into history (preserve, don't drop) + abort + repair, no re-run |
 | `archive_session` | Archive a session and all its descendants (sets archivedAt) |
 | `get_session_output` | Read the latest text output of a session |
 | `list_agents` | Discover available agents (disabled-in-workspace and `internal: true` agents excluded) |
@@ -117,14 +117,14 @@ The provider YAML is the single source of truth. Existing `agent.yaml` files are
 
 ## Graceful interrupt (message queueing)
 
-When the user sends a new message while the agent is working:
-1. The message is pushed onto `pendingUserMessages` and `interruptRequested` is set
-2. Inside `runAgentTurn`'s event loop, when `event.type === 'tool_result'` and `interruptRequested` is true → `abortController.abort('interrupt')`
+When the user sends a new message while the agent is working (the **soft** interrupt):
+1. The message is pushed onto the single `messageQueue` (no `sourceSessionId` — it's a user entry) and `interruptRequested` is set
+2. Inside `runAgentTurn`'s event loop, when `event.type === 'tool_result'` and `interruptRequested` is true → `abortController.abort('interrupt')` — the abort waits for the current tool, so a mid-flight `shell_exec` is **not** killed
 3. The loop terminates (AbortError or cancelled)
 4. **Conversation repair** (`repairConversationMessages`) cleans up orphan `toolUse` / `toolResult` blocks
-5. The current turn ends; the next queued message is kicked off via `handleUserTurn`
+5. Control returns to `runSession`, whose `drainQueue` folds the queued message into one merged follow-up turn
 
-**Hard stop** is only for the Stop button — immediate abort, clear queue, repair.
+**Hard stop** is the Stop button — immediate abort, then repair. It does **not** discard the queue: the un-drained messages are folded into history first so nothing is lost (see the three-tier interrupt model + stop/archive contrast in [session.md](session.md#message-queue-and-drain)).
 
 ## Limits
 

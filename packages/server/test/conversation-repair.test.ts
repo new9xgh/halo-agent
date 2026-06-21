@@ -120,4 +120,30 @@ describe('repairConversationMessages', () => {
     assertValidForApi(out)
     expect(out[0].content).toEqual([text('continue')])
   })
+
+  // Phase 3 keeps a message only when `content` is a NON-EMPTY ARRAY. A message
+  // whose content is a plain string is silently dropped — it isn't an array, so
+  // the `Array.isArray(content) && length > 0` guard fails. This is the contract
+  // SessionManager.foldIntoAgentMessages depends on: queued messages folded on
+  // stop MUST be wrapped as [{type:'text'}] blocks, never assigned as a raw
+  // string, or repair would erase them and the "stop never drops a message"
+  // guarantee would break. These tests pin that mechanism so a future repair
+  // tweak can't quietly reintroduce the message-loss bug.
+  it('drops a message whose content is a raw string (folded text must be blocks, not a string)', () => {
+    const input = [
+      { role: 'user', content: 'I am a string-content turn' },
+    ] as unknown as AnthropicMessage[]
+    const out = repairConversationMessages(input)
+    expect(out).toHaveLength(0) // string content fails the Array.isArray guard → erased
+  })
+
+  it('keeps the same text when it is wrapped as a block array (the fold-safe form)', () => {
+    const input: AnthropicMessage[] = [
+      { role: 'user', content: [text('I am a string-content turn')] },
+    ]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out).toHaveLength(1)
+    expect(out[0].content).toEqual([text('I am a string-content turn')])
+  })
 })

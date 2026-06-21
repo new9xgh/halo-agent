@@ -91,6 +91,8 @@ data: {"type":"complete"}
 data: {"type":"error","error":"..."}
 ```
 
+> **Batch-boundary `complete` (must be absorbed, never closes the stream)**: when a root session drains a queue of multiple messages, the server runs N merged turns and emits an internal `complete` with `batchBoundary: true` between rounds (see [session.md](session.md#message-queue-and-drain)). The SSE generators in `channels/web/handler.ts` flush the just-finished round's text on a `batchBoundary` complete but **do not** send a `complete` SSE frame and **do not** set `done` — the response stays open for the next round; only the **terminal** (unmarked) `complete` closes the HTTP stream. Without this guard a producer→sub-agent fan-out would truncate the web client after the first round. The `batchBoundary` flag is therefore an internal server-side event marker only — it is never serialized into the SSE payload a client sees, so a custom frontend just consumes one ordinary `complete` at the end. (ACP rides on this channel, so it inherits the same safe behavior.)
+
 #### Per-request overrides (`workspace`, `sessionId`, `agentId`)
 
 By default each token is bound 1:1 to the workspace its admin row configured, and `/web/chat` operates on the account's "active" session (most-recently-used or one set by `/session new` / `/session switch`). External integrations — currently the [ACP adapter](../dev/acp-adapter.md) — need finer control:

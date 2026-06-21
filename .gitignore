@@ -92,3 +92,8 @@ packages/cli/dist-pub/
 # (the docs/ tree is otherwise tracked).
 .halo/docs/dev/desktop-packaging.local.md
 .halo/docs/dev/dev-environment.local.md
+
+# Local-only scratch — one-off review changelogs and the repo-root tmp/ work
+# dir (migration scripts, verify checklists). Not shipped.
+/tmp/
+halo-changelog-*.md

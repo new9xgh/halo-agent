@@ -67,8 +67,13 @@ function estimateMessageTokens(messages: AnthropicMessage[]): number {
 // ── Types ────────────────────────────────────────────────────────────
 
 interface QueuedMessage {
-  sourceSessionId: string
   text: string
+  /** Set for agent→agent messages (query_session / interrupt_session / auto-report):
+   *  drives the `(from: session X)` prefix and the siblingStatusSuffix. Absent for
+   *  user messages (channel sends), which carry no source and no sibling status. */
+  sourceSessionId?: string
+  /** User multimodal payload; agent→agent messages have none. */
+  images?: Array<{ data: string; mimeType: string }>
 }
 
 interface AgentSession {
@@ -85,8 +90,6 @@ interface AgentSession {
   promise: Promise<string> | null
   abortController: AbortController | null
   messageQueue: QueuedMessage[]
-  /** When true, runSession's finally block won't release the session (used by interruptSession) */
-  skipRelease?: boolean
   /** Per-agent context limits from agent.yaml (fallback to global config) */
   contextConfig: { maxTokens: number; compressAt: number }
   // ── Phase 2 additions ──
@@ -98,8 +101,6 @@ interface AgentSession {
   warnedToolHashes: Set<string>
   /** Turn start timestamp — used for AbortSignal timing */
   turnStartTime: number
-  /** User message queue (for sendUserMessage graceful interrupt) */
-  pendingUserMessages: Array<{ text: string; images?: Array<{ data: string; mimeType: string }> }>
   /** Graceful interrupt flag */
   interruptRequested: boolean
   /** Compact lifecycle */
@@ -209,10 +210,9 @@ export interface SessionManagerInternals {
     workingDir?: string | null,
     accessLevel?: 'readonly' | 'workspace' | null,
   ): Promise<string>
-  runSession(sessionId: string, message: string): Promise<string>
-  querySession(targetSessionId: string, callerSessionId: string, message: string): Promise<string>
+  runSession(sessionId: string, message: string | ContentBlock[]): Promise<string>
+  querySession(targetSessionId: string, callerSessionId: string, message: string, interrupt?: boolean): Promise<string>
   interruptSession(sessionId: string): void
-  interruptSessionForRerun(sessionId: string): Promise<boolean>
   stopSession(sessionId: string): Promise<void>
   archiveSessionTree(sessionId: string): Promise<number>
   getSessionOutput(sessionId: string): string
@@ -490,7 +490,6 @@ export class SessionManager implements SessionManagerInternals {
       toolCallLog: [],
       warnedToolHashes: new Set(),
       turnStartTime: 0,
-      pendingUserMessages: [],
       interruptRequested: false,
       isCompacting: false,
       compactAbortController: null,
@@ -1020,8 +1019,9 @@ export class SessionManager implements SessionManagerInternals {
 
   /**
    * Run a single agent turn with retries, error recovery, and enhanced events.
-   * Shared by runSession (agent-to-agent) and handleUserTurn (user → agent).
-   * Returns the text output. Does NOT manage session lifecycle (promise/release).
+   * Called by runSession's runFn (opening turn) and drainQueue (each merged
+   * follow-up turn). Returns the text output. Does NOT manage session lifecycle
+   * (promise/release) — that's runSession's finally block.
    */
   private async runAgentTurn(
     session: AgentSession,
@@ -1255,15 +1255,35 @@ export class SessionManager implements SessionManagerInternals {
    */
   async runSession(
     sessionId: string,
-    message: string,
+    message: string | ContentBlock[],
   ): Promise<string> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
-    console.debug(`[SessionManager] runSession ${sessionId} (agent: ${session.agentId}, parent: ${session.parentId ?? 'none'}) — message: ${message.slice(0, 150)}`)
+    // `message` is the opening turn — a start_session / auto-report string, or
+    // a user message's ContentBlock[] (sendUserMessage idle path). An empty
+    // STRING means "the work is already in messageQueue" (querySession idle
+    // path) — skip the opening turn and go straight to drain.
+    const hasFirst = typeof message === 'string' ? message !== '' : message.length > 0
+    console.debug(`[SessionManager] runSession ${sessionId} (agent: ${session.agentId}, parent: ${session.parentId ?? 'none'}) — hasFirst: ${hasFirst}`)
 
     const runFn = async (): Promise<string> => {
-      const result = await this.runAgentTurn(session, message)
-      console.debug(`[SessionManager] runSession ${sessionId} completed — result: ${result.slice(0, 150)}`)
+      let result = ''
+      if (hasFirst) {
+        // Per-turn reset for the opening turn (drainQueue resets per merged
+        // batch on its own): fresh loop detector + no stale interrupt flag.
+        session.toolCallLog = []
+        session.warnedToolHashes.clear()
+        session.interruptRequested = false
+        result = await this.runAgentTurn(session, message)
+        console.debug(`[SessionManager] runSession ${sessionId} first turn done — result: ${result.slice(0, 150)}`)
+      }
+      // Fold every queued message (user or agent) into merged follow-up turns
+      // until the queue is empty. drainQueue re-checks after each merged turn,
+      // so messages arriving mid-drain are picked up too.
+      if (session.messageQueue.length > 0) {
+        await this.drainQueue(session)
+        result = session.output || result
+      }
       return result
     }
 
@@ -1271,33 +1291,16 @@ export class SessionManager implements SessionManagerInternals {
     try {
       return await session.promise
     } finally {
+      // promise = null BEFORE emitting complete: the CLI / web stream-close
+      // logic gates on `complete && !hasRunningSessions()`, which reads
+      // `promise !== null`. Emitting complete first would leave the session
+      // still "running" at the moment the client decides whether to close.
+      session.promise = null
       if (session.parentId === null) {
         this.emitEvent(session.id, { type: 'complete' })
       }
-      if (session.messageQueue.length > 0) {
-        console.debug(`[SessionManager] runSession ${sessionId} finally — ${session.messageQueue.length} queued messages, starting drain`)
-        session.promise = new Promise<string>((resolve) => {
-          setTimeout(async () => {
-            try {
-              await this.drainQueue(session)
-            } finally {
-              session.promise = null
-              if (!session.skipRelease) {
-                this.tryReportToParent(session)
-                this.releaseSession(sessionId)
-              }
-            }
-            resolve('drain complete')
-          }, 0)
-        })
-      } else {
-        console.debug(`[SessionManager] runSession ${sessionId} finally — no queued messages, releasing`)
-        session.promise = null
-        if (!session.skipRelease) {
-          this.tryReportToParent(session)
-          this.releaseSession(sessionId)
-        }
-      }
+      this.tryReportToParent(session)
+      this.releaseSession(sessionId)
     }
   }
 
@@ -1334,12 +1337,21 @@ export class SessionManager implements SessionManagerInternals {
     const result = session.output || '(no output)'
     console.debug(`[SessionManager] Auto-report: ${session.id} → parent ${session.parentId} — result: ${result.slice(0, 150)}`)
 
+    // Truncate the auto-report, but tell the parent WHEN we did — a bare slice
+    // silently drops the tail, so the parent can't tell a short answer from a
+    // cut-off one. The marker names get_session_output as the way to pull the
+    // full text (the child's last turn is preserved in session.output).
+    const reportCap = config.limits.autoReportMax
+    const truncatedReport = result.length > reportCap
+      ? result.slice(0, reportCap) + `\n\n[Report truncated: ${result.length} chars total, showing first ${reportCap}. Use get_session_output("${session.id}") for the full result.]`
+      : result
+
     this.emitEvent(session.parentId, {
       type: 'agent_done', agentName: session.agentName, agentId: session.agentId,
-      taskId: session.id, sessionId: session.id, text: result.slice(0, 500),
+      taskId: session.id, sessionId: session.id, text: truncatedReport,
     })
 
-    this.querySession(session.parentId, session.id, result.slice(0, 2000)).catch((err) => {
+    this.querySession(session.parentId, session.id, truncatedReport).catch((err) => {
       console.error(`[SessionManager] Auto-report querySession failed: ${session.id} → ${session.parentId}: ${err instanceof Error ? err.message : String(err)}`)
     })
   }
@@ -1388,27 +1400,74 @@ export class SessionManager implements SessionManagerInternals {
     return `\n\n[System @ ${nowIso}] Do NOT wrap up yet — ${stillRunning.length} sub-agent(s) still running, ${session.messageQueue.length} report(s) still queued.\nStill running:\n${list}`
   }
 
-  /** Drain queued agent-to-agent messages after a session finishes a turn */
+  /** Drain queued messages (user→agent AND agent→agent share this one queue)
+   *  after a session finishes a turn. The whole queue is folded into ONE turn:
+   *   - agent→agent entries (with `sourceSessionId`) keep a `(from: session X)`
+   *     prefix so multi-source reports stay distinguishable;
+   *   - user entries are folded raw (no prefix), and their images are merged in;
+   *   - the siblingStatusSuffix is appended ONLY when the batch carries at least
+   *     one agent report — a pure-user batch must not see "all sub-agents done"
+   *     noise.
+   *  The outer while re-checks because new messages can land while the merged
+   *  turn runs (a fresh interrupt, a sibling's report). For agent→agent entries
+   *  the UI trace was already emitted at enqueue time (querySession), and user
+   *  entries were traced by the channel before sendUserMessage — so drain does
+   *  NOT re-emit a `user` event. It DOES emit one `queued_message` per merged
+   *  batch (root only) to split the assistant bubble for the new turn. */
   private async drainQueue(session: AgentSession): Promise<void> {
     while (session.messageQueue.length > 0) {
-      const queued = session.messageQueue.shift()!
-      console.debug(`[SessionManager] Draining queued message for session ${session.id} from ${queued.sourceSessionId}`)
+      const batch = session.messageQueue.splice(0)
+      // Per merged batch reset (mirrors the opening turn): a prior interrupt may
+      // have left the flag set; clear it so the merged turn isn't aborted by its
+      // own first tool_result, and refresh the loop detector for the new turn.
+      session.interruptRequested = false
+      session.toolCallLog = []
+      session.warnedToolHashes.clear()
+      console.debug(`[SessionManager] Draining ${batch.length} queued message(s) for ${session.id} as one merged turn`)
 
-      const prefix = `(from: session ${queued.sourceSessionId})\n`
-
-      const taskId = session.parentId !== null ? session.id : undefined
-      this.emitEvent(session.id, { type: 'user', text: prefix + queued.text, agentName: 'user', report: true, taskId })
-
+      // Open a fresh streaming assistant bubble for this merged turn (root only;
+      // sub-agents split per turnId inside their own bubble). The text is
+      // cosmetic — event-processor forwards only `{chat:followup, agentName}`.
       if (session.parentId === null) {
-        this.emitEvent(session.id, { type: 'queued_message', text: queued.text.slice(0, 200), agentName: session.agentName })
+        this.emitEvent(session.id, { type: 'queued_message', text: '', agentName: session.agentName })
       }
 
+      const merged = batch
+        .map((q) => (q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text))
+        .join('\n\n')
+      const images = batch.flatMap((q) => q.images ?? [])
+      // Sibling-status only when the batch carries an agent report; a pure-user
+      // batch must not trigger "all sub-agents completed" noise.
+      const suffix = batch.some((q) => q.sourceSessionId !== undefined) ? this.siblingStatusSuffix(session) : ''
+      // Surface the sibling-status line on the UI too (root only). It's injected
+      // into the LLM input but was previously invisible, so a reviewer couldn't
+      // see WHICH siblings root was told were still running / done — exactly the
+      // context needed to debug a premature wrap-up. Reuses the `system` event
+      // (no new type); the leading blank lines are trimmed for display.
+      if (suffix && session.parentId === null) {
+        this.emitEvent(session.id, { type: 'system', text: suffix.trim(), agentName: session.agentName })
+      }
+      const input = this.buildInput(merged + suffix, images.length > 0 ? images : undefined, session.supportsImage)
+
       try {
-        await this.runAgentTurn(session, prefix + queued.text + this.siblingStatusSuffix(session))
+        await this.runAgentTurn(session, input)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.error(`[SessionManager] Drain run error for ${session.id}: ${errMsg}`)
         throw err
+      }
+
+      // Another merged turn will follow → emit a batch-boundary `complete` (root
+      // only) so block-oriented channels (wechat/telegram/slack/feishu) flush
+      // THIS turn's text as its own message now, instead of buffering every
+      // drain turn into one blob that lands only at the terminal complete (the
+      // "8 reports in one lump" bug). Tagged `batchBoundary` so stream-closing
+      // consumers (web-channel SSE / ACP) keep the stream open — the root is
+      // still running and more output follows. The terminal complete for the
+      // LAST turn comes from runSession's finally, so we only emit here when the
+      // queue still has work.
+      if (session.parentId === null && session.messageQueue.length > 0) {
+        this.emitEvent(session.id, { type: 'complete', batchBoundary: true })
       }
     }
   }
@@ -1422,9 +1481,9 @@ export class SessionManager implements SessionManagerInternals {
    * tool:
    *
    *   - abort the in-flight turn at once (not at the next tool_result),
-   *   - do NOT discard `pendingUserMessages`: once the aborted turn unwinds,
-   *     handleUserTurn's loop folds every queued message into ONE follow-up
-   *     turn (drainPendingAsOneInput). An empty queue just goes idle.
+   *   - do NOT discard `messageQueue`: once the aborted turn unwinds,
+   *     runSession's runFn drains every queued message into ONE merged follow-up
+   *     turn (drainQueue). An empty queue just goes idle.
    *
    * Fire-and-forget: it does NOT await the turn. The abort propagates
    * synchronously and runAgentTurn's interrupt branch repairs the message
@@ -1437,41 +1496,35 @@ export class SessionManager implements SessionManagerInternals {
     const session = this.sessions.get(sessionId)
     if (!session?.abortController) return
     // Mark as interrupt so runAgentTurn preserves + repairs messages rather
-    // than treating the abort as an error. The loop (handleUserTurn) resets
-    // this to false before the merged follow-up turn runs.
+    // than treating the abort as an error. drainQueue resets this to false
+    // before the merged follow-up turn runs.
     session.interruptRequested = true
     session.abortController.abort('interrupt')
     session.abortController = null
     console.debug(`[SessionManager] Interrupted session ${sessionId}`)
   }
 
-  /**
-   * Tool-facing variant: abort the in-flight turn, WAIT for it to fully unwind,
-   * then hand the new message to the caller to re-run. Used by the
-   * `interrupt_session` tool on a sub-agent — the runSession path has no
-   * auto-drain loop, so the abort must settle (promise resolves, finally runs)
-   * before a fresh runSession starts, or the two race over `session.promise`.
-   * `skipRelease` keeps the aborted turn's finally from releasing the session
-   * out from under the re-run. Returns true if there was a live session to
-   * interrupt, false otherwise.
-   */
-  async interruptSessionForRerun(sessionId: string): Promise<boolean> {
-    const session = this.sessions.get(sessionId)
-    if (!session) return false
-    const wasRunning = !!session.abortController || !!session.promise
-    session.skipRelease = true
-    if (session.abortController) {
-      session.interruptRequested = true
-      session.abortController.abort('interrupt')
-      session.abortController = null
+  /** Append text as a user turn to a session's agent.messages, coalescing into
+   *  a trailing user message if one exists. Two invariants drive this:
+   *   1. Anthropic rejects consecutive same-role messages, and the next
+   *      wake-up unconditionally pushes another user turn (agent.run) — so a
+   *      dangling user message left by an aborted turn must be merged INTO,
+   *      not followed by, a second user turn.
+   *   2. content MUST be a ContentBlock[] (never a bare string):
+   *      repairConversationMessages' Phase 3 drops any message whose content
+   *      isn't a non-empty array, so a string-content turn would be silently
+   *      deleted by the repair that runs right after this. */
+  private foldIntoAgentMessages(session: AgentSession, text: string): void {
+    const msgs = session.agent.messages
+    const last = msgs[msgs.length - 1]
+    if (last?.role === 'user' && Array.isArray(last.content)) {
+      last.content.push({ type: 'text', text })
+    } else if (last?.role === 'user' && typeof last.content === 'string') {
+      // Legacy string-content turn — normalize to blocks so repair keeps it.
+      last.content = [{ type: 'text', text: `${last.content}\n\n${text}` }]
+    } else {
+      msgs.push({ role: 'user', content: [{ type: 'text', text }] })
     }
-    if (session.promise) {
-      try { await session.promise } catch { /* expected on abort */ }
-    }
-    session.skipRelease = false
-    session.interruptRequested = false
-    session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
-    return wasRunning
   }
 
   async stopSession(sessionId: string): Promise<void> {
@@ -1492,6 +1545,28 @@ export class SessionManager implements SessionManagerInternals {
     for (const id of allIds) {
       const session = this.sessions.get(id)
       if (session) {
+        // Preserve un-drained queued messages: fold them into agent.messages as
+        // a user turn BEFORE aborting, so the next time this session is woken it
+        // remembers what was said while it was busy (matches /interrupt, which
+        // also never drops a queued message — it just folds + reruns instead of
+        // folding + parking). The single messageQueue carries both agent→agent
+        // (query/interrupt_session, with `sourceSessionId`) and user→agent
+        // (channel sends during a busy turn, no source) entries — agent entries
+        // keep their `(from: session X)` prefix, user entries fold raw.
+        // Done BEFORE abort so the aborted turn's runFn drain wakes to an empty
+        // queue and stays stopped — no extra turn runs.
+        const queued = session.messageQueue.map((q) =>
+          q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text
+        )
+        if (queued.length > 0) {
+          this.foldIntoAgentMessages(session, queued.join('\n\n'))
+          console.debug(`[SessionManager] stopSession ${id} — folded ${queued.length} un-drained message(s) into agent.messages`)
+        }
+        session.messageQueue = []
+        // Clear before abort: the queue is empty now, so the aborted turn's
+        // drain has nothing to fold — don't leave a stale interrupt flag that
+        // would fire a redundant second abort on the next tool_result.
+        session.interruptRequested = false
         if (session.abortController) {
           session.abortController.abort('stop')
           session.abortController = null
@@ -1499,9 +1574,6 @@ export class SessionManager implements SessionManagerInternals {
         if (session.promise) {
           try { await session.promise } catch { /* expected */ }
         }
-        session.messageQueue = []
-        session.pendingUserMessages = []
-        session.interruptRequested = false
         session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${id}]`)
         this.releaseSession(id)
       }
@@ -1514,18 +1586,44 @@ export class SessionManager implements SessionManagerInternals {
     console.debug(`[SessionManager] Stopped ${allIds.length} session(s) (root: ${sessionId})`)
   }
 
+  /**
+   * Agent-to-agent message. `interrupt` distinguishes the two tools that call
+   * this — it is the ONLY behavioral difference between them:
+   *   - query_session    (interrupt=false): enqueue, let the current loop finish
+   *   - interrupt_session (interrupt=true):  enqueue, then abort the current loop
+   *     so the queue drains immediately.
+   * Both paths enqueue into the SAME `messageQueue` and trace the message to the
+   * session file RIGHT NOW (the `type:'user'` emit), regardless of busy/idle —
+   * that's what makes it behave like a root user message: the record survives
+   * even a `stop_session` that later clears the queue. The new-assistant-bubble
+   * signal (`queued_message`) is emitted by drainQueue, once per merged batch,
+   * NOT here — so N reports folding into one turn yield one bubble, not N.
+   */
   async querySession(
     targetSessionId: string,
     sourceSessionId: string,
     message: string,
+    interrupt = false,
   ): Promise<string> {
-    console.debug(`[SessionManager] querySession: ${sourceSessionId} → ${targetSessionId} — message: ${message.slice(0, 150)}`)
+    console.debug(`[SessionManager] querySession: ${sourceSessionId} → ${targetSessionId} (interrupt=${interrupt}) — message: ${message.slice(0, 150)}`)
 
     let target: AgentSession
     try {
       target = await this.ensureSession(targetSessionId)
     } catch {
       return JSON.stringify({ code: 1, error: `session ${targetSessionId} not found` })
+    }
+
+    // query_session respects the queue cap (backpressure for agent fan-in
+    // storms); interrupt_session is a deliberate action and bypasses it. The cap
+    // counts ONLY agent-sourced entries (those with a sourceSessionId): user
+    // messages share the same queue post-unification but are immune — a human
+    // can't hand-type up to the cap, and counting them would let user chatter
+    // consume the agents' backpressure budget or wrongly trigger a rejection.
+    const agentQueued = target.messageQueue.filter((q) => q.sourceSessionId !== undefined).length
+    if (!interrupt && target.promise !== null && agentQueued >= config.session.maxQueueSize) {
+      console.debug(`[SessionManager] querySession: ${targetSessionId} queue full (${agentQueued} agent-sourced), rejecting from ${sourceSessionId}`)
+      return JSON.stringify({ code: 1, error: `session ${targetSessionId} message queue is full (${agentQueued}/${config.session.maxQueueSize}).` })
     }
 
     // Resume a stopped session: clear stoppedAt so it re-enters normal lifecycle
@@ -1535,27 +1633,42 @@ export class SessionManager implements SessionManagerInternals {
       console.debug(`[SessionManager] Resumed stopped session ${targetSessionId}`)
     }
 
-    if (target.promise !== null) {
-      if (target.messageQueue.length >= config.session.maxQueueSize) {
-        console.debug(`[SessionManager] querySession: ${targetSessionId} queue full (${target.messageQueue.length}), rejecting from ${sourceSessionId}`)
-        return JSON.stringify({ code: 1, error: `session ${targetSessionId} message queue is full (${target.messageQueue.length}/${config.session.maxQueueSize}).` })
-      }
-      target.messageQueue.push({ sourceSessionId, text: message })
-      console.debug(`[SessionManager] querySession: ${targetSessionId} is BUSY — message queued from ${sourceSessionId} (${target.messageQueue.length} in queue)`)
-      return JSON.stringify({ code: 0, message: `Message queued for session ${targetSessionId}. It will be processed after current task completes.` })
-    }
-
-    console.debug(`[SessionManager] querySession: ${targetSessionId} is IDLE — firing runSession`)
+    // Enqueue + trace to the session file immediately. The prefix is rebuilt at
+    // drain time (drainQueue), so the queue entry stores the raw text + source.
+    // The `user` trace (the green "report from sub-session" bubble) fires NOW,
+    // at enqueue, so the report is visible the moment it arrives — but the
+    // `queued_message` (new assistant bubble) is NOT emitted here: drainQueue
+    // emits exactly one per merged batch, so N reports folding into one turn
+    // produce one new bubble, not N ghost bubbles.
     const prefix = `(from: session ${sourceSessionId})\n`
-
     const taskId = target.parentId !== null ? targetSessionId : undefined
+    target.messageQueue.push({ sourceSessionId, text: message })
     this.emitEvent(targetSessionId, { type: 'user', text: prefix + message, agentName: 'user', report: true, taskId })
 
-    if (target.parentId === null) {
-      this.emitEvent(targetSessionId, { type: 'queued_message', text: message.slice(0, 200), agentName: target.agentId })
+    if (interrupt && target.promise !== null) {
+      // Abort the in-flight turn; runSession's finally sees the non-empty queue
+      // and schedules drainQueue, which folds in the message we just pushed.
+      console.debug(`[SessionManager] querySession: ${targetSessionId} interrupt — aborting current loop`)
+      this.interruptSession(targetSessionId)
+      return JSON.stringify({ code: 0, message: `Session ${targetSessionId} interrupted; message will be processed next.` })
     }
 
-    this.runSession(targetSessionId, prefix + message + this.siblingStatusSuffix(target)).catch((err) => {
+    if (target.promise !== null) {
+      // Busy → SOFT interrupt, mirroring a user message arriving mid-turn
+      // (sendUserMessage's busy branch): the in-flight turn finishes its current
+      // tool, then runAgentTurn's interrupt branch unwinds and runSession's runFn
+      // drains the queue, folding this message INTO the same merged turn as any
+      // sibling reports that landed alongside it. Without this, the current turn
+      // runs to completion first and this message drains as its own later turn —
+      // so an agent answering two queued questions would answer them one-by-one
+      // instead of together, diverging from how root handles two user messages.
+      target.interruptRequested = true
+      console.debug(`[SessionManager] querySession: ${targetSessionId} is BUSY — message queued from ${sourceSessionId} (${target.messageQueue.length} in queue), soft interrupt requested`)
+      return JSON.stringify({ code: 0, message: `Message queued for session ${targetSessionId}. It will be processed after the current step completes.` })
+    }
+
+    console.debug(`[SessionManager] querySession: ${targetSessionId} is IDLE — draining now`)
+    this.runSession(targetSessionId, '').catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error(`[SessionManager] Query run error for ${targetSessionId}: ${errMsg}`)
     })
@@ -1662,13 +1775,19 @@ export class SessionManager implements SessionManagerInternals {
     }
 
     if (session.isCompacting) {
-      session.pendingUserMessages.push({ text: message, images })
+      // No live turn to interrupt — just queue. endCompact drains the queue
+      // when the compact finishes (no interruptRequested: nothing is running).
+      session.messageQueue.push({ text: message, images })
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} compacting — message queued`)
       return 'queued'
     }
 
     if (session.promise !== null) {
-      session.pendingUserMessages.push({ text: message, images })
+      // Busy → queue + SOFT interrupt: the in-flight turn finishes its current
+      // tool, then runAgentTurn's interrupt branch unwinds and runSession's
+      // runFn drains the queue. A mid-flight shell is NOT SIGTERM'd (that's the
+      // hard interrupt_session path).
+      session.messageQueue.push({ text: message, images })
       session.interruptRequested = true
       console.debug(`[SessionManager] sendUserMessage: ${sessionId} busy — message queued, interrupt requested`)
       return 'queued'
@@ -1680,82 +1799,16 @@ export class SessionManager implements SessionManagerInternals {
     // payload (no orphan tool pairs, no empty text blocks).
     console.debug(`[SessionManager] sendUserMessage: ${sessionId} idle — running`)
     session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
-    session.toolCallLog = []
-    session.warnedToolHashes.clear()
-    this.handleUserTurn(session, message, images).catch((err) => {
-      console.error(`[SessionManager] handleUserTurn error for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
+    // Route through the single runSession loop (runFn runs the opening turn,
+    // then drainQueue folds anything that piles up). runSession handles the
+    // per-turn reset + lifecycle (promise / complete / release).
+    this.runSession(sessionId, this.buildInput(message, images, session.supportsImage)).catch((err) => {
+      console.error(`[SessionManager] runSession error for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
     })
     return 'running'
   }
 
-  /**
-   * Handle a user message turn: run the agent, drain queued agent messages,
-   * then drain queued user messages. Manages the full lifecycle.
-   * This is the equivalent of Orchestrator.handleMessage.
-   */
-  private async handleUserTurn(
-    session: AgentSession,
-    message: string,
-    images?: Array<{ data: string; mimeType: string }>,
-  ): Promise<void> {
-    let input: string | ContentBlock[] = this.buildInput(message, images, session.supportsImage)
-    session.toolCallLog = []
-    session.warnedToolHashes.clear()
-
-    const runFn = async (): Promise<void> => {
-      try {
-        while (true) {
-          session.interruptRequested = false
-          await this.runAgentTurn(session, input)
-
-          // Drain any agent-to-agent queued messages first
-          if (session.messageQueue.length > 0) {
-            await this.drainQueue(session)
-          }
-
-          // Then fold ALL queued user messages into one next turn — whether
-          // they piled up via an interrupt (esc) or were sent while busy, the
-          // user wants them handled together, not one reply per message.
-          const next = this.drainPendingAsOneInput(session)
-          if (!next) return
-
-          this.emitEvent(session.id, { type: 'complete' })
-          input = this.buildInput(next.text, next.images, session.supportsImage)
-          session.toolCallLog = []
-          session.warnedToolHashes.clear()
-          // Queue is now empty (we took everything) — clear the interrupt flag.
-          session.interruptRequested = false
-          this.emitEvent(session.id, { type: 'queued_message', text: next.text, agentName: session.agentName })
-        }
-      } finally {
-        session.promise = null
-        this.emitEvent(session.id, { type: 'complete' })
-        this.releaseSession(session.id)
-      }
-    }
-
-    session.promise = runFn() as unknown as Promise<string>
-    // Fire-and-forget — caller (sendUserMessage) returns immediately
-  }
-
   /** Build multimodal input from text + optional images */
-  /**
-   * Take ALL queued user messages and merge them into a single turn input.
-   * Multiple messages the user fired while the agent was busy are joined with
-   * blank lines (text) and their images concatenated — so an interrupt runs
-   * one turn that sees everything, not one turn per queued message. Empties the
-   * queue and returns null when nothing was pending.
-   */
-  private drainPendingAsOneInput(
-    session: AgentSession,
-  ): { text: string; images?: Array<{ data: string; mimeType: string }> } | null {
-    if (session.pendingUserMessages.length === 0) return null
-    const all = session.pendingUserMessages.splice(0)
-    const text = all.map((m) => m.text).join('\n\n')
-    const images = all.flatMap((m) => m.images ?? [])
-    return { text, images: images.length > 0 ? images : undefined }
-  }
-
   private buildInput(text: string, images: Array<{ data: string; mimeType: string }> | undefined, supportsImage: boolean): string | ContentBlock[] {
     if (!images || images.length === 0) return text
     if (!supportsImage) {
@@ -1909,26 +1962,29 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /**
-   * End compact for a session (call in finally block).
+   * End compact for a session (call in finally block of the MANUAL /compact
+   * path; mid-turn auto-compact never calls this — its turn is still running
+   * and drains the queue itself when it ends).
    *
-   * Also drains any user messages queued **during** the compact — without
-   * this, messages sit in `pendingUserMessages` until the next inbound
-   * user message lazily triggers a turn, which feels like "the compact
-   * succeeded but my message vanished" to the user.
+   * Also drains any messages queued **during** the compact — without this,
+   * messages sit in `messageQueue` until the next inbound message lazily
+   * triggers a turn, which feels like "the compact succeeded but my message
+   * vanished" to the user.
    *
-   * Drain runs in the background (no await) so the compact finally block
-   * doesn't block on a long agent turn; if more messages arrive while the
-   * drain is in flight, the in-progress turn naturally picks them up via
-   * its own queue logic in handleUserTurn / runAgentTurn.
+   * Drain goes through the single runSession loop (empty opening message =
+   * straight to drainQueue), fire-and-forget so the compact finally block
+   * doesn't block on a long agent turn. The `promise === null` guard prevents
+   * a double-drain: if a queued user message already kicked off a turn (or a
+   * sub-agent report did), that turn's runFn owns the drain.
    */
   endCompact(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
     session.isCompacting = false
     session.compactAbortController = null
-    if (session.pendingUserMessages.length > 0) {
-      console.debug(`[SessionManager] Compact ${sessionId} ended — draining ${session.pendingUserMessages.length} queued user message(s)`)
-      this.processQueuedUserMessages(sessionId).catch((err) => {
+    if (session.messageQueue.length > 0 && session.promise === null) {
+      console.debug(`[SessionManager] Compact ${sessionId} ended — draining ${session.messageQueue.length} queued message(s)`)
+      this.runSession(sessionId, '').catch((err) => {
         console.error(`[SessionManager] Post-compact drain failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
       })
     }
@@ -2143,18 +2199,6 @@ export class SessionManager implements SessionManagerInternals {
     session.draftReset = draftReset
   }
 
-  /** Process queued user messages after compact completes. */
-  async processQueuedUserMessages(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session) return
-    // Fold every queued message into one turn (same merge semantics as the
-    // interrupt path), rather than running the first and leaving the rest.
-    const next = this.drainPendingAsOneInput(session)
-    if (!next) return
-    this.emitEvent(sessionId, { type: 'queued_message', text: next.text, agentName: session.agentName })
-    await this.handleUserTurn(session, next.text, next.images)
-  }
-
   /**
    * Set raw agent messages directly (for compact rebuild).
    */
@@ -2277,7 +2321,6 @@ export class SessionManager implements SessionManagerInternals {
         try { await session.promise } catch { /* expected */ }
       }
       session.messageQueue = []
-      session.pendingUserMessages = []
       this.sessions.delete(sessionId)
     }
     this.uiStore.dropUIState(sessionId)
@@ -2341,12 +2384,13 @@ export class SessionManager implements SessionManagerInternals {
     return session ? session.systemPrompt : null
   }
 
-  /** Get number of pending user messages for a session */
-  getPendingMessageCount(sessionId: string): number {
-    return this.sessions.get(sessionId)?.pendingUserMessages.length ?? 0
-  }
-
-  /** Enqueue a user message directly (for backward compat with orchestrator pattern) */
+  /** Enqueue a user message directly (admin WS busy/compacting queue path).
+   *  Pushes onto the single messageQueue with no `sourceSessionId` (a user
+   *  message), and requests a SOFT interrupt so a busy turn yields after its
+   *  current tool — same effect as sendUserMessage's busy branch, minus the
+   *  idle/run path (the caller already established the session is busy or
+   *  compacting). When compacting, the flag is harmless (no live turn) and
+   *  endCompact drains the queue. */
   async enqueueUserMessage(sessionId: string, text: string, images?: Array<{ data: string; mimeType: string }>): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -2357,22 +2401,34 @@ export class SessionManager implements SessionManagerInternals {
     for (const w of scoped.warnings) {
       this.emitEvent(sessionId, { type: 'system', text: `⚠ ${w}` })
     }
-    session.pendingUserMessages.push({ text: scoped.text, images })
+    session.messageQueue.push({ text: scoped.text, images })
     session.interruptRequested = true
-    console.debug(`[SessionManager] User message enqueued for ${sessionId} (${session.pendingUserMessages.length} pending)`)
+    console.debug(`[SessionManager] User message enqueued for ${sessionId} (${session.messageQueue.length} in queue)`)
   }
 
-  /** Hard stop — abort immediately (for explicit user stop button) */
+  /** Hard stop — abort immediately (for explicit user stop button).
+   *  Never drops a queued message: fold the WHOLE messageQueue (user entries
+   *  raw, agent reports with their `(from: session X)` prefix) into agent.messages
+   *  BEFORE aborting, so anything already sent survives the stop and is remembered
+   *  on the next wake-up. Mirrors stopSession's fold — a stop parks the work, it
+   *  doesn't discard it. */
   stopUserSession(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
+    const queued = session.messageQueue.map((q) =>
+      q.sourceSessionId ? `(from: session ${q.sourceSessionId})\n${q.text}` : q.text
+    )
+    if (queued.length > 0) {
+      this.foldIntoAgentMessages(session, queued.join('\n\n'))
+      console.debug(`[SessionManager] stopUserSession ${sessionId} — folded ${queued.length} un-drained message(s) into agent.messages`)
+    }
+    session.messageQueue = []
+    session.interruptRequested = false
     if (session.abortController) {
       session.abortController.abort()
       session.abortController = null
     }
     this.cancelCompact(sessionId)
-    session.pendingUserMessages = []
-    session.interruptRequested = false
     session.agent.messages = repairConversationMessages(session.agent.messages, `[Session:${sessionId}]`)
   }
 }

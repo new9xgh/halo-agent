@@ -41,7 +41,7 @@ tools:
 skills:
   - agent
   - skill
-  - ws
+  - workspace
   - send-file
   - self
   - aws-knowledge

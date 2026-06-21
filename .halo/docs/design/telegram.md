@@ -110,6 +110,7 @@ Photos / documents trigger the same flow with file metadata in the text.
 
 Same strategy as WeChat:
 - Buffer until `complete` event, then flush as one message
+- Flush happens on **any** `complete` — the responder doesn't read its `batchBoundary` flag, so a multi-round queue drain ships each merged turn as its own message instead of one blob (see [session.md](session.md#message-queue-and-drain))
 - If buffer exceeds 4000 chars (Telegram limit), split at paragraph boundary
 - `MEDIA:<path>` markers are intercepted and sent as native Telegram media
 - Errors flush immediately
