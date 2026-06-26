@@ -595,7 +595,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
         </div>
       )}
 
-      {isDir && expanded && node.children && (
+      {isDir && expanded && (node.children || showCreateRow) && (
         <div>
           {showCreateRow && pendingEdit && (
             <EditInputRow
@@ -606,7 +606,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
               onCancel={() => onCancelEdit?.()}
             />
           )}
-          {node.children
+          {(node.children ?? [])
             .sort((a, b) => {
               if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
               return a.name.localeCompare(b.name)

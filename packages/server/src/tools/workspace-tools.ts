@@ -95,10 +95,34 @@ async function isBinaryFile(filePath: string): Promise<boolean> {
 }
 
 /**
+ * Split an include filter on top-level commas only, so brace alternation
+ * ("*.{ts,tsx}") survives while a comma-separated list ("*.ts,*.tsx") is
+ * broken into its parts.
+ */
+function splitIncludeList(include: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of include) {
+    if (ch === '{') { depth++; cur += ch }
+    else if (ch === '}') { depth = Math.max(0, depth - 1); cur += ch }
+    else if (ch === ',' && depth === 0) { parts.push(cur); cur = '' }
+    else cur += ch
+  }
+  parts.push(cur)
+  return parts.map((p) => p.trim()).filter(Boolean)
+}
+
+/**
  * Match a filename against a simple glob-like include filter.
- * Supports patterns like "*.ts", "*.{ts,tsx}", "*.json".
+ * Supports patterns like "*.ts", "*.{ts,tsx}", "*.json", and comma-separated
+ * lists like "*.ts,*.tsx" (matches if ANY part matches).
  */
 function matchInclude(fileName: string, include: string): boolean {
+  return splitIncludeList(include).some((p) => matchOneInclude(fileName, p))
+}
+
+function matchOneInclude(fileName: string, include: string): boolean {
   // Convert simple glob to regex
   // Handle {a,b} alternation
   let pattern = include
@@ -646,8 +670,8 @@ export function createWorkspaceTools(
       type: 'object' as const,
       properties: {
         pattern: { type: 'string', description: 'Regex pattern to search for' },
-        path: { type: 'string', description: 'Directory to search in, relative to workspace root (default: workspace root)' },
-        include: { type: 'string', description: 'Glob-like file filter, e.g. "*.ts" or "*.{ts,tsx}"' },
+        path: { type: 'string', description: 'Directory or single file to search in, relative to workspace root (default: workspace root)' },
+        include: { type: 'string', description: 'Glob-like file filter, e.g. "*.ts", "*.{ts,tsx}", or a comma-separated list "*.ts,*.tsx"' },
         max_results: { type: 'number', description: 'Maximum number of matching lines to return (default: 50)' },
       },
       required: ['pattern'],
@@ -667,7 +691,16 @@ export function createWorkspaceTools(
 
       const results: string[] = []
 
-      for await (const filePath of walkDir(searchDir, signal)) {
+      // `path` may point at a single file, not just a directory. walkDir uses
+      // fs.readdir under the hood, which throws on a file path and would then
+      // silently yield zero matches — detect a file target and search just it.
+      let fileTarget = false
+      try {
+        fileTarget = (await fs.stat(searchDir)).isFile()
+      } catch { /* missing path: walkDir yields nothing → honest "no matches" */ }
+      const files: AsyncIterable<string> | Iterable<string> = fileTarget ? [searchDir] : walkDir(searchDir, signal)
+
+      for await (const filePath of files) {
         if (results.length >= maxResults) break
 
         if (input.include && !matchInclude(path.basename(filePath), input.include)) {
