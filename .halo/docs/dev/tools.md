@@ -77,8 +77,8 @@ Regex content search. Returns `file:line:content`.
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | pattern | string | yes | Regex |
-| path | string | no | Search dir (default: workspace root) |
-| include | string | no | Glob-like filename filter, e.g. `*.ts`, `*.{ts,tsx}` |
+| path | string | no | Search dir or a single file (default: workspace root) |
+| include | string | no | Glob-like filename filter, e.g. `*.ts`, `*.{ts,tsx}`, or a comma-separated list `*.ts,*.tsx` |
 | max_results | number | no | Max matching lines (default 50) |
 
 Skips: `node_modules` / `.git` / `.next` / `dist` / `.halo` / binary files.
