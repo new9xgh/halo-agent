@@ -2068,7 +2068,17 @@ export class SessionManager implements SessionManagerInternals {
     const timer = setTimeout(() => timeoutCtrl.abort('compact-timeout'), timeoutMs)
 
     try {
-      const preRunLen = messages.length
+      // Snapshot the keep-region BEFORE running the compact turn. The run below
+      // feeds the agent a throwaway "summarize yourself" instruction and mutates
+      // session.agent.messages in place. agent-loop.run() coalesces a new user
+      // turn INTO the trailing user message when one already exists (a mid-turn
+      // tool_result, or pending user input) instead of appending a separate
+      // message — so the instruction can land *inside* the last kept message
+      // rather than after it. Rebuilding from the post-run array (the old
+      // `slice(cut, preRunLen)`) then left "Summarize the conversation…" stuck
+      // in the kept tail, and the model answered it as a real reply next turn.
+      // A pre-run deep snapshot sidesteps where the instruction landed entirely.
+      const cleanRecent = messages.slice(cut).map((m) => structuredClone(m))
       let summaryText = ''
       if (signal) signal.addEventListener('abort', () => timeoutCtrl.abort('compact-cancelled'), { once: true })
       const iter = session.agent.run(compactInstruction, {
@@ -2090,7 +2100,6 @@ export class SessionManager implements SessionManagerInternals {
         role: 'user',
         content: [{ type: 'text', text: `[Conversation Summary — ${olderCount} messages compacted]\n${summaryText}` }],
       }
-      const cleanRecent = messages.slice(cut, preRunLen)
       // Aggressive micro-compact on the kept tail: if those few "recent"
       // messages each carry a 50KB tool result, the post-summary state can
       // still exceed the threshold. Keep only the single newest tool
