@@ -10,6 +10,7 @@ Session history viewer: hierarchy tree, message playback, debug mode, system pro
 - Clicking loads the full message list into SessionChatPanel
 - Collapse / expand via arrow buttons
 - Clicking the count badge (e.g. "+3") shows total descendant count
+- Inline title rename (admin-only): a hover pencil on any row — root **or** sub-agent — opens an inline input (Enter commits, Escape cancels, blur commits); persists via `PATCH /api/sessions/logs/:id`
 - Infinite scroll loads more roots in pages; a silent reload (after streaming ends, or a delete / create / archive elsewhere) re-fetches the **same depth** already scrolled to rather than snapping back to the first page. Capped at 300 top-level rows — past that, "load more" stops (older sessions, e.g. from a busy Slack channel, aren't worth scrolling to)
 
 ### Message viewer
