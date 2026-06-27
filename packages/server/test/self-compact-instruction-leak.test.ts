@@ -59,10 +59,10 @@ afterEach(() => {
 })
 
 /** Inject a fake session straight into the private map, bypassing model build. */
-function seedSession(id: string, messages: Msg[]): FakeAgent {
+function seedSession(id: string, messages: Msg[], parentId: string | null = null): FakeAgent {
   const agent = new FakeAgent(messages)
   ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set(id, {
-    id, parentId: null, agent, compactedThisTurn: false, systemPrompt: '',
+    id, parentId, agent, compactedThisTurn: false, systemPrompt: '',
   })
   return agent
 }
@@ -103,6 +103,27 @@ describe('selfCompactSession — instruction must not leak into kept tail', () =
 
     await sm.selfCompactSession('s2')
     const agent = (sm as unknown as { sessions: Map<string, { agent: FakeAgent }> }).sessions.get('s2')!.agent
+    expect(serialize(agent.messages)).not.toContain('Summarize the conversation')
+  })
+
+  it('applies the same fix to sub-agent sessions (parentId set)', async () => {
+    // Sub-agents share runSession + selfCompactSession with the root — same
+    // coalescing run(), same rebuild path. parentId only routes UI notices, it
+    // does NOT fork the message-rebuild logic, so the leak fix must hold here too.
+    const messages: Msg[] = []
+    for (let i = 0; i < 6; i++) {
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: `a${i}` }] })
+      messages.push({ role: 'user', content: [{ type: 'text', text: `u${i}` }] })
+    }
+    messages[messages.length - 1] = {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }],
+    }
+    seedSession('root>sub1', messages, 'root')
+
+    const result = await sm.selfCompactSession('root>sub1')
+    expect(result).not.toBeNull()
+    const agent = (sm as unknown as { sessions: Map<string, { agent: FakeAgent }> }).sessions.get('root>sub1')!.agent
     expect(serialize(agent.messages)).not.toContain('Summarize the conversation')
   })
 })
