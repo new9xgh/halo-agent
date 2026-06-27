@@ -99,9 +99,17 @@ function countDescendants(nodes: SessionNode[]): number {
   return count
 }
 
+/** Set a node's title anywhere in the tree (root or nested sub-agent). */
+function patchNodeTitle(nodes: SessionNode[], id: string, title: string): SessionNode[] {
+  return nodes.map((n) =>
+    n.id === id ? { ...n, title } : { ...n, children: patchNodeTitle(n.children, id, title) },
+  )
+}
+
 /** Recursive session tree renderer */
 function SessionTree({
   nodes, depth, expanded, selectedSessionId, onToggle, onSelect,
+  editingId, editingTitle, setEditingTitle, onStartRename, onCommitRename, onCancelRename,
 }: {
   nodes: SessionNode[]
   depth: number
@@ -109,6 +117,12 @@ function SessionTree({
   selectedSessionId: string | null
   onToggle: (id: string) => void
   onSelect: (session: SessionItem) => void
+  editingId: string | null
+  editingTitle: string
+  setEditingTitle: (v: string) => void
+  onStartRename: (e: React.MouseEvent, s: SessionItem) => void
+  onCommitRename: (sid: string) => void
+  onCancelRename: () => void
 }) {
   const pl = 12 + depth * 16
   return (
@@ -147,9 +161,25 @@ function SessionTree({
                   <span className="shrink-0 rounded bg-purple-900/50 px-1 py-0.5 text-[8px] text-purple-400">
                     {sub.agentName || sub.agentId}
                   </span>
-                  <p className="truncate text-[10px] text-[var(--foreground)]">
-                    {sub.title || 'Untitled'}
-                  </p>
+                  {editingId === sub.id ? (
+                    <input
+                      autoFocus
+                      value={editingTitle}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); void onCommitRename(sub.id) }
+                        else if (e.key === 'Escape') { e.preventDefault(); onCancelRename() }
+                      }}
+                      onBlur={() => onCommitRename(sub.id)}
+                      className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[10px] text-[var(--foreground)] outline-none focus:border-blue-500"
+                    />
+                  ) : (
+                    <p className="truncate text-[10px] text-[var(--foreground)]">
+                      {sub.title || 'Untitled'}
+                    </p>
+                  )}
                   {isStopped && (
                     <span title="Stopped"><StopCircle className="h-2.5 w-2.5 shrink-0 text-zinc-500" /></span>
                   )}
@@ -164,6 +194,15 @@ function SessionTree({
                   {sub.messageCount} msgs · {timeAgo(sub.updatedAt)}
                 </p>
               </div>
+              {editingId !== sub.id && (
+                <span
+                  onClick={(e) => onStartRename(e, sub)}
+                  title="Rename"
+                  className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:text-blue-400 transition-opacity"
+                >
+                  <Pencil className="h-2.5 w-2.5" />
+                </span>
+              )}
             </button>
             {isExp && hasChildren && (
               <SessionTree
@@ -173,6 +212,12 @@ function SessionTree({
                 selectedSessionId={selectedSessionId}
                 onToggle={onToggle}
                 onSelect={onSelect}
+                editingId={editingId}
+                editingTitle={editingTitle}
+                setEditingTitle={setEditingTitle}
+                onStartRename={onStartRename}
+                onCommitRename={onCommitRename}
+                onCancelRename={onCancelRename}
               />
             )}
           </div>
@@ -477,7 +522,7 @@ export function AgentSessionsSidebar() {
     const title = editingTitle.trim()
     setEditingId(null)
     if (!title || !activeProject?.path) return
-    setTree((prev) => prev.map((n) => (n.id === sid ? { ...n, title } : n)))
+    setTree((prev) => patchNodeTitle(prev, sid, title))
     try {
       await api.sessionLogs.rename(sid, title, activeProject.path)
       bumpSessionBus()
@@ -642,6 +687,12 @@ export function AgentSessionsSidebar() {
                     selectedSessionId={selectedSessionId}
                     onToggle={toggleExpand}
                     onSelect={handleSelectSession}
+                    editingId={editingId}
+                    editingTitle={editingTitle}
+                    setEditingTitle={setEditingTitle}
+                    onStartRename={startRename}
+                    onCommitRename={commitRename}
+                    onCancelRename={cancelRename}
                   />
                 )}
               </div>
