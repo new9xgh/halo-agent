@@ -102,6 +102,12 @@ A standalone, read-only pixel **city block** view of a server's runtime — each
 
 Lives at [halo-city/](halo-city/) (plain static files, no build). Backed by `packages/server/src/routes/show.ts` (`/api/show/state`, added to `PUBLIC_PATHS`). See [halo-city/README.md](halo-city/README.md) and design notes in [design/halo-city.md](docs/design/halo-city.md).
 
+## Source Control (Git)
+
+A focused Git panel in the admin — **view changes · commit · push · manage credentials**, deliberately *not* a full VSCode SCM clone. It's "your workstation's git view", not the project's full topology sandbox (that's GitHub's job). Three-gate onboarding (not-a-repo → initialize · repo-no-remote → add remote · full panel), with an `isRepoRoot()` guard so a workspace nested under an ancestor repo (dotfiles `$HOME`, monorepo subdir) never leaks that repo's state. CHANGES list + Monaco diff, commit box with friendly push-failure banner (no raw `could not read Username` leak), history graph with tiered ref badges + infinite scroll, and Explorer file-tree git decorations (status colors + dimmed ignored paths, `core.quotepath=false` so non-ASCII paths dim correctly). HTTPS credentials are multi-per-host with `~/.git-credentials` as the single source of truth (token never re-displayed). Auto-refresh is push-based over WS `file:changed` — both panel writes and command-line git ops (a lightweight non-recursive `.git/HEAD`+`index` watch) trigger it, no polling.
+
+Driven from `packages/core/src/workspace/git-manager.ts` (simple-git wrapper) + `packages/server/src/routes/git.ts` + `git-credentials.ts` / `git-ssh.ts` + `packages/admin/src/features/source-control/`. Out of scope this round: branch create/switch/merge, ahead/behind, AI commit messages, clone, conflict UI, stash, and the DAG rail graph (deferred to the branch-operations round). See [requirements/source-control.md](docs/requirements/source-control.md) and API in [dev/api.md](docs/dev/api.md#source-control-git).
+
 ## Memory
 
 Important matters (architectural decisions, gotchas, non-obvious trade-offs) are recorded by date in [memory/](memory/), named `YYYY-MM-DD-topic.md`. Not automatically injected into context — load via `file_read` as needed. Threshold: only write things that will affect future decisions; trivial bug fixes don't belong here.

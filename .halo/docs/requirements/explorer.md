@@ -65,6 +65,9 @@ The menu auto-clamps to the viewport, so right-clicking near the window edge doe
 ### Modification indicator
 Files with unsaved editor edits show a coloured dot in the tree (synced from `editorStore.modifiedPaths`).
 
+### Git decorations
+When the workspace is a git repo, the tree also colors file/folder names + badges by git status, and dims `.gitignore`'d paths — driven by `/api/git/status` + `/api/git/ignored`. See [source-control.md](source-control.md#explorer-git-decorations). (A real change wins over ignored; a non-repo workspace carries no decorations.)
+
 ### File type icons
 Extension-to-icon mapping across common filetypes.
 

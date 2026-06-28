@@ -159,6 +159,47 @@ File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `c
 | GET | `/api/cron/channel-targets` | List channel accounts available as targets, aggregated from the cron-dispatcher registry. Returns `{targets}` |
 | GET | `/api/cron/meta` | Server-side metadata. Returns `{hostTimezone}` — the IANA tz this server resolves an unset `cron_jobs.timezone` to |
 
+## Source Control (Git)
+
+File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source Control panel + Explorer git decorations. All project-scoped reads take `projectId=<absPath>`; writes take it in the JSON body. A write (stage/unstage/commit/push/pull/init/remote) broadcasts `file:changed` (path `.git`) so the panel, graph and explorer decorations auto-refresh without polling — the file watcher ignores `.git`, so the route re-broadcasts it itself. Path params on diff are traversal-checked against the project root.
+
+### Repo state (read)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/git/status?projectId=` | Structured working-tree status. A folder that isn't a git work-tree **root** (no repo, or merely nested inside an ancestor's repo) returns `{isRepo: false}` (200, not 500) so the panel shows its initialize/empty state. Otherwise `{isRepo: true, branch, tracking, ahead, behind, files: [{path, index, workingDir, from?}]}` — `index`/`workingDir` are the two porcelain status chars (X staged / Y working) |
+| GET | `/api/git/ignored?projectId=` | `.gitignore`'d paths for graying out in the explorer; ignored directories are collapsed to a single entry (e.g. `node_modules`) rather than expanded. Returns `{ignored: string[]}`. Runs with `core.quotepath=false` so non-ASCII (e.g. Chinese) paths come back literal, not octal-escaped — the frontend prefix-matches them against tree node paths |
+| GET | `/api/git/diff?projectId=&path=[&staged=0\|1][&from=][&commit=]` | Two sides for the Monaco diff editor. With `commit`, shows that commit's own change (parent vs commit); without it, the working-tree (or `staged=1`) diff. `from` carries the old path on a rename. Returns `{path, original, modified, ...}`. 400 if `path` missing, 403 on traversal |
+| GET | `/api/git/log?projectId=[&limit=50]` | Recent commits for the graph. `limit` default 50, capped at 2000. Returns `{commits: [{hash, shortHash, message, author, date, refs}]}` |
+| GET | `/api/git/commit-files?projectId=&hash=` | Files changed by one commit. Returns `{files: [{path, status, from?}]}` (`status` = M/A/D/R/C; `from` set on rename/copy). 400 if `hash` missing |
+| GET | `/api/git/remotes?projectId=` | Configured remotes. Returns `{remotes: [{name, url}]}` (`[]` when none) |
+
+### Mutations (write — each broadcasts `file:changed`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/git/stage` | Body `{projectId, paths: string[]}`. `git add`. 400 if `paths` empty |
+| POST | `/api/git/unstage` | Body `{projectId, paths: string[]}`. 400 if `paths` empty |
+| POST | `/api/git/commit` | Body `{projectId, message}`. Returns `{ok, hash}`. 400 if `message` blank |
+| POST | `/api/git/push` | Body `{projectId}`. First push of an untracked branch sets upstream (`-u origin <branch>`). Git errors (missing creds, SSH passphrase, rejected) are surfaced verbatim for the panel to display |
+| POST | `/api/git/pull` | Body `{projectId}` |
+| POST | `/api/git/init` | Body `{projectId}`. `git init` |
+| POST | `/api/git/remote` | Body `{projectId, name?, url}`. Adds a remote (`name` defaults to `origin`); drives the "no remote configured" publish flow. 400 if `url` missing |
+
+### Credentials & SSH
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/git/credentials` | List stored HTTPS credentials — `{credentials: [{host, username}]}`. **Never returns the token.** Source of truth is `~/.git-credentials` (one line per host) |
+| POST | `/api/git/credentials` | Body `{host, username, token}`. Upserts the `https://user:token@host` line in `~/.git-credentials` (0600). 400 if any field missing |
+| DELETE | `/api/git/credentials/:host` | Remove the credential line(s) for one host (idempotent). `:host` is sent `encodeURIComponent`'d; Hono decodes it |
+| GET | `/api/git/ssh/keys` | Private keys found in `~/.ssh` + an `encrypted` flag each. Never returns key contents. Returns `{keys: [...]}` |
+| GET | `/api/git/ssh/agent` | ssh-agent reachability + loaded key count |
+| GET | `/api/git/remote/protocol?projectId=` | Current `origin` url + detected protocol. Returns `{url, protocol}` |
+| POST | `/api/git/remote/protocol` | Body `{projectId, to: 'https'\|'ssh'}`. Rewrites `origin` between HTTPS and scp-style SSH. Returns `{ok, url}` |
+
+See [requirements/source-control.md](../requirements/source-control.md).
+
 ## Web Channel
 
 File: `packages/server/src/routes/web.ts`
