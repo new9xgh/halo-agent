@@ -15,6 +15,7 @@ import type { UIState } from '../sessions/ui-log-builder.js'
 import { createSaveSnapshot } from '../sessions/ui-log-builder.js'
 import { config } from '../config.js'
 import { WorkspaceWatcher } from './file-watcher.js'
+import { GitDirWatcher } from './git-dir-watcher.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { TerminalManager } from './terminal-manager.js'
@@ -63,6 +64,7 @@ interface ConnectedClient {
   unsubscribeEvents: (() => void) | null
   terminalManager: TerminalManager
   fileWatcher: WorkspaceWatcher
+  gitDirWatcher: GitDirWatcher
 }
 
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
@@ -173,6 +175,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
   wss.on('connection', (ws: WebSocket) => {
     const fileWatcher = new WorkspaceWatcher()
+    const gitDirWatcher = new GitDirWatcher()
     const terminalManager = new TerminalManager(ws)
 
     const client: ConnectedClient = {
@@ -182,6 +185,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       sessionManager: null,
       agentId: 'default',
       fileWatcher,
+      gitDirWatcher,
       terminalManager,
       backgroundSaves: new Map(),
       unsubscribeEvents: null,
@@ -189,6 +193,13 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
     fileWatcher.setCallback((evt) => {
       sendJson(ws, { type: 'file:changed', path: evt.path, action: evt.action })
+    })
+
+    // Command-line git ops (terminal commit/checkout/add) bypass the SC panel's
+    // own re-broadcast, and WorkspaceWatcher ignores .git. Mirror the panel's
+    // payload (path '.git') so the same debounced refresh fires.
+    gitDirWatcher.setCallback(() => {
+      sendJson(ws, { type: 'file:changed', path: '.git', action: 'change' })
     })
 
     clients.add(client)
@@ -398,6 +409,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       }
 
       void client.fileWatcher.stop()
+      client.gitDirWatcher.stop()
       clients.delete(client)
       console.debug(`[WS] Client disconnected (total: ${clients.size})`)
     })
@@ -405,6 +417,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     ws.on('error', (err) => {
       console.debug(`[WS] Client error: ${err.message}`)
       void client.fileWatcher.stop()
+      client.gitDirWatcher.stop()
       clients.delete(client)
     })
 
@@ -437,6 +450,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // reload) leaves the watcher idle and the explorer never gets
         // file:changed events for new files the agent writes.
         void client.fileWatcher.start(projectPath)
+        client.gitDirWatcher.start(projectPath)
       }
       if (!client.sessionManager) return null
       const sm = client.sessionManager
@@ -609,6 +623,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       if (subProjectPath) {
         client.sessionManager = getSessionManager(subProjectPath)
         void client.fileWatcher.start(subProjectPath)
+        client.gitDirWatcher.start(subProjectPath)
       }
 
       if (msg.sessionId) {

@@ -233,7 +233,11 @@ export class GitManager {
    *  this never risks regressing the change list. Empty array when no HEAD/clean. */
   async getIgnoredPaths(): Promise<string[]> {
     try {
-      const raw = await this.git.raw(['status', '--porcelain', '--ignored']);
+      // `core.quotepath=false`: git defaults to octal-escaping non-ASCII paths
+      // (e.g. a Chinese dir → `"\344\270\255..."`), which breaks the frontend's
+      // startsWith prefix match against the real tree node paths so those dirs
+      // never gray out. Disable it so paths come back literal (e.g. `中文目录/`).
+      const raw = await this.git.raw(['-c', 'core.quotepath=false', 'status', '--porcelain', '--ignored']);
       return raw
         .split('\n')
         .filter((line) => line.startsWith('!!'))
