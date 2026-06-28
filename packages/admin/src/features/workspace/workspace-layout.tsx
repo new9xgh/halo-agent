@@ -15,7 +15,7 @@ import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
-import { useGitDecorationsSync } from '@/features/explorer/git-decorations'
+import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
 import { SettingsMain } from '@/features/settings/settings-main'
@@ -279,12 +279,20 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     { id: 'settings', icon: Settings2, label: t('nav.settings'), position: 'bottom' },
   ]
 
-  const topTabs = tabs.filter((t) => t.position !== 'bottom')
-  const bottomTabs = tabs.filter((t) => t.position === 'bottom')
-
   const projectId = activeProject?.id ?? null
   // Keep the Explorer's git status decorations in sync for the active workspace.
   useGitDecorationsSync(projectId)
+  // Hide the Source Control entry for non-git workspaces (spares non-developer
+  // users a panel that doesn't apply). Three-state: show while 'unknown' (no
+  // first-paint flicker) and when true (incl. a clean repo with no changes);
+  // hide only on a confirmed non-repo. Reuses useGitDecorationsSync's status
+  // call — no extra fetch.
+  const isRepo = useIsRepo(projectId)
+
+  const topTabs = tabs
+    .filter((t) => t.position !== 'bottom')
+    .filter((t) => t.id !== 'source-control' || isRepo !== false)
+  const bottomTabs = tabs.filter((t) => t.position === 'bottom')
   const maximized = useEditorStore((s) => s.maximized)
   const bottomFloating = useEditorStore((s) => s.bottomFloating)
   const bottomMaximized = useEditorStore((s) => s.bottomMaximized)
@@ -292,6 +300,15 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
   const explorerSidebarVisible = sidebarOpen && !maximized
   const nonExplorerHasSidebar = TABS_WITH_SIDEBAR.includes(activeTab) && sidebarOpen && activeTab !== 'explorer'
   const isExplorer = activeTab === 'explorer'
+
+  // localStorage can restore activeTab='source-control' into a non-git
+  // workspace, where the entry is now hidden — leaving the main area on the SC
+  // panel with no matching activity-bar icon. Fall back to Explorer, but only
+  // on a confirmed non-repo (never 'unknown', so an in-flight status check
+  // can't kick the user off the tab).
+  useEffect(() => {
+    if (isRepo === false && activeTab === 'source-control') setActiveTab('explorer')
+  }, [isRepo, activeTab])
 
   return (
     <div className="flex h-full">

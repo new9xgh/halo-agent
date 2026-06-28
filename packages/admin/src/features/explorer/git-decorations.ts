@@ -35,14 +35,20 @@ interface ProjectDecorations {
 
 interface GitDecorationsStore {
   byProject: Record<string, ProjectDecorations>
+  /** projectId → whether the workspace is a git repo. Absent key = not yet
+   *  resolved ('unknown'); set from the same /git/status call as decorations. */
+  repoStatus: Record<string, boolean>
   setForProject: (projectId: string, decorations: ProjectDecorations) => void
   clearProject: (projectId: string) => void
+  setRepoStatus: (projectId: string, isRepo: boolean) => void
+  clearRepoStatus: (projectId: string) => void
 }
 
 const EMPTY: ProjectDecorations = { files: new Map(), dirs: new Map(), ignored: new Set() }
 
 const useGitDecorationsStore = create<GitDecorationsStore>((set) => ({
   byProject: {},
+  repoStatus: {},
   setForProject: (projectId, decorations) =>
     set((s) => ({ byProject: { ...s.byProject, [projectId]: decorations } })),
   clearProject: (projectId) =>
@@ -52,11 +58,34 @@ const useGitDecorationsStore = create<GitDecorationsStore>((set) => ({
       delete next[projectId]
       return { byProject: next }
     }),
+  setRepoStatus: (projectId, isRepo) =>
+    set((s) => {
+      if (s.repoStatus[projectId] === isRepo) return s
+      return { repoStatus: { ...s.repoStatus, [projectId]: isRepo } }
+    }),
+  clearRepoStatus: (projectId) =>
+    set((s) => {
+      if (!(projectId in s.repoStatus)) return s
+      const next = { ...s.repoStatus }
+      delete next[projectId]
+      return { repoStatus: next }
+    }),
 }))
 
 /** Read this project's decorations (stable EMPTY when none loaded yet). */
 export function useGitDecorations(projectId: string | null): ProjectDecorations {
   return useGitDecorationsStore((s) => (projectId ? s.byProject[projectId] : undefined) ?? EMPTY)
+}
+
+/**
+ * Three-state repo signal for a workspace, derived from the same `/git/status`
+ * call that drives decorations (no extra fetch). `'unknown'` until the first
+ * status resolves — callers default to *showing* the Source Control entry then,
+ * so a clean repo (no changes) is never mis-hidden and there's no first-paint
+ * flicker; only a confirmed non-repo (`false`) hides it.
+ */
+export function useIsRepo(projectId: string | null): 'unknown' | boolean {
+  return useGitDecorationsStore((s) => (projectId ? s.repoStatus[projectId] : undefined) ?? 'unknown')
 }
 
 /**
@@ -120,7 +149,7 @@ export function isPathIgnored(ignored: Set<string>, path: string): boolean {
 export function useGitDecorationsSync(projectId: string | null): void {
   useEffect(() => {
     if (!projectId) return
-    const { setForProject, clearProject } = useGitDecorationsStore.getState()
+    const { setForProject, clearProject, setRepoStatus, clearRepoStatus } = useGitDecorationsStore.getState()
     let cancelled = false
 
     async function refresh() {
@@ -133,13 +162,22 @@ export function useGitDecorationsSync(projectId: string | null): void {
         ])
         // Non-repo folder (isRepo:false) → no decorations, keep the tree clean.
         if (status.isRepo === false) {
-          if (!cancelled) clearProject(projectId!)
+          if (!cancelled) {
+            clearProject(projectId!)
+            setRepoStatus(projectId!, false)
+          }
           return
         }
-        if (!cancelled) setForProject(projectId!, buildDecorations(status.files, ign.ignored))
+        if (!cancelled) {
+          setForProject(projectId!, buildDecorations(status.files, ign.ignored))
+          setRepoStatus(projectId!, true)
+        }
       } catch {
         // Non-git folder or transient error — drop decorations, keep the tree usable.
-        if (!cancelled) clearProject(projectId!)
+        if (!cancelled) {
+          clearProject(projectId!)
+          setRepoStatus(projectId!, false)
+        }
       }
     }
 
@@ -156,6 +194,9 @@ export function useGitDecorationsSync(projectId: string | null): void {
       if (timer) clearTimeout(timer)
       unsub()
       clearProject(projectId)
+      // Drop the repo signal too, so switching workspaces falls back to
+      // 'unknown' (show) rather than leaking the old workspace's true/false.
+      clearRepoStatus(projectId)
     }
   }, [projectId])
 }
