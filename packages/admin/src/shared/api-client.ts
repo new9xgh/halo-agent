@@ -351,13 +351,19 @@ export const api = {
     },
 
     getCredentials() {
-      return request<{ configured: boolean; host: string; username: string }>('/git/credentials')
+      return request<{ credentials: Array<{ host: string; username: string }> }>('/git/credentials')
     },
 
     saveCredentials(data: { host: string; username: string; token: string }) {
       return request<{ ok: boolean }>('/git/credentials', {
         method: 'POST',
         body: JSON.stringify(data),
+      })
+    },
+
+    deleteCredential(host: string) {
+      return request<{ ok: boolean }>(`/git/credentials/${encodeURIComponent(host)}`, {
+        method: 'DELETE',
       })
     },
 

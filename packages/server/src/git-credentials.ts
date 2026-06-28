@@ -1,14 +1,13 @@
 /**
  * Git HTTPS credential management for the Source Control panel.
  *
- * Stores a single PAT-based credential in two places (both required):
- *   (a) halo encrypted secrets (~/.halo/secrets/config.yaml, 0o600) — so the
- *       admin can display "configured for <host>" and the token survives.
- *   (b) ~/.git-credentials (0o600) — the file `git`'s `store` credential
- *       helper actually reads, so `git push/pull` over HTTPS use it.
+ * `~/.git-credentials` (0o600) is the single source of truth — it's the file
+ * git's `store` credential helper actually reads, so `git push/pull` over
+ * HTTPS use it directly. Multiple credentials are supported, one line per host
+ * (`https://user:token@host`).
  *
- * Uses the process HOME for both, matching setup-config.ts — so the dev
- * environment (HOME=/home/ubuntu/halo-dev-home) is isolated automatically.
+ * Uses the process HOME, matching setup-config.ts — so the dev environment
+ * (HOME=/home/ubuntu/halo-dev-home) is isolated automatically.
  *
  * The token is never logged and never returned to the frontend.
  */
@@ -16,7 +15,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { updateConfigLeaves, readConfigLeaf } from './setup-config.js'
 
 const GIT_CREDENTIALS_PATH = path.join(homedir(), '.git-credentials')
 
@@ -26,8 +24,7 @@ export interface GitCredentialInput {
   token: string
 }
 
-export interface GitCredentialStatus {
-  configured: boolean
+export interface GitCredential {
   host: string
   username: string
 }
@@ -62,27 +59,46 @@ function ensureCredentialHelper(): void {
   }
 }
 
-/** Persist a git credential to both sinks. Throws on filesystem failure. */
+/** Persist a git credential to ~/.git-credentials. Throws on filesystem failure. */
 export function saveGitCredentials({ host, username, token }: GitCredentialInput): void {
-  updateConfigLeaves({
-    'git.host': host,
-    'git.username': username,
-    'git.token': token,
-  })
   writeGitCredentialsFile(host, username, token)
   ensureCredentialHelper()
   console.log(`[GitCredentials] saved for host ${host}`)
 }
 
-/** Status for the admin — host + username + configured flag, never the token. */
-export function getGitCredentialsStatus(): GitCredentialStatus {
-  const host = readConfigLeaf('git.host')
-  const username = readConfigLeaf('git.username')
-  const token = readConfigLeaf('git.token')
-  const configured = typeof token === 'string' && token.length > 0
-  return {
-    configured,
-    host: typeof host === 'string' ? host : '',
-    username: typeof username === 'string' ? username : '',
+/** List configured credentials for the admin — host + username, never the token. */
+export function listGitCredentials(): GitCredential[] {
+  if (!fs.existsSync(GIT_CREDENTIALS_PATH)) return []
+  const lines = fs.readFileSync(GIT_CREDENTIALS_PATH, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+  const byHost = new Map<string, GitCredential>()
+  for (const line of lines) {
+    try {
+      const u = new URL(line)
+      // u.host keeps the port (github.enterprise.com:8443); u.hostname would drop it.
+      if (!byHost.has(u.host)) {
+        byHost.set(u.host, { host: u.host, username: decodeURIComponent(u.username) })
+      }
+    } catch {
+      // Skip a malformed / non-URL line rather than letting it break the whole list.
+    }
   }
+  return [...byHost.values()]
+}
+
+/** Remove the credential line(s) for `host` from ~/.git-credentials. Idempotent:
+ *  a no-op (file missing, or no matching line) neither errors nor churns the file. */
+export function deleteGitCredential(host: string): void {
+  if (!fs.existsSync(GIT_CREDENTIALS_PATH)) return
+  const lines = fs.readFileSync(GIT_CREDENTIALS_PATH, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+  const kept = lines.filter((l) => {
+    try {
+      return new URL(l).host !== host
+    } catch {
+      return true // keep malformed lines untouched
+    }
+  })
+  if (kept.length === lines.length) return // nothing matched — idempotent no-op
+  fs.writeFileSync(GIT_CREDENTIALS_PATH, kept.length ? kept.join('\n') + '\n' : '', { encoding: 'utf-8', mode: 0o600 })
+  try { fs.chmodSync(GIT_CREDENTIALS_PATH, 0o600) } catch { /* best-effort */ }
+  console.log(`[GitCredentials] removed for host ${host}`)
 }

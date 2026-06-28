@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { Workspace, GitManager } from '@turmind/halo-core'
-import { saveGitCredentials, getGitCredentialsStatus } from '../git-credentials.js'
+import { saveGitCredentials, listGitCredentials, deleteGitCredential } from '../git-credentials.js'
 import {
   listSshKeys,
   getSshAgentStatus,
@@ -289,10 +289,10 @@ export function createGitRoutes() {
     }
   })
 
-  // GET /git/credentials — { configured, host, username } (never the token)
+  // GET /git/credentials — { credentials: [{ host, username }] } (never the token)
   app.get('/git/credentials', (c) => {
     try {
-      return c.json(getGitCredentialsStatus())
+      return c.json({ credentials: listGitCredentials() })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Git] Error reading credentials: ${errorMessage}`)
@@ -315,6 +315,21 @@ export function createGitRoutes() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Git] Error saving credentials: ${errorMessage}`)
+      return c.json({ error: errorMessage }, 500)
+    }
+  })
+
+  // DELETE /git/credentials/:host — remove the credential for one host (host is
+  // sent encodeURIComponent'd by the client; Hono decodes the param for us).
+  app.delete('/git/credentials/:host', (c) => {
+    try {
+      const host = c.req.param('host')
+      if (!host) return c.json({ error: 'host is required' }, 400)
+      deleteGitCredential(host)
+      return c.json({ ok: true })
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.log(`[Git] Error deleting credentials: ${errorMessage}`)
       return c.json({ error: errorMessage }, 500)
     }
   })

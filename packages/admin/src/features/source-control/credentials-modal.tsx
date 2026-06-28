@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/shared/api-client'
-import { X, Lock, LockOpen, RefreshCw, ExternalLink, Copy, Check } from 'lucide-react'
+import { X, Lock, LockOpen, RefreshCw, ExternalLink, Copy, Check, Trash2 } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { cn } from '@/shared/utils'
 
@@ -60,24 +60,23 @@ export function CredentialsModal({ projectId, onClose, onSaved }: CredentialsMod
 const FIELD =
   'rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]'
 
+interface GitCredential { host: string; username: string }
+
 function HttpsTab({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const t = useT()
+  const [creds, setCreds] = useState<GitCredential[]>([])
+  const [confirmingHost, setConfirmingHost] = useState<string | null>(null)
   const [host, setHost] = useState('github.com')
   const [username, setUsername] = useState('')
   const [token, setToken] = useState('')
-  const [configured, setConfigured] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    api.git.getCredentials()
-      .then((s) => {
-        setConfigured(s.configured)
-        if (s.host) setHost(s.host)
-        if (s.username) setUsername(s.username)
-      })
-      .catch(() => { /* first-time config — keep defaults */ })
+  const refresh = useCallback(() => {
+    api.git.getCredentials().then((r) => setCreds(r.credentials)).catch(() => setCreds([]))
   }, [])
+
+  useEffect(() => { refresh() }, [refresh])
 
   async function handleSave() {
     if (!host.trim() || !username.trim() || !token) {
@@ -88,8 +87,9 @@ function HttpsTab({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
     setError(null)
     try {
       await api.git.saveCredentials({ host: host.trim(), username: username.trim(), token })
+      setToken('') // keep host/username so the user can keep adding; don't close the modal
+      refresh()
       onSaved()
-      onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -97,46 +97,98 @@ function HttpsTab({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
     }
   }
 
+  // Inline two-step delete: first click arms (confirmingHost = host), second fires.
+  async function handleDelete(targetHost: string) {
+    setError(null)
+    try {
+      await api.git.deleteCredential(targetHost)
+      refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setConfirmingHost(null)
+    }
+  }
+
   return (
     <>
-      <div className="flex flex-col gap-3 px-4 py-4">
+      <div className="flex max-h-[420px] flex-col gap-3 overflow-y-auto px-4 py-4">
         <p className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.httpsDesc')}</p>
-        {configured && (
-          <p className="text-xs text-emerald-400">{t('sc.cred.configured', { host, username })}</p>
-        )}
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.host')}</span>
-          <input type="text" value={host} onChange={(e) => setHost(e.target.value)} placeholder="github.com" className={FIELD} />
-        </label>
+        {/* Configured credentials list */}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.configuredList')}</span>
+          {creds.length === 0 ? (
+            <p className="rounded border border-dashed border-[var(--border)] px-2 py-3 text-center text-[10px] text-[var(--muted-foreground)]">
+              {t('sc.cred.noCredsYet')}
+            </p>
+          ) : (
+            creds.map((cred) => (
+              <div key={cred.host} className="flex items-center gap-2 rounded border border-[var(--border)] px-2.5 py-1.5 text-xs">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="truncate text-[var(--foreground)]">{cred.host}</span>
+                  <span className="truncate text-[10px] text-[var(--muted-foreground)]">{cred.username}</span>
+                </div>
+                {confirmingHost === cred.host ? (
+                  <button
+                    onClick={() => handleDelete(cred.host)}
+                    className="shrink-0 rounded bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-400 hover:bg-red-500/25"
+                  >
+                    {t('sc.cred.confirmDelete')}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setConfirmingHost(cred.host)}
+                    title={t('sc.cred.delete')}
+                    className="shrink-0 rounded p-1 text-[var(--muted-foreground)] hover:text-red-400"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.username')}</span>
-          <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" className={FIELD} />
-        </label>
+        <div className="border-t border-[var(--border)]" />
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.token')}</span>
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder={configured ? '••••••••' : ''}
-            autoComplete="new-password"
-            className={FIELD}
-          />
-          <span className="text-[10px] text-[var(--muted-foreground)]">
-            {t('sc.cred.tokenHint')}{' '}
-            <a
-              href="https://github.com/settings/tokens"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-0.5 text-[var(--primary)] hover:underline"
-            >
-              {t('sc.cred.tokenLink')}<ExternalLink className="h-2.5 w-2.5" />
-            </a>
-          </span>
-        </label>
+        {/* Add a new credential */}
+        <div className="flex flex-col gap-3">
+          <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.addNew')}</span>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.host')}</span>
+            <input type="text" value={host} onChange={(e) => setHost(e.target.value)} placeholder="github.com" className={FIELD} />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.username')}</span>
+            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" className={FIELD} />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-[var(--muted-foreground)]">{t('sc.cred.token')}</span>
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              autoComplete="new-password"
+              className={FIELD}
+            />
+            <span className="text-[10px] text-[var(--muted-foreground)]">
+              {t('sc.cred.tokenHint')}{' '}
+              <a
+                href="https://github.com/settings/tokens"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-0.5 text-[var(--primary)] hover:underline"
+              >
+                {t('sc.cred.tokenLink')}<ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            </span>
+          </label>
+        </div>
 
         {error && <p className="text-xs text-red-400">{error}</p>}
       </div>
