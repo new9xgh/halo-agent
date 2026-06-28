@@ -375,6 +375,13 @@ export const api = {
       return request<{ agentRunning: boolean; loadedKeys: string[] }>('/git/ssh/agent')
     },
 
+    unlockSshKey(data: { keyPath: string; passphrase: string }) {
+      return request<{ ok: boolean; error?: string }>('/git/ssh/unlock', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      })
+    },
+
     getRemoteProtocol(projectId: string) {
       return request<{ url: string; protocol: 'https' | 'ssh' | 'other' }>(
         `/git/remote/protocol?projectId=${encodeURIComponent(projectId)}`,

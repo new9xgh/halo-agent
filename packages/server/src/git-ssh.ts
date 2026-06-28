@@ -6,16 +6,17 @@
  * Uses the process HOME (matching git-credentials.ts), so the dev environment
  * (HOME=/home/ubuntu/halo-dev-home) is isolated automatically.
  *
- * DESIGN (command-guided, halo never touches a passphrase):
+ * DESIGN (one shared agent; the passphrase only ever reaches ssh-add):
  *   halo spawns ONE ssh-agent at boot and writes its socket onto process.env.
  *   simple-git's git children inherit process.env, and the built-in terminal
- *   sets termEnv = {...process.env} — so both share that single agent. The user
- *   loads a key by running `ssh-add ~/.ssh/<key>` in the halo terminal and
- *   types the passphrase there; it goes straight to ssh-add and never passes
- *   through halo. Once loaded, push/pull just work because git sees the same
- *   SSH_AUTH_SOCK. This is process-scoped: a server restart resets the agent
- *   and the key must be re-added (like re-unlocking SSH after a reboot). HTTPS
- *   PATs are stored on disk and survive restarts.
+ *   sets termEnv = {...process.env} — so both share that single agent. A key is
+ *   loaded into it either from the terminal (`ssh-add ~/.ssh/<key>`) or in-app
+ *   via unlockSshKey() below, which feeds the passphrase to ssh-add through a
+ *   throwaway SSH_ASKPASS helper — never argv, never disk, never a log. Once
+ *   loaded, push/pull just work because git sees the same SSH_AUTH_SOCK. This is
+ *   process-scoped: a server restart resets the agent and the key must be
+ *   re-added (like re-unlocking SSH after a reboot). HTTPS PATs are stored on
+ *   disk and survive restarts.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -114,6 +115,64 @@ export function getSshAgentStatus(): SshAgentStatus {
     .filter(Boolean)
     .filter((l) => l !== 'The agent has no identities.')
   return { agentRunning: true, loadedKeys }
+}
+
+/** SSH_ASKPASS helper body. Prints the passphrase once (from the env var set on
+ *  the ssh-add child), then refuses every later call by exiting non-zero — that
+ *  is what makes a wrong passphrase fail fast instead of looping ssh-add's retry
+ *  prompt forever. The passphrase lives only in the child's environment; the
+ *  script text itself holds no secret, and "$0.used" is a sibling sentinel in
+ *  the throwaway temp dir. */
+const ASKPASS_SCRIPT = `#!/bin/sh
+if [ -e "$0.used" ]; then exit 1; fi
+: > "$0.used"
+printf '%s\\n' "$HALO_SSH_PASSPHRASE"
+`
+
+/**
+ * Load a passphrase-protected key into the shared ssh-agent, feeding the
+ * passphrase to ssh-add through a throwaway SSH_ASKPASS helper so it never hits
+ * argv (visible to `ps`), disk, or a log. SSH_ASKPASS_REQUIRE=force makes ssh-add
+ * use the helper even with no tty (we run headless under systemd); the answer-once
+ * helper guarantees a wrong passphrase returns immediately. The passphrase is
+ * never logged — only success/failure is. Returns a normalized error so ssh-add's
+ * raw stderr (which can leak key paths) is not surfaced to the client.
+ */
+export function unlockSshKey(keyPath: string, passphrase: string): { ok: boolean; error?: string } {
+  if (!process.env.SSH_AUTH_SOCK) return { ok: false, error: 'ssh-agent is not running' }
+  let dir = ''
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-askpass-'))
+    const askpass = path.join(dir, 'askpass.sh')
+    fs.writeFileSync(askpass, ASKPASS_SCRIPT, { mode: 0o700 })
+    const r = spawnSync('ssh-add', [keyPath], {
+      encoding: 'utf-8',
+      // stdin from /dev/null so ssh-add can never fall back to a tty prompt and block.
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Belt-and-suspenders: the answer-once helper already makes ssh-add exit on a
+      // bad passphrase, but cap runtime so a pathological case can't hang the request.
+      timeout: 15000,
+      env: {
+        ...process.env,
+        HALO_SSH_PASSPHRASE: passphrase,
+        SSH_ASKPASS: askpass,
+        SSH_ASKPASS_REQUIRE: 'force',
+      },
+    })
+    if (r.status === 0) {
+      console.log(`[GitSsh] unlocked key ${path.basename(keyPath)}`)
+      return { ok: true }
+    }
+    console.log(`[GitSsh] unlock failed for ${path.basename(keyPath)} (exit ${r.status ?? 'killed'})`)
+    if (r.status === 2) return { ok: false, error: 'ssh-agent is not reachable' }
+    return { ok: false, error: 'Incorrect passphrase, or the key could not be unlocked' }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.log(`[GitSsh] unlock error: ${message}`)
+    return { ok: false, error: 'Failed to unlock key' }
+  } finally {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 /**

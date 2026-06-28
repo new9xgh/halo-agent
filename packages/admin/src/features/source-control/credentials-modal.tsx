@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/shared/api-client'
-import { X, Lock, LockOpen, RefreshCw, ExternalLink, Copy, Check, Trash2 } from 'lucide-react'
+import { X, Lock, LockOpen, RefreshCw, ExternalLink, Trash2 } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { cn } from '@/shared/utils'
 
@@ -218,9 +218,13 @@ function SshTab({ projectId, onClose }: { projectId: string; onClose: () => void
   const [loadedKeys, setLoadedKeys] = useState<string[]>([])
   const [protocol, setProtocol] = useState<'https' | 'ssh' | 'other'>('other')
   const [remoteUrl, setRemoteUrl] = useState('')
-  const [copied, setCopied] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Path of the key whose passphrase input is open (only one at a time).
+  const [unlockingKey, setUnlockingKey] = useState<string | null>(null)
+  const [passphrase, setPassphrase] = useState('')
+  const [unlockBusy, setUnlockBusy] = useState(false)
+  const [unlockError, setUnlockError] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     api.git.sshKeys().then((r) => setKeys(r.keys)).catch(() => setKeys([]))
@@ -230,17 +234,34 @@ function SshTab({ projectId, onClose }: { projectId: string; onClose: () => void
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Display ~/.ssh/<name> rather than the absolute server path — that's what the
-  // user types in the terminal, and ssh-add expands ~ the same way.
-  function addCommand(key: SshKey): string {
-    return `ssh-add ~/.ssh/${key.name}`
+  function openUnlock(key: SshKey) {
+    setUnlockingKey(key.path)
+    setPassphrase('')
+    setUnlockError(null)
   }
 
-  function handleCopy(cmd: string) {
-    navigator.clipboard.writeText(cmd).then(() => {
-      setCopied(cmd)
-      setTimeout(() => setCopied((c) => (c === cmd ? null : c)), 2000)
-    }).catch(() => {})
+  function cancelUnlock() {
+    setUnlockingKey(null)
+    setPassphrase('')
+    setUnlockError(null)
+  }
+
+  async function handleUnlock(key: SshKey) {
+    setUnlockBusy(true)
+    setUnlockError(null)
+    try {
+      const r = await api.git.unlockSshKey({ keyPath: key.path, passphrase })
+      if (r.ok) {
+        cancelUnlock()
+        refresh() // key flips to "Loaded"
+      } else {
+        setUnlockError(r.error ?? t('sc.cred.sshUnlockFailed'))
+      }
+    } catch (err) {
+      setUnlockError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUnlockBusy(false)
+    }
   }
 
   async function handleSwitch(to: 'https' | 'ssh') {
@@ -283,7 +304,7 @@ function SshTab({ projectId, onClose }: { projectId: string; onClose: () => void
           ) : (
             keys.map((key) => {
               const isLoaded = loadedKeys.some((l) => l.includes(key.path) || l.includes(key.name))
-              const cmd = addCommand(key)
+              const isUnlocking = unlockingKey === key.path
               return (
                 <div key={key.path} className="rounded border border-[var(--border)]">
                   <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
@@ -291,21 +312,47 @@ function SshTab({ projectId, onClose }: { projectId: string; onClose: () => void
                       ? <Lock className="h-3 w-3 shrink-0 text-amber-400" />
                       : <LockOpen className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />}
                     <span className="truncate text-[var(--foreground)]">{key.name}</span>
-                    {isLoaded && <span className="ml-auto text-[10px] text-emerald-400">{t('sc.cred.sshLoaded')}</span>}
+                    {isLoaded ? (
+                      <span className="ml-auto text-[10px] text-emerald-400">{t('sc.cred.sshLoaded')}</span>
+                    ) : !isUnlocking && (
+                      <button
+                        onClick={() => openUnlock(key)}
+                        className="ml-auto shrink-0 rounded bg-[var(--secondary)] px-2 py-0.5 text-[10px] font-medium text-[var(--foreground)] hover:opacity-90"
+                      >
+                        {t('sc.cred.sshUnlock')}
+                      </button>
+                    )}
                   </div>
-                  {/* Not yet loaded → show the copyable ssh-add command to run in the terminal. */}
-                  {!isLoaded && (
+                  {/* Not yet loaded → unlock in place: type the passphrase, it goes
+                      straight to ssh-add (never stored). */}
+                  {!isLoaded && isUnlocking && (
                     <div className="flex flex-col gap-1.5 border-t border-[var(--border)] px-2.5 py-2">
-                      <span className="text-[10px] leading-relaxed text-[var(--muted-foreground)]">{t('sc.cred.sshLoadHint')}</span>
-                      <div className="flex items-center gap-2">
-                        <code className="flex-1 truncate rounded bg-[var(--secondary)] px-2 py-1 font-mono text-[10px] text-[var(--foreground)]">{cmd}</code>
+                      <span className="text-[10px] leading-relaxed text-[var(--muted-foreground)]">{t('sc.cred.sshUnlockHint')}</span>
+                      <input
+                        type="password"
+                        autoFocus
+                        autoComplete="off"
+                        value={passphrase}
+                        onChange={(e) => setPassphrase(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !unlockBusy) handleUnlock(key) }}
+                        placeholder={t('sc.cred.sshPassphrase')}
+                        className={FIELD}
+                      />
+                      {unlockError && <span className="text-[10px] leading-relaxed text-red-400">{unlockError}</span>}
+                      <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => handleCopy(cmd)}
-                          className="flex shrink-0 items-center gap-1 rounded bg-[var(--secondary)] px-2 py-1 text-[10px] text-[var(--foreground)] hover:opacity-90"
+                          onClick={cancelUnlock}
+                          disabled={unlockBusy}
+                          className="rounded px-2 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--secondary)] disabled:opacity-40"
                         >
-                          {copied === cmd
-                            ? <><Check className="h-3 w-3 text-emerald-400" />{t('sc.cred.sshCopied')}</>
-                            : <><Copy className="h-3 w-3" />{t('sc.cred.sshCopy')}</>}
+                          {t('sc.cred.cancel')}
+                        </button>
+                        <button
+                          onClick={() => handleUnlock(key)}
+                          disabled={unlockBusy}
+                          className="rounded bg-[var(--primary)] px-2 py-0.5 text-[10px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-40"
+                        >
+                          {unlockBusy ? t('sc.cred.sshUnlocking') : t('sc.cred.sshUnlock')}
                         </button>
                       </div>
                     </div>

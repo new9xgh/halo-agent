@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { Workspace, GitManager } from '@turmind/halo-core'
 import { saveGitCredentials, listGitCredentials, deleteGitCredential } from '../git-credentials.js'
 import {
   listSshKeys,
   getSshAgentStatus,
+  unlockSshKey,
   switchRemoteProtocol,
   getRemoteProtocol,
 } from '../git-ssh.js'
@@ -352,6 +354,33 @@ export function createGitRoutes() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Git] Error reading ssh agent: ${errorMessage}`)
+      return c.json({ error: errorMessage }, 500)
+    }
+  })
+
+  // POST /git/ssh/unlock — body { keyPath, passphrase }. Loads a passphrase-
+  // protected key into the shared ssh-agent. keyPath must resolve to a file
+  // directly inside ~/.ssh (reject traversal / arbitrary paths). A wrong
+  // passphrase is a normal 200 { ok: false, error } so the client shows it
+  // inline; only malformed input / server faults are non-2xx. The passphrase is
+  // never logged.
+  app.post('/git/ssh/unlock', async (c) => {
+    try {
+      const body = await c.req.json<{ keyPath?: string; passphrase?: string }>()
+      const keyPath = body.keyPath
+      const passphrase = body.passphrase
+      if (!keyPath || typeof passphrase !== 'string') {
+        return c.json({ error: 'keyPath and passphrase are required' }, 400)
+      }
+      const sshDir = path.join(os.homedir(), '.ssh')
+      const resolved = path.resolve(keyPath)
+      if (path.dirname(resolved) !== path.resolve(sshDir)) {
+        return c.json({ error: 'keyPath must be inside ~/.ssh' }, 400)
+      }
+      return c.json(unlockSshKey(resolved, passphrase))
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.log(`[Git] Error unlocking ssh key: ${errorMessage}`)
       return c.json({ error: errorMessage }, 500)
     }
   })
