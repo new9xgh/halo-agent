@@ -124,7 +124,7 @@ export function createGitRoutes() {
       const res = await getGit(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
       const limitRaw = Number(c.req.query('limit'))
-      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 50
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 50
       const commits = await res.git.getLog(limit)
       return c.json({ commits })
     } catch (err) {

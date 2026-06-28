@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { GitBranch, Tag } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -20,6 +20,8 @@ type CommitFile = Awaited<ReturnType<typeof api.git.commitFiles>>['files'][numbe
 const TRACK_W = 24
 const DOT = 10
 const DOT_CENTER = 16
+// Commits fetched per page; the list grows by this when scrolled to the bottom.
+const PAGE = 50
 
 type RefKind = 'head' | 'branch' | 'remote' | 'tag'
 interface RefInfo {
@@ -61,8 +63,12 @@ function RefBadge({ info }: { info: RefInfo }) {
       : info.kind === 'tag'
         ? 'bg-amber-400/10 text-amber-300 ring-1 ring-inset ring-amber-400/30'
         : info.kind === 'remote'
-          ? 'bg-[var(--secondary)] text-[var(--muted-foreground)]'
-          : 'bg-[var(--secondary)] text-[var(--secondary-foreground)]'
+          // Remote branches are dimmed (no fill, faint ring) so they read as
+          // "elsewhere" and don't compete with local branches.
+          ? 'text-[var(--muted-foreground)] ring-1 ring-inset ring-[var(--border)]'
+          // Local non-current branches (e.g. main) get a solid chip + full
+          // foreground text so they stand out from the dimmed remotes.
+          : 'bg-[var(--secondary)] text-[var(--foreground)] ring-1 ring-inset ring-[var(--border)]'
   return (
     <span className={cn(REF_PILL, tone)}>
       <Icon className="h-2.5 w-2.5 shrink-0" />
@@ -128,21 +134,29 @@ export function GitGraph({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [expandedHash, setExpandedHash] = useState<string | null>(null)
+  // How many commits to request. Grows by PAGE when the user scrolls to the
+  // bottom; `hasMore` is true while the server returns a full page (there may
+  // be older commits beyond it). file:changed refreshes keep the current limit
+  // so an in-progress scroll-back isn't reset to the first page.
+  const [limit, setLimit] = useState(PAGE)
+  const [hasMore, setHasMore] = useState(false)
   // Cache changed-files per commit hash. Hashes are immutable, so entries never
   // go stale across refreshes — only new commits (new hashes) need fetching.
   const [filesByHash, setFilesByHash] = useState<Record<string, CommitFile[]>>({})
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const res = await api.git.log(projectId)
+      const res = await api.git.log(projectId, limit)
       setCommits(res.commits)
+      setHasMore(res.commits.length >= limit)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoaded(true)
     }
-  }, [projectId])
+  }, [projectId, limit])
 
   useEffect(() => { void refresh() }, [refresh])
 
@@ -157,6 +171,19 @@ export function GitGraph({ projectId }: { projectId: string }) {
     })
     return () => { if (timer) clearTimeout(timer); unsub() }
   }, [refresh])
+
+  // Auto-load older commits when the bottom sentinel scrolls into view. Only
+  // armed while there's a full page already loaded, so it's a no-op for short
+  // histories. Growing `limit` re-runs refresh via its dependency.
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || !hasMore) return
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) setLimit((n) => n + PAGE)
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [hasMore])
 
   const toggleCommit = useCallback((hash: string) => {
     setExpandedHash((cur) => (cur === hash ? null : hash))
@@ -259,6 +286,7 @@ export function GitGraph({ projectId }: { projectId: string }) {
           </div>
         )
       })}
+      {hasMore && <div ref={sentinelRef} className="h-4" />}
     </div>
   )
 }
