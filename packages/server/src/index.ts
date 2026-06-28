@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 
 import { createFileRoutes } from './routes/files.js'
+import { createGitRoutes } from './routes/git.js'
 import { createAgentConfigRoutes } from './routes/agent-configs.js'
 import { createSkillRoutes } from './routes/skills.js'
 import { createSettingsRoutes, onSettingsChange } from './routes/settings.js'
@@ -41,6 +42,7 @@ import { initLogger } from './logger.js'
 import { config, reloadSandboxConfig } from './config.js'
 import { initBwrapCheck, isBwrapCached, setSandboxHiddenPaths } from './tools/sandbox.js'
 import { ensureHaloHome, readSeedVersion, TEMPLATE_VERSION } from './init.js'
+import { ensureSshAgent } from './git-ssh.js'
 
 // ------------------------------------------------------------------
 // Configuration
@@ -226,6 +228,11 @@ onSettingsChange(() => {
 })
 console.log(`[Server] bwrap sandbox: ${isBwrapCached() ? 'available' : 'NOT available (app-level fallback only)'}`)
 
+// Hold one ssh-agent for the process so the built-in terminal and git children
+// (both inherit process.env) share it: the user runs `ssh-add` in the terminal,
+// the key loads here, push/pull picks it up. halo never sees the passphrase.
+ensureSshAgent()
+
 console.log(`[Server] Halo home: ${HALO_HOME}`)
 
 console.log('[Server] Services initialized (ModelRuntime)')
@@ -296,6 +303,9 @@ app.get('/api/health', (c) => {
 
 const fileRoutes = createFileRoutes()
 app.route('/api', fileRoutes)
+
+const gitRoutes = createGitRoutes()
+app.route('/api', gitRoutes)
 
 const agentConfigRoutes = createAgentConfigRoutes()
 app.route('/api', agentConfigRoutes)
