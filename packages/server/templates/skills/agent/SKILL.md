@@ -78,14 +78,11 @@ tools:
   - glob
   - web_fetch
   - view_image
-  # Session tools — only for orchestrator agents that delegate:
-  # - start_session
-  # - query_agent
-  # - session_list
-  # - get_session_output
-  # - query_session
-  # - interrupt_session
-  # - stop_session
+  # Session/delegation tools (start_session, query_session, query_agent, …) are
+  # NOT listed here — they're granted automatically by a non-empty `team`
+  # (see below). Listing them in `tools:` has no effect.
+team:                     # optional — presence is the delegation switch
+  - executor              # add the agent ids this one may spawn
 skills:
   - <skill-id>
 ```
@@ -100,14 +97,17 @@ reasoning (costs more — not the default). Haiku 4.5 for fast, lightweight work
 **Thinking:** `medium` is a good default; `high`/`xhigh` only for deep-reasoning
 agents; `enabled: false` to turn it off entirely.
 
-**Delegation (`team`):** only relevant when the agent holds `start_session`.
-Omit the `team` field and the agent may delegate to every agent in the
-workspace (the default). Add `team: [agent-id, ...]` to restrict it to exactly
-those ids — the injected roster, `start_session`, and `query_agent` all honor
-the list. Use this to scope a sub-agent so it can only reach the few agents
-relevant to its job. Self is treated like any other agent: included by default
-(so the agent can spawn parallel copies of itself), but if you write an explicit
-`team` that omits the agent's own id, self-spawn is blocked too.
+**Delegation (`team`):** the `team` field is the on/off switch for delegation,
+not just a filter. A **non-empty** `team: [agent-id, ...]` is what grants the
+agent the whole session-tool bundle — `start_session`, `query_session`,
+`interrupt_session`, `stop_session`, `archive_session`, `session_list`,
+`get_session_output`, `query_agent` — plus the injected roster. The listed ids
+are also exactly who it can reach: the roster, `start_session`, and
+`query_agent` all honor the list. **Omit `team` (or leave it empty) and the
+agent cannot delegate at all** — no session tools, no roster. There's no way to
+hand-list the session tools under `tools:` anymore; the capability rides
+entirely on `team`. To let an agent spawn parallel copies of itself, include
+its own id in the list (as the `default` agent does with `default`).
 
 Then write **`AGENT.md`** (behavior doc, read as part of the system prompt) —
 keep `system_prompt` brief and put the detail here:

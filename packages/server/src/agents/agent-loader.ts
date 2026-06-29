@@ -30,12 +30,26 @@ export interface AgentYamlConfig {
    *  but still listed in admin's agent management. Used by the self-evolution
    *  agents (`__evo_agent__`, `__apply_agent__`). */
   internal?: boolean
-  /** Delegation whitelist — which agent ids this agent may spawn via
-   *  `start_session`. Absent/undefined means "all agents" (the default, also
-   *  applies to agents created before this field existed). An explicit list
-   *  restricts both the injected roster and start_session/query_agent to those
-   *  ids. Only meaningful when the agent holds `start_session`. */
+  /** Delegation whitelist AND the on/off switch for delegation itself. A
+   *  non-empty list is what *grants* the agent the whole session-tool bundle
+   *  (start_session / query_session / … / archive_session / query_agent) plus
+   *  the roster prompt — there's no longer a way to hand-list those tools in
+   *  `tools:`. The list also scopes who's reachable: the roster,
+   *  start_session, and query_agent all honor exactly these ids. Absent /
+   *  undefined / empty `[]` means the agent cannot delegate at all (no session
+   *  tools, no roster). See `canDelegate`. */
   team?: string[]
+}
+
+/**
+ * Single source of truth for "does this agent get the delegation bundle?".
+ * Wired to a non-empty `team` (not a hand-listed `start_session`), so the
+ * session tools, the injected roster, and admin's Team editor all gate on the
+ * same predicate and can never drift. Internal agents (evo/score/apply) are
+ * platform tooling and never delegate, regardless of `team`.
+ */
+export function canDelegate(yaml: AgentYamlConfig | null | undefined): boolean {
+  return !yaml?.internal && (yaml?.team?.length ?? 0) > 0
 }
 
 /** Whole-folder override: a workspace agent dir (`<ws>/.halo/agents/<id>/`)

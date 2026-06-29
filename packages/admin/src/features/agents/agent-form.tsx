@@ -237,10 +237,11 @@ export function AgentForm({
   const context = (data.context ?? {}) as Record<string, string | number>
   const skills = Array.isArray(data.skills) ? (data.skills as string[]) : []
   const tools = Array.isArray(data.tools) ? (data.tools as string[]) : []
-  // `team` whitelist: absent = all agents (default). The picker shows all
-  // candidates checked when absent; unchecking writes an explicit list.
+  // `team` is the delegation switch: a non-empty list grants the session-tool
+  // bundle + roster and scopes who's reachable; absent/empty = no delegation.
+  // The picker checks only the ids present in the list (nothing checked when
+  // absent); toggling to empty drops the field.
   const team = Array.isArray(data.team) ? (data.team as string[]) : undefined
-  const canDelegate = tools.includes('start_session')
 
   // Flatten all models from registry for lookup
   const allModels: ModelEntry[] = modelsRegistry?.providers?.flatMap((p) => p.models) ?? []
@@ -590,75 +591,32 @@ export function AgentForm({
         />
       </section>
 
-      {/* Session Tools */}
+      {/* Team / delegation — picking any agent here is what grants this one the
+          whole session-tool bundle (start_session … archive_session +
+          query_agent) plus the roster. Empty selection = no delegation, no
+          session tools. The chosen ids also scope who's reachable. There's no
+          separate "session tools" checklist anymore — the capability rides on
+          this list. Self can be picked too (parallel self-spawn). */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.sessionTools')}</h3>
-          <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.sessionToolsHint')}</span>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.team')}</h3>
+          <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.teamHint')}</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          {([
-            // Discover
-            { name: 'query_agent', description: 'Inspect an agent\'s full config, AGENT.md, and skills' },
-            // Create
-            { name: 'start_session', description: 'Start a new sub-agent session (async; reports back when done)' },
-            // Observe
-            { name: 'session_list', description: 'List child sessions with running/idle status' },
-            { name: 'get_session_output', description: 'Read a sub-agent session\'s full output text' },
-            // Communicate
-            { name: 'query_session', description: 'Send a message to another session (e.g. report to parent, ask follow-up)' },
-            // Control lifecycle
-            { name: 'interrupt_session', description: 'Interrupt a running session and re-run with a new message' },
-            { name: 'stop_session', description: 'Abort the current task; the session stays usable via query_session' },
-            { name: 'archive_session', description: 'Archive a session and all descendants; they no longer appear in session_list' },
-          ]).map((t) => {
-            const active = tools.includes(t.name)
-            return (
-              <button
-                key={t.name}
-                type="button"
-                title={t.description}
-                onClick={() => onToggleArrayItem('tools', t.name)}
-                className={cn(
-                  'rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
-                  active
-                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                    : 'bg-[var(--secondary)] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/80 hover:text-[var(--foreground)]',
-                )}
-              >
-                {t.name}
-              </button>
-            )
-          })}
-        </div>
-      </section>
-
-      {/* Team whitelist — which agents this one may delegate to via
-          start_session. Only meaningful when start_session is enabled.
-          Default (no `team` field) = all agents checked. Unchecking writes an
-          explicit list; re-checking everything drops the field back to default. */}
-      {canDelegate && (
-        <section className="space-y-3">
-          <div className="flex items-center gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.team')}</h3>
-            <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.teamHint')}</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
             {allAgents.map((a) => {
-              const checked = team === undefined || team.includes(a.id)
+              const checked = team !== undefined && team.includes(a.id)
               return (
                 <button
                   key={a.id}
                   type="button"
                   title={a.id}
                   onClick={() => {
-                    // Current effective whitelist (everyone when unset), then
-                    // toggle this id. If the result is "all candidates", drop
-                    // the field (back to default); else store the explicit list.
-                    const candidateIds = allAgents.map((x) => x.id)
-                    const current = team === undefined ? candidateIds : candidateIds.filter((id) => team.includes(id))
+                    // Toggle this id in the explicit list. Empty result drops the
+                    // field entirely (undefined = no delegation), mirroring the
+                    // server's canDelegate(team non-empty) switch.
+                    const current = team ?? []
                     const next = current.includes(a.id) ? current.filter((id) => id !== a.id) : [...current, a.id]
-                    onUpdate('team', next.length === candidateIds.length ? undefined : next)
+                    onUpdate('team', next.length === 0 ? undefined : next)
                   }}
                   className={cn(
                     'rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
@@ -671,9 +629,8 @@ export function AgentForm({
                 </button>
               )
             })}
-          </div>
-        </section>
-      )}
+        </div>
+      </section>
 
       {/* Tools */}
       <section className="space-y-3">

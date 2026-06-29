@@ -54,15 +54,15 @@ Same id present in both scopes: workspace wins; the overridden global is greyed 
 - Still visible in the admin management sidebar for re-enabling.
 
 ### Tool selection
-- **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `query_agent` (enable by name in `agent.yaml tools`)
+- **Session tools**: `start_session` / `session_list` / `query_session` / `interrupt_session` / `stop_session` / `archive_session` / `get_session_output` / `query_agent` — **not** selected by name; the whole bundle is granted automatically by a non-empty `team` (see below). Listing them under `agent.yaml tools` has no effect.
 - **Workspace tools**: `file_read` / `file_write` / `file_edit` / `file_list` / `shell_exec` / `grep` / `glob` / `web_fetch`, returned by `GET /api/agent-configs/tools`
 - **`activate_skill`**: auto-injected whenever the YAML lists `skills`; loads the full SKILL.md on demand
 
-### Team (delegation whitelist)
-- Optional `team: [id, …]` field in `agent.yaml`. Controls which agents this agent may delegate to (via `start_session` / `query_agent`) and which appear in its prompt roster.
-- **Unset = every agent** (the default; also covers agents authored before the field existed). A present list restricts delegation to exactly those ids; removing an agent from the list kicks it off the team.
+### Team (delegation switch + whitelist)
+- Optional `team: [id, …]` field in `agent.yaml`. A **non-empty** list is the on/off switch for delegation: it grants the whole session-tool bundle (`start_session` / `query_agent` / …) plus the prompt roster, AND scopes which agents this one may reach.
+- **Unset or empty `[]` = no delegation** — no session tools, no roster. (Breaking change from the earlier "unset = every agent reachable" default; agents that relied on implicit-all must now list their team explicitly.)
 - Enforced server-side on `start_session` and `query_agent`, not just in the roster — a call to a non-team agent is rejected.
-- `self` is treated like any other agent: shown in the picker tagged `(you)` and checked by default. Uncheck it and the agent can no longer spawn parallel instances of itself — self follows the same whitelist, no special-casing.
+- `self` is treated like any other agent: shown in the picker tagged `(you)`. Include the agent's own id to allow parallel self-spawn (the seed `default` agent lists `default`); omit it to block self-spawn — no special-casing.
 - **Admin form**: the Team multi-select appears only when `start_session` is enabled. Self is pinned and locked-on; all teammates are checked by default. Unchecking some writes an explicit whitelist; re-checking everyone clears the field (back to "all").
 
 ### Skill selection

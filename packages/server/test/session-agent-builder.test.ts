@@ -152,3 +152,55 @@ describe('composeSystemPrompt — working_dir directory-scoped INSTRUCTIONS', ()
     expect(prompt).not.toContain('<workspace-instructions')
   })
 })
+
+describe('delegation — the session-tool bundle is gated on a non-empty team', () => {
+  // The 8 session tools come as one bundle, granted by a non-empty `team` (NOT
+  // by hand-listing them under `tools:`). Pairs with canDelegate() in
+  // agent-loader so tools + roster never drift.
+  const SESSION_TOOLS = [
+    'start_session', 'session_list', 'query_session', 'interrupt_session',
+    'stop_session', 'archive_session', 'get_session_output', 'query_agent',
+  ]
+
+  it('grants all 8 session tools + the roster when team is non-empty', async () => {
+    writeAgent('mate', ['name: Mate', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'a teammate')
+    writeAgent('boss', ['name: Boss', ...ANTHROPIC_MODEL, 'tools: [file_read]', 'team: [mate]'], 'I delegate.')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 's_boss', 'boss', null)
+    const ctx = await sm.getSessionContext('s_boss')
+    for (const name of SESSION_TOOLS) expect(ctx?.meta.toolNames).toContain(name)
+    // roster injected into the system prompt, listing the team member
+    const prompt = sm.getSessionSystemPrompt('s_boss') ?? ''
+    expect(prompt).toContain('Mate')
+  })
+
+  it('grants no session tools and no roster when team is absent', async () => {
+    writeAgent('solo', ['name: Solo', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'I work alone.')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 's_solo', 'solo', null)
+    const ctx = await sm.getSessionContext('s_solo')
+    for (const name of SESSION_TOOLS) expect(ctx?.meta.toolNames).not.toContain(name)
+    const prompt = sm.getSessionSystemPrompt('s_solo') ?? ''
+    expect(prompt).not.toContain('Know Your Team')
+    expect(prompt).not.toContain('Your Team')
+  })
+
+  it('treats an empty team [] as no delegation', async () => {
+    writeAgent('empty', ['name: Empty', ...ANTHROPIC_MODEL, 'tools: [file_read]', 'team: []'], 'x')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 's_empty', 'empty', null)
+    const ctx = await sm.getSessionContext('s_empty')
+    for (const name of SESSION_TOOLS) expect(ctx?.meta.toolNames).not.toContain(name)
+  })
+
+  it('ignores session tools hand-listed under tools: when team is absent', async () => {
+    // start_session in `tools:` has no effect now — only `team` switches it on.
+    writeAgent('legacy', ['name: Legacy', ...ANTHROPIC_MODEL, 'tools: [file_read, start_session, query_agent]'], 'x')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 's_legacy', 'legacy', null)
+    const ctx = await sm.getSessionContext('s_legacy')
+    expect(ctx?.meta.toolNames).not.toContain('start_session')
+    expect(ctx?.meta.toolNames).not.toContain('query_agent')
+    expect(ctx?.meta.toolNames).toContain('file_read')  // real tool still honored
+  })
+})

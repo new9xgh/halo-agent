@@ -223,10 +223,8 @@ export const en: Record<string, string> = {
   'agent.systemPromptHint': '(fallback if no AGENT.md)',
   'agent.systemPromptPlaceholder': 'Instructions for this agent...',
   'agent.context': 'Context',
-  'agent.sessionTools': 'Session Tools',
-  'agent.sessionToolsHint': '(select which delegation tools this agent can use)',
   'agent.team': 'Team',
-  'agent.teamHint': '(which agents this one may delegate to — all selected by default; deselect to restrict)',
+  'agent.teamHint': '(pick agents to delegate to — selecting any grants the session/delegation tools; none = no delegation)',
   'agent.loadingTools': 'Loading tools...',
   'agent.noSkills': 'No skills available. Create skills first.',
 

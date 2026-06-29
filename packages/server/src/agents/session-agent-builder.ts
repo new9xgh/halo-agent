@@ -8,7 +8,7 @@ import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } fro
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
-  scanAvailableAgents, isTeamMember,
+  scanAvailableAgents, isTeamMember, canDelegate,
   type AgentYamlConfig,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
@@ -166,10 +166,18 @@ export class SessionAgentBuilder {
     })
     const workspaceTools = filterTools(allTools, yamlConfig?.tools)
 
-    // Session tools: strict YAML — only those explicitly declared.
-    const allSessionTools = this.host.createSessionTools(sessionId)
+    // Session tools are an all-or-nothing bundle gated on delegation, NOT the
+    // yaml `tools:` list — an agent gets the whole set (start_session,
+    // session_list, query_session, interrupt_session, stop_session,
+    // archive_session, get_session_output, query_agent) the moment it declares
+    // a non-empty `team`, and none otherwise. Wiring delegation to `team`
+    // (rather than hand-listing each tool) keeps the capability and its roster
+    // prompt in lockstep: you can't half-equip an agent with start_session but
+    // no way to inspect or clean up what it spawned. Internal agents
+    // (evo/score/apply) never delegate.
     const nameSet = new Set(yamlConfig?.tools ?? [])
-    const sessionTools = allSessionTools.filter((t) => nameSet.has(t.name))
+    const delegates = canDelegate(yamlConfig)
+    const sessionTools = delegates ? this.host.createSessionTools(sessionId) : []
 
     // `draft` is an opt-in self-review tool with no workspace/session deps —
     // build it only when whitelisted, and surface its per-turn reset so the
@@ -250,20 +258,15 @@ export class SessionAgentBuilder {
       mdContents.agentMd = renderMdBody(mdContents.agentMd, renderCtx)
     }
 
-    // Live roster of delegatable agents. Gated on two conditions:
-    //  - not an internal agent (evo/score/apply are platform tooling, not
-    //    orchestrators);
-    //  - the agent holds `start_session` — the roster teaches delegation (who's
-    //    on the team, spawn parallel instances, fan out). Without it the agent
-    //    can't delegate at all, so the roster would be misleading noise.
-    // Root and sub-agents follow the same rule: a sub-agent that holds
-    // start_session gets a roster too. Runaway re-subcontracting is bounded by
-    // the per-agent `team` whitelist (below) + maxNestingDepth, not by a
-    // blanket "root only" ban. The roster — and start_session/query_agent — are
-    // scoped to `yamlConfig.team` when set; absent means all agents (the
-    // default, also covering agents authored before this field existed).
-    const canDelegate = sessionToolNames.includes('start_session')
-    const roster = (!yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId, yamlConfig?.team, isRoot) : ''
+    // Live roster of delegatable agents. Gated on `canDelegate` — a non-empty
+    // `team` (internal agents excluded), the same switch that grants the
+    // session-tool bundle in resolveBaseToolSet. The two share one predicate so
+    // the roster can never appear without the tools or vice versa. The team
+    // list also scopes WHO the roster lists (via buildAgentRoster →
+    // isTeamMember). Root and sub-agents follow the same rule: a sub-agent with
+    // a non-empty team gets a roster too; runaway re-subcontracting is bounded
+    // by the team whitelist + maxNestingDepth, not a blanket "root only" ban.
+    const roster = canDelegate(yamlConfig) ? await this.buildAgentRoster(agentId, yamlConfig?.team, isRoot) : ''
     // A sub-agent's working_dir is persistent session identity (stored in the
     // DB, restored on resume), so its directory-chain INSTRUCTIONS.md ride in
     // the system prompt every turn (composeMdPrompt folds them into the

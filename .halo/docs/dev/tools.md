@@ -1,6 +1,6 @@
 # Agent Tool Reference
 
-Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Enable them by name in `agent.yaml`'s `tools` list.
+Agents have two tool categories: workspace tools (files, shell, search) and session tools (managing other sessions). Workspace tools are enabled by name in `agent.yaml`'s `tools` list; the session-tool bundle is granted automatically by a non-empty `team` (see [Session tools](#session-tools)).
 
 ## Workspace tools
 
@@ -157,7 +157,7 @@ The orchestrator truncates tool results over 8000 chars and appends a `[Content 
 
 ## Session tools
 
-Session management tools for agents. Enable them by name in `agent.yaml`'s `tools`.
+Session management tools for agents. **Not enabled by name** — the whole bundle (the eight tools below) is granted automatically the moment an agent declares a **non-empty `team`** in `agent.yaml`; an absent/empty `team` means no delegation (no session tools, no roster). Listing these under `tools:` has no effect. The `team` ids also scope who's reachable via `start_session` / `query_agent`. See [agent roster](../design/prompt-system.md#agent-roster).
 
 ### start_session
 

@@ -223,10 +223,8 @@ export const zh: Record<string, string> = {
   'agent.systemPromptHint': '(无 AGENT.md 时的 fallback)',
   'agent.systemPromptPlaceholder': '给这个 agent 的指令...',
   'agent.context': '上下文',
-  'agent.sessionTools': '会话工具',
-  'agent.sessionToolsHint': '(选择该 agent 可使用的委派工具)',
   'agent.team': '团队',
-  'agent.teamHint': '(该 agent 可委派的成员 — 默认全选；取消勾选即限制范围)',
+  'agent.teamHint': '(选择可委派的成员 — 选中任意一个即获得会话/委派工具；不选则无法委派)',
   'agent.loadingTools': '加载中...',
   'agent.noSkills': '暂无可用 Skills。请先创建。',
 

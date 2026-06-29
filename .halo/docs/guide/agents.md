@@ -64,24 +64,22 @@ Edit `AGENT.md` (personality) and `INSTRUCTIONS.md` (preferences).
 
 ## Tool configuration
 
-What tools an agent can use lives in the YAML `tools` list:
+What workspace tools an agent can use lives in the YAML `tools` list:
 
 ```yaml
 tools:
   - file_read
   - file_write
   - shell_exec
-  - start_session   # delegate to other agents
-  - query_session   # message an existing session
+team:                 # a non-empty team is what enables delegation
+  - executor          # the agent ids this one may spawn
 ```
 
-**Workspace tools**: `file_read / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch`
+**Workspace tools**: `file_read / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch` — listed by name under `tools`.
 
-**Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent`
+**Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent` — **not** listed under `tools`. The whole bundle is granted automatically the moment an agent declares a non-empty `team`; an empty/absent `team` means no delegation (no session tools, no roster). To let a sub-agent delegate further, give it its own `team`. Add the agent's own id to its `team` to enable parallel self-spawn.
 
-Sub-agents default to `query_session` only (so they can report back to the parent). To let a sub-agent delegate further, add `start_session` (and friends) to its `tools` — it then gets its own team roster too. Scope who an agent may delegate to with the optional `team: [id, …]` whitelist (unset = every agent).
-
-Form view lets you check workspace tools on/off; session tools still require YAML.
+Form view lets you check workspace tools on/off and pick the team; there's no separate session-tools checklist — delegation rides entirely on the team.
 
 ## Skill mounting
 
