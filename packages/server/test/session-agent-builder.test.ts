@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
+import { toggleDisabled } from '../src/db/index.js'
 
 /**
  * INTEGRATION coverage for SessionAgentBuilder, the agent-construction pipeline
@@ -202,5 +203,18 @@ describe('delegation — the session-tool bundle is gated on a non-empty team', 
     expect(ctx?.meta.toolNames).not.toContain('start_session')
     expect(ctx?.meta.toolNames).not.toContain('query_agent')
     expect(ctx?.meta.toolNames).toContain('file_read')  // real tool still honored
+  })
+
+  it('drops a disabled teammate from the roster (matches start_session rejection)', async () => {
+    // A disabled agent is unreachable by start_session, so the roster must not
+    // list it either — otherwise it's advertised but uncallable.
+    writeAgent('mate', ['name: Matey', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'a teammate')
+    writeAgent('boss', ['name: Boss', ...ANTHROPIC_MODEL, 'tools: [file_read]', 'team: [mate]'], 'I delegate.')
+    const sm = new SessionManager(ws)
+    toggleDisabled(sm.getDb(), 'agent', 'mate', 'workspace')
+    seedSession(sm, 's_boss', 'boss', null)
+    await sm.getSessionContext('s_boss')
+    const prompt = sm.getSessionSystemPrompt('s_boss') ?? ''
+    expect(prompt).not.toContain('Matey')
   })
 })

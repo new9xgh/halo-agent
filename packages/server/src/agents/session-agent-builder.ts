@@ -9,7 +9,7 @@ import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resol
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
   scanAvailableAgents, isTeamMember, canDelegate,
-  type AgentYamlConfig,
+  type AgentYamlConfig, type ScannedAgent,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
 
@@ -371,7 +371,17 @@ export class SessionAgentBuilder {
   private async buildAgentRoster(selfAgentId: string, team: string[] | undefined, isRoot: boolean): Promise<string> {
     const agentDisabled = getDisabledSet(this.db, 'agent')
     const agents = await scanAvailableAgents(this.host.workspaceRoot, agentDisabled)
-    const visible = agents.filter((a) => !a.disabled && !a.internal && isTeamMember(team, a.id))
+    // Collapse same-id global/workspace pairs to the effective record (workspace
+    // shadows global), so a shadowed global never reaches the disabled/team
+    // filters — mirroring isAgentDisabled's resolve-then-check. Without this the
+    // roster could list a stale global shadow whose effective (workspace) record
+    // is disabled, which start_session then rejects: listed but uncallable.
+    // Same rule the admin Team picker uses.
+    const effective = new Map<string, ScannedAgent>()
+    for (const a of agents) {
+      if (a.scope === 'workspace' || !effective.has(a.id)) effective.set(a.id, a)
+    }
+    const visible = [...effective.values()].filter((a) => !a.disabled && !a.internal && isTeamMember(team, a.id))
     const self = visible.find((a) => a.id === selfAgentId)
     const others = visible.filter((a) => a.id !== selfAgentId)
     if (!self && others.length === 0) return ''
