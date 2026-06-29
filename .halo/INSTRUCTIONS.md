@@ -56,6 +56,10 @@ When you catch yourself doing any of these, stop and reconsider:
 ## Important Notes
 
 - **Requirement consistency check**: Before adding features or fixing bugs, read the corresponding module docs under `.halo/docs/` to confirm the description matches the current implementation / proposed change. If inconsistent, clarify which is the source of truth before writing code
+- **Packaging / release: read the deploy docs FIRST**: Before any build, bundle, or publish (npm / desktop dmg / Windows exe / dev-server deploy), read `.halo/docs/dev/desktop-packaging.md` (Gotchas section) + `deploy.md` — do NOT package from memory. Non-negotiable checklist, each learned from a shipped regression:
+  - **Build admin with `pnpm --filter @turmind/halo-admin build`, never a bare `next build`** — the latter skips `copy-monaco.mjs`, ships a monaco-less editor that 404s on `loader.js` ("Unexpected token '<'"). Verify `admin/out/monaco/vs/loader.js` exists before bundling.
+  - **Touched anything under `templates/`? Bump `TEMPLATE_VERSION` (`packages/server/src/init.ts`) in the same commit** — otherwise startup's reseed gate (`on-disk < compiled`) never fires and the change never reaches existing installs.
+  - When delegating packaging to a sub-agent, paste this checklist into the brief — the regressions above both happened because a packaging step was skipped silently.
 - **Remind to sync docs after code changes**: After landing changes, identify affected docs and **remind the user** (don't edit directly) — let the user decide whether to update now, after acceptance, or not at all. Typical mappings:
   - API / tool / command schema or behavior changes → `.halo/docs/dev/api.md` · `tools.md` · `requirements/command.md`
   - Architecture / data flow / WS protocol / storage format → `.halo/docs/design/`
