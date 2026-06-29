@@ -120,6 +120,15 @@ Generic advice ("write elegant code", "add tests") duplicates what's already
 in the agent's base instructions. INSTRUCTIONS.md earns attention with
 constraints **specific to this project only**.
 
+**Sub-directory INSTRUCTIONS (optional).** A sub-tree can carry its own
+`<subdir>/.halo/INSTRUCTIONS.md` for rules that apply only to work *inside* it.
+When a sub-agent is spawned with `working_dir` pointing there, the
+directory-chain files (outer → inner) ride in its system prompt every turn,
+layered **after** the root/global instructions — additive, never a replacement,
+so the order reads general → specific. Only suggest this when a sub-tree
+genuinely has its own conventions (e.g. a `packages/foo/` on a different stack);
+for a single-convention project the root file alone is enough.
+
 ### 5. Show drafts, then decide whether to write
 
 Showing both drafts **in the message** before any `file_write` lets the user
