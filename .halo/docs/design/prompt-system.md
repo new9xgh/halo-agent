@@ -29,7 +29,7 @@ Entry point: `session-manager.ts` `buildAgentInstance(agentId, sessionId, parent
 ├── USER.md                         ← optional, overrides global USER.md
 ├── INSTRUCTIONS.md                 ← project-level (overrides global INSTRUCTIONS.md)
 ├── INDEX.md                        ← project overview + doc index
-├── <subdir>/.halo/INSTRUCTIONS.md   ← directory-scoped, injected per-turn via @scope (NOT in the system prompt)
+├── <subdir>/.halo/INSTRUCTIONS.md   ← directory-scoped: baked into the system prompt when a sub-agent's working_dir points here; injected per-turn via user @scope otherwise
 ├── prompts/                        ← optional, directory-level override of global prompts/
 │   ├── bootstrap/                  ← overrides global prompts/bootstrap/ if dir exists
 │   ├── all/                        ← overrides global prompts/all/ if dir exists
@@ -77,7 +77,9 @@ agent's AGENT.md), because the workspace folder replaces the global one whole.
 
 **Override rule.** The workspace-root INSTRUCTIONS.md suppresses the global one (same override as USER.md / AGENT.md), so a cloned workspace is self-contained — its conventions travel with the repo and don't depend on the machine's global file. When the workspace root has no INSTRUCTIONS.md, the global one is used.
 
-**Sub-directory INSTRUCTIONS.md are NOT in the system prompt.** They are injected per-turn on demand via the `@scope` mechanism (see [Directory-scoped instructions](#directory-scoped-instructions-scope) below) — keeping them loop-scoped (relevant to the turn that asked for them) rather than a permanent part of the agent's identity. This also keeps the system prompt stable, so prompt-cache hits aren't lost when an agent works across different sub-directories.
+**Sub-directory INSTRUCTIONS.md — two paths, by who supplies the directory** (see [Directory-scoped instructions](#directory-scoped-instructions-scope) below):
+- **A sub-agent's `working_dir`** is persistent session identity (stored in the DB, restored on resume), so its directory-chain INSTRUCTIONS.md are baked into the **system prompt every turn** — the agent never forgets the rules of the directory it lives in.
+- **A user's `@scope <dir>`** is ad-hoc, so it's injected **per-turn** into that one message only (loop-scoped — relevant to the turn that asked for it, not a permanent part of identity).
 
 ### INDEX.md (**project root only**)
 - `<ws>/.halo/INDEX.md`
@@ -136,28 +138,31 @@ Missing directory or read failure: warn + use built-in fallback.
 
 ## Step 5 — Compose the MD prompt
 
-`composeMdPrompt(contents, roster = '')` joins non-empty sections with `\n\n---\n\n`:
+`composeMdPrompt(contents, roster = '', scopeBody = '')` joins non-empty sections with `\n\n---\n\n`:
 
 1. `## User Profile` (USER.md) — root agent only
 2. AGENT.md body
 3. The live agent roster (`## Know Your Team Before You Act` for root, `## Your Team` for sub-agents), slotted directly behind AGENT.md (see [Agent roster](#agent-roster) below). Empty string for non-delegating agents (no `start_session`) / internal agents / whitelists that admit nobody, so the section is dropped.
 4. `## User Instructions` — `~/.halo/global/INSTRUCTIONS.md` (suppressed when the workspace root has its own — see Step 2)
-5. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root). Sub-dir INSTRUCTIONS.md are not here; they inject per-turn via `@scope`.
-6. `## Project Knowledge` — `<ws>/.halo/INDEX.md` (skipped entirely when no INDEX.md exists)
+5. `## User Instructions` — `<ws>/.halo/INSTRUCTIONS.md` (workspace root).
+6. `## User Instructions` — a sub-agent's `working_dir` directory-chain INSTRUCTIONS.md (`loadScopeBody`, plain markdown, headed `### <dir>`), folded into the same region right after #4/#5 so the order reads general → specific. Empty for a root agent / a working_dir with no sub-dir file. (User `@scope` does NOT come through here — it injects per-turn into the message, wrapped in `<workspace-instructions>`.)
+7. `## Project Knowledge` — `<ws>/.halo/INDEX.md` (skipped entirely when no INDEX.md exists)
 
-Global and workspace-root INSTRUCTIONS share the same `## User Instructions` heading: they're mutually exclusive (workspace overrides global, see Step 2), so only one ever lands in a prompt and there's no sibling to disambiguate from. The roster rides as section 3 — passing it through `composeMdPrompt` rather than concatenating it afterward gives it the same `---` separators as every other section (no glue-to-next-block).
+Global and workspace-root INSTRUCTIONS share the same `## User Instructions` heading: they're mutually exclusive (workspace overrides global, see Step 2), so only one ever lands in a prompt and there's no sibling to disambiguate from. A sub-agent's `working_dir` directory-chain (#6) reuses the same heading and is a third, *additive* layer in that region — sub-dir rules add to, never replace, the global/ws-root base, so the order reads general → specific. The roster rides as section 3 — passing it through `composeMdPrompt` rather than concatenating it afterward gives it the same `---` separators as every other section (no glue-to-next-block).
 
 ## Step 6 — Layer in the system prompts
 
 ### Root agent (`!parentId`)
 
 ```
-mdPrompt                                         ← incl. roster, slotted behind AGENT.md
+mdPrompt                                         ← incl. roster + working_dir scope (both inside composeMdPrompt)
 + "\n\nThe project workspace is at: {workspaceRoot}\n"
 + [optional] "Working directory: {workingDir}\n"
 + allPrompt
 + rootPrompt
 ```
+
+(The `working_dir` directory-chain INSTRUCTIONS.md live *inside* `mdPrompt` — folded into the `## User Instructions` region by `composeMdPrompt` — not after the `Working directory:` tagline. That tagline is just a one-line focus marker.)
 
 The roster is computed once (`!internal && canDelegate` → `buildAgentRoster(agentId, team)`, else `''`, where `canDelegate` is "the session holds `start_session`") and handed to `composeMdPrompt`, so it lands inside `mdPrompt` behind AGENT.md. Only when there's no AGENT.md at all (the fallback branch) is a non-empty roster appended at the tail instead — there's no MD layer to slot it behind.
 
@@ -168,7 +173,7 @@ When `needsBootstrap`, the whole block is prefixed with `bootstrapPrompt + "\n\n
 `userMd` is cleared and the prompt recomposed:
 
 ```
-mdPrompt
+mdPrompt                                         ← incl. working_dir scope (inside composeMdPrompt, see Root)
 + "\n\nThe workspace root is: {workspaceRoot}\n"
 + "Working directory: {workingDir}\n"
 + allPrompt
@@ -256,7 +261,7 @@ Your available tools: ...
 
 root-scope leads all-scope: root-only orchestrator guidance lands while attention is high, the generic tool layer trails (same rationale as the roster riding behind AGENT.md).
 
-(Sub-dir INSTRUCTIONS.md are not in this prompt — they inject per-turn via `@scope`, below.)
+(A sub-agent's `working_dir` directory-chain INSTRUCTIONS.md sit in the `## User Instructions` region — plain markdown, right after the global/ws-root layer — see Sub-agent below. A user's `@scope` injects per-turn into the message, not here — below.)
 
 ### Sub-agent
 
@@ -265,9 +270,10 @@ AGENT.md
 ## Your Team                                    ← lean roster (only when the agent holds start_session)
 ## User Instructions                            ← ~/.halo/global/INSTRUCTIONS.md (suppressed when ws has its own)
 ## User Instructions                            ← <ws>/.halo/INSTRUCTIONS.md (workspace root)
+## User Instructions                            ← working_dir's directory-chain INSTRUCTIONS.md, headed ### <dir> (when working_dir set)
 ## Project Knowledge
 "The workspace root is: ..."
-"Working directory: ..."
+"Working directory: ..."                        ← one-line focus marker (the rules above are the actual content)
 allPrompt                                        ← prompts/all/*.md (ws > global)
 <available_skills>
 Your available tools: ...
@@ -275,20 +281,18 @@ Your available tools: ...
 
 (Sub-agents get the lean `## Your Team` roster — not the root's `## Know Your Team Before You Act` block — and only when they hold `start_session`; no USER.md, no root-scope prompts.)
 
-## Directory-scoped instructions (`@scope`)
+## Directory-scoped instructions
 
-Sub-directory `.halo/INSTRUCTIONS.md` files are injected **per turn**, into the user/initial message — never into the system prompt. This keeps them loop-scoped and leaves the system prompt (hence the prompt cache) stable as an agent moves between directories.
+Sub-directory `.halo/INSTRUCTIONS.md` files reach the model two ways, split by **who supplies the directory and how long it lives**:
 
-Implementation: [`loadScopeInstructions(workspaceRoot, relDir)`](../../../packages/server/src/prompts/md-loader.ts) reads `.halo/INSTRUCTIONS.md` at every level along `workspaceRoot → relDir` **excluding the root** (the root's file is already in the system prompt), and renders one self-describing `<workspace-instructions dir=... note=...>` block (levels with no file are skipped; outer levels first). So `@scope a/b/c` pulls `a`, `a/b`, `a/b/c` — and if only an ancestor like `a/b` has a file, you still get it.
+Shared core: [`loadScopeBody(workspaceRoot, relDir)`](../../../packages/server/src/prompts/md-loader.ts) reads `.halo/INSTRUCTIONS.md` at every level along `workspaceRoot → relDir` **excluding the root** (the root's file is already in the system prompt) and returns a bare markdown body, each present level headed `### <dir>` (levels with no file are skipped; outer levels first). So a directory `a/b/c` pulls `a`, `a/b`, `a/b/c` — and if only an ancestor like `a/b` has a file, you still get it. The two consumers wrap that body differently:
 
-Four entry points, all one-shot (they affect only the turn they ride on; the block lands in that turn's message and is not re-injected later):
+| Trigger | Who | Lifetime | How it reaches the model |
+|---|---|---|---|
+| `working_dir` on `start_session` | parent agent | **persistent** — every turn, for the session's life | `composeMdPrompt` folds the **bare `loadScopeBody` markdown** into the `## User Instructions` region, right after the global/ws-root layer ([`session-agent-builder.composeSystemPrompt`](../../../packages/server/src/agents/session-agent-builder.ts)). No `<workspace-instructions>` wrapper — the section heading already frames it. `working_dir` is stored on `agent_sessions.working_dir` and restored on resume, so the rules are rebuilt into the system prompt on every `buildAgentInstance`. |
+| `@scope <dir>` in a message | user (TUI / admin / channels) | **one-shot** — only the turn it rides on | `loadScopeInstructions` wraps the body in a self-describing `<workspace-instructions dir=... note=...>` block (it lands in the message stream, so it needs the tag + note to read as turn context); `SessionManager.expandScopeMarkers` strips the marker from the visible text and prepends the block to that message. Not re-injected on later turns. |
 
-| Trigger | Who | Where injected |
-|---|---|---|
-| `@scope <dir>` in a message | user (TUI / admin / channels) | `SessionManager.expandScopeMarkers` strips the marker from the visible text and prepends the block; the busy-queue path (`enqueueUserMessage`) does the same |
-| `working_dir` on `start_session` | parent agent | injected into the sub-agent's **first-turn** message only |
-| `scope` arg on `query_session` | agent | prepended to that one message to the target |
-| `scope` arg on `interrupt_session` | agent | prepended to the re-run message |
+Why the split: `working_dir` is the sub-agent's persistent identity (it lives in that directory for its whole life), so its rules belong in the system prompt where they're present every turn — a first-turn-only injection would let the agent forget them after a few turns. `@scope` is ad-hoc context a user attaches to one message, so it stays loop-scoped. (The earlier `scope` args on `query_session` / `interrupt_session` were removed — they let a parent temporarily swap a child's directory rules, which contradicts working_dir being persistent identity.)
 
 Invalid `@scope` dirs (outside workspace / missing / no INSTRUCTIONS.md along the path) are dropped with a `system` warning event; the turn still runs. The block does **not** change where tools execute — it is purely guidance.
 
@@ -387,12 +391,13 @@ Schema declared by each package + values stored centrally is the same model VSCo
 - Non-existent directory → spawn refused
 - Persisted as a workspace-relative path on the `agent_sessions.working_dir` column (null = project root)
 - On resume, the relative path is resolved against `workspaceRoot` and passed to `buildAgentInstance`
+- The directory-chain `.halo/INSTRUCTIONS.md` along root→working_dir is baked into the system prompt every turn (see [Directory-scoped instructions](#directory-scoped-instructions)) — because working_dir is persistent identity, the rules are present on every turn, not just the first
 
 ## Key invariants
 
 - **Override precedence**: workspace > global (USER.md, AGENT.md, INSTRUCTIONS.md, prompts/)
 - **agents/ & skills/ override**: whole-folder. `<ws>/.halo/agents/<id>/` (or `skills/<id>/`) exists → serves that agent/skill entirely (agent.yaml + AGENT.md, or SKILL.md + resources), global folder ignored, no per-file fallback
-- **INSTRUCTIONS.md**: workspace root INSTRUCTIONS.md suppresses global; subdirectory chain still stacks on top
+- **INSTRUCTIONS.md**: workspace root INSTRUCTIONS.md suppresses global; subdirectory chain stacks on top — in the system prompt every turn when it's a sub-agent's `working_dir` (persistent), or per-turn in the message via user `@scope` (one-shot)
 - **prompts/ override**: `<ws>/.halo/prompts/<scope>/` directory exists → entirely replaces global's same scope (directory-level, no per-file merge)
 - **INDEX.md is project-root only**: subdirectory INDEX files are not auto-loaded
 - **Root vs sub-agent**: determined by `!parentId`

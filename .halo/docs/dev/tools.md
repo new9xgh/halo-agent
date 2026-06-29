@@ -170,7 +170,7 @@ Start a sub-agent session asynchronously. When the sub-agent finishes, its **wra
 | `agent_id` | string | yes | Agent ID (e.g. `"coder"`) |
 | `message` | string | yes | Task description |
 | `system_prompt_context` | string | no | Extra context prepended to the initial message |
-| `working_dir` | string | no | Sub-agent's focus directory (absolute or workspace-relative; default: project root). On the sub-agent's **first turn**, the directory-scoped `.halo/INSTRUCTIONS.md` along the path root→dir is injected, and the prompt is tagged with this focus. Does **not** change where tools run. |
+| `working_dir` | string | no | Sub-agent's focus directory (absolute or workspace-relative; default: project root). It's persistent session identity (stored in the DB, restored on resume), so the directory-chain `.halo/INSTRUCTIONS.md` along the path root→dir is baked into the sub-agent's **system prompt every turn** (it never forgets the directory's rules), and the prompt is tagged with this focus. Does **not** change where tools run. |
 
 **Output (JSON string)**
 
@@ -218,7 +218,6 @@ Send a message to another session. Idle = immediate run, busy = queued + soft in
 |---|---|---|---|
 | `target_session_id` | string | yes | Target session ID |
 | `message` | string | yes | Message content |
-| `scope` | string | no | Workspace-relative directory whose `.halo/INSTRUCTIONS.md` (root→dir path) is injected into **this message only** — one-shot, doesn't persist to the target's later turns, doesn't change where tools run |
 
 **Busy = soft interrupt (merge-answer parity)**: when the target is busy, `query_session` enqueues the message **and** requests a soft interrupt (same as a user message arriving mid-turn) — the in-flight turn unwinds after its current tool, then every message that landed alongside it drains as **one merged turn**. So a sub-agent asked two questions while busy answers them **together**, not one-by-one — matching how root folds two user messages. No message is dropped. (Before 0.1.4 a busy `query_session` was pure no-interrupt enqueue, which made sub-agents reply one question at a time.)
 
@@ -232,7 +231,6 @@ Equivalent to `query_session` **plus an immediate abort** of the in-flight turn.
 |---|---|---|---|
 | `session_id` | string | yes | Session to interrupt |
 | `message` | string | yes | Message to run after interruption |
-| `scope` | string | no | Workspace-relative directory whose `.halo/INSTRUCTIONS.md` (root→dir path) is injected into the re-run message only (one-shot; doesn't change where tools run) |
 
 ### stop_session
 

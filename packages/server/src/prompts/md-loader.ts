@@ -10,15 +10,17 @@
  *   5. INDEX.md                      — <workspaceRoot>/.halo/INDEX.md (project root only)
  *
  * INSTRUCTIONS.md scoping:
- *   - The system prompt carries global + workspace-ROOT INSTRUCTIONS only.
+ *   - The system prompt carries global + workspace-ROOT INSTRUCTIONS.
  *     Workspace-root suppresses global (same override as USER.md / AGENT.md) so
  *     a cloned workspace is self-contained and doesn't depend on the machine's
  *     global file to share its conventions.
- *   - Sub-directory INSTRUCTIONS.md are NOT baked into the system prompt. They
- *     are injected per-turn via `loadScopeInstructions` (`@scope` from the user,
- *     `working_dir` on a sub-agent's first turn, or a `scope` arg on
- *     query/interrupt_session). That keeps them loop-scoped — relevant to the
- *     turn that asked for them, not a permanent part of the agent's identity.
+ *   - A sub-agent's `working_dir` is a persistent session identity (stored in
+ *     the DB, restored on resume), so its directory-chain INSTRUCTIONS.md are
+ *     also folded into the system prompt's `## User Instructions` region
+ *     (loadScopeBody via composeMdPrompt, every turn) — the agent never forgets
+ *     the rules of the directory it lives in.
+ *   - A user's `@scope <dir>` injects that path's INSTRUCTIONS.md into one
+ *     message only (loop-scoped — expandScopeMarkers), for ad-hoc context.
  */
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
@@ -172,7 +174,7 @@ export async function loadAllMdContents(
  * Compose MD contents into a single prompt injection string.
  * Only includes sections that have content.
  */
-export function composeMdPrompt(contents: MdContents, roster = ''): string {
+export function composeMdPrompt(contents: MdContents, roster = '', scopeBody = ''): string {
   const sections: string[] = []
 
   // User profile comes first — sets the tone for the entire conversation
@@ -201,10 +203,20 @@ export function composeMdPrompt(contents: MdContents, roster = ''): string {
     sections.push(`## User Instructions\n\n${contents.globalInstructions}`)
   }
 
-  // Workspace-root INSTRUCTIONS.md (sub-dir instructions are injected per-turn,
-  // not here — see loadScopeInstructions).
+  // Workspace-root INSTRUCTIONS.md.
   if (contents.workspaceInstructions) {
     sections.push(`## User Instructions\n\n${contents.workspaceInstructions}`)
+  }
+
+  // A sub-agent's working_dir directory-chain INSTRUCTIONS.md, folded into the
+  // same `## User Instructions` region right after the global/ws-root layer —
+  // order goes general → specific (the directory's extra rules add to, never
+  // replace, the base). Plain markdown, no `<workspace-instructions>` wrapper:
+  // the section heading already frames it (the XML tag is only for `@scope`
+  // message-stream injection, where there's no heading to lean on). '' for a
+  // root agent or a working_dir with no sub-dir file.
+  if (scopeBody) {
+    sections.push(`## User Instructions\n\n${scopeBody}`)
   }
 
   if (contents.projectIndex) {
@@ -235,19 +247,23 @@ export async function buildMdPrompt(
 }
 
 /**
- * Load directory-scoped INSTRUCTIONS.md for a turn and render them as one
- * injectable block. Reads the `.halo/INSTRUCTIONS.md` at every level along
- * the workspaceRoot → relDir ancestor path, EXCLUDING the workspace root (whose
- * INSTRUCTIONS.md is already in the system prompt via composeMdPrompt). Levels
- * with no file are skipped; outer levels come before inner.
+ * Read the directory-chain INSTRUCTIONS.md as a bare markdown body. Reads the
+ * `.halo/INSTRUCTIONS.md` at every level along the workspaceRoot → relDir
+ * ancestor path, EXCLUDING the workspace root (whose INSTRUCTIONS.md is already
+ * in the system prompt via composeMdPrompt). Levels with no file are skipped;
+ * outer levels come before inner. Each present level is headed `### <relDir>`
+ * (so a multi-level chain stays legible). Returns '' when relDir is the root,
+ * outside the workspace, or no sub-level has a file.
  *
- * Returns '' when relDir resolves to the workspace root, is outside the
- * workspace, or no sub-level has an INSTRUCTIONS.md. The returned string is a
- * self-describing `<workspace-instructions>` block so the agent understands why
- * it appeared in the turn (it is prepended to the user/initial message by the
- * caller — `@scope`, a sub-agent's first turn, or a query/interrupt scope arg).
+ * This is the shared core. Two consumers wrap it differently:
+ *   - the system prompt (a sub-agent's persistent `working_dir`) folds this body
+ *     into the `## User Instructions` section via composeMdPrompt — plain
+ *     markdown, no wrapper, since the section heading already frames it.
+ *   - `@scope` message injection wraps it in a self-describing
+ *     `<workspace-instructions>` block (loadScopeInstructions) — it lands in the
+ *     message stream, so it needs the tag + note to read as turn context.
  */
-export async function loadScopeInstructions(workspaceRoot: string, relDir: string): Promise<string> {
+export async function loadScopeBody(workspaceRoot: string, relDir: string): Promise<string> {
   const abs = path.resolve(workspaceRoot, relDir)
   const chain = buildDirChain(workspaceRoot, abs)
   // Drop the root level (rel === '.') — it lives in the system prompt already.
@@ -263,13 +279,26 @@ export async function loadScopeInstructions(workspaceRoot: string, relDir: strin
   const present = parts.filter((p) => p.content)
   if (present.length === 0) return ''
 
+  return present.map((p) => `### ${p.rel}\n\n${p.content}`).join('\n\n')
+}
+
+/**
+ * Wrap loadScopeBody in a self-describing `<workspace-instructions>` block for
+ * message-stream injection (a user's `@scope <dir>` marker). The system prompt
+ * path does NOT use this — it folds the bare body into `## User Instructions`
+ * via composeMdPrompt (the section heading already frames it; the XML tag would
+ * be noise there).
+ */
+export async function loadScopeInstructions(workspaceRoot: string, relDir: string): Promise<string> {
+  const body = await loadScopeBody(workspaceRoot, relDir)
+  if (!body) return ''
+
   // Display the directory workspace-relative regardless of whether the caller
-  // passed a relative (`@scope`) or absolute (`start_session.working_dir`) path,
-  // so the block never leaks the machine's absolute path into the prompt.
-  const dirLabel = path.relative(workspaceRoot, abs) || '.'
-  const body = present.map((p) => `### ${p.rel}\n\n${p.content}`).join('\n\n')
+  // passed a relative (`@scope`) or absolute path, so the block never leaks the
+  // machine's absolute path into the prompt.
+  const dirLabel = path.relative(workspaceRoot, path.resolve(workspaceRoot, relDir)) || '.'
   return (
-    `<workspace-instructions dir="${dirLabel}" note="Directory-scoped guidance injected by the platform for this turn (from .halo/INSTRUCTIONS.md along the path to this directory). Treat as user instructions for work under this path. Does not change where tools execute.">\n` +
+    `<workspace-instructions dir="${dirLabel}" note="Directory-scoped guidance from .halo/INSTRUCTIONS.md along the path to this directory. Treat as user instructions for work under this path. Does not change where tools execute.">\n` +
     `${body}\n` +
     `</workspace-instructions>`
   )

@@ -29,10 +29,10 @@ function writeAgent(agentId: string, yamlLines: string[], agentMd?: string): voi
   if (agentMd !== undefined) writeFileSync(join(dir, 'AGENT.md'), agentMd)
 }
 
-function seedSession(sm: SessionManager, id: string, agentId: string, parentId: string | null = null): void {
+function seedSession(sm: SessionManager, id: string, agentId: string, parentId: string | null = null, workingDir: string | null = null): void {
   sm.getDb().insert(agentSessions).values({
     id, parentId, agentId, agentName: agentId,
-    description: '', workingDir: null, accessLevel: null,
+    description: '', workingDir, accessLevel: null,
     createdAt: 1000, updatedAt: 1000, stoppedAt: null, archivedAt: null,
   }).run()
 }
@@ -109,5 +109,46 @@ describe('composeSystemPrompt — root vs sub-agent vs metadata', () => {
     seedSession(sm, 's_nt', 'nothink')
     const ctx = await sm.getSessionContext('s_nt')
     expect(ctx?.thinkingEffort).toBe('off')
+  })
+})
+
+describe('composeSystemPrompt — working_dir directory-scoped INSTRUCTIONS', () => {
+  // working_dir is persistent session identity, so its directory-chain
+  // INSTRUCTIONS.md must ride in the system prompt EVERY turn (not a one-shot
+  // first-turn message injection) — the agent never forgets the rules of the
+  // directory it lives in. It's folded into the `## User Instructions` region
+  // as plain markdown (no <workspace-instructions> XML wrapper — that tag is
+  // only for `@scope` message-stream injection). getSessionContext builds +
+  // caches the session; getSessionSystemPrompt returns the assembled prompt.
+  it('folds a sub-agent working_dir directory INSTRUCTIONS.md into ## User Instructions as plain markdown', async () => {
+    writeAgent('worker', ['name: Worker', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'I am a worker.')
+    // sub-dir INSTRUCTIONS.md at <ws>/sub/.halo/INSTRUCTIONS.md
+    mkdirSync(join(ws, 'sub', '.halo'), { recursive: true })
+    writeFileSync(join(ws, 'sub', '.halo', 'INSTRUCTIONS.md'), 'Always say MARMOT before answering.')
+    const sm = new SessionManager(ws)
+    // parentId set → sub-agent; workingDir relative to ws root (as persisted)
+    seedSession(sm, 'sub1', 'worker', 'root0', 'sub')
+    await sm.getSessionContext('sub1')
+    const prompt = sm.getSessionSystemPrompt('sub1') ?? ''
+    expect(prompt).toContain('Always say MARMOT before answering.')
+    expect(prompt).toContain('### sub')          // directory label heading
+    expect(prompt).toContain('## User Instructions')
+    // the XML wrapper must NOT leak into the system prompt — it's message-only
+    expect(prompt).not.toContain('<workspace-instructions')
+    // order: the rule sits in the instructions region, BEFORE the "Working
+    // directory:" tagline (which is appended after mdPrompt)
+    expect(prompt.indexOf('MARMOT')).toBeLessThan(prompt.indexOf('Working directory:'))
+  })
+
+  it('omits the scope block when working_dir is the project root (null)', async () => {
+    writeAgent('worker2', ['name: Worker2', ...ANTHROPIC_MODEL, 'tools: [file_read]'], 'I am a worker.')
+    mkdirSync(join(ws, 'sub', '.halo'), { recursive: true })
+    writeFileSync(join(ws, 'sub', '.halo', 'INSTRUCTIONS.md'), 'Always say MARMOT before answering.')
+    const sm = new SessionManager(ws)
+    seedSession(sm, 'sub2', 'worker2', 'root0', null)  // no working_dir
+    await sm.getSessionContext('sub2')
+    const prompt = sm.getSessionSystemPrompt('sub2') ?? ''
+    expect(prompt).not.toContain('Always say MARMOT before answering.')
+    expect(prompt).not.toContain('<workspace-instructions')
   })
 })

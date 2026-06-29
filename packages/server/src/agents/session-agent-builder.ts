@@ -4,7 +4,7 @@ import { createModelRuntime, type ModelRuntime } from './model-runtime.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { createDraftTool } from '../tools/draft-tool.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
-import { loadAllMdContents, composeMdPrompt, resolveMdPaths } from '../prompts/md-loader.js'
+import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
@@ -264,9 +264,16 @@ export class SessionAgentBuilder {
     // default, also covering agents authored before this field existed).
     const canDelegate = sessionToolNames.includes('start_session')
     const roster = (!yamlConfig?.internal && canDelegate) ? await this.buildAgentRoster(agentId, yamlConfig?.team, isRoot) : ''
+    // A sub-agent's working_dir is persistent session identity (stored in the
+    // DB, restored on resume), so its directory-chain INSTRUCTIONS.md ride in
+    // the system prompt every turn (composeMdPrompt folds them into the
+    // `## User Instructions` region right after global/ws-root) — the agent
+    // never forgets the rules of the directory it lives in. '' when no
+    // working_dir or no sub-dir file.
+    const scopeBody = workingDir ? await loadScopeBody(this.host.workspaceRoot, workingDir) : ''
     // composeMdPrompt slots the roster directly behind AGENT.md (see there) and
     // joins it with the same `---` separators as every other MD section.
-    const mdPrompt = composeMdPrompt(mdContents, roster)
+    const mdPrompt = composeMdPrompt(mdContents, roster, scopeBody)
     let systemPrompt: string
 
     if (isRoot) {

@@ -12,7 +12,6 @@
  */
 import { config } from '../config.js'
 import { loadAgentYaml, loadSkillMetadata, isAgentDisabled, isTeamMember } from './agent-loader.js'
-import { loadScopeInstructions } from '../prompts/md-loader.js'
 import { readSessionFileMeta } from '../sessions/session-store.js'
 import { getDisabledSet } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
@@ -46,7 +45,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
         agent_id: { type: 'string' as const, description: 'The agent ID — must be one of the agents listed in your system prompt. Do not invent ids.' },
         message: { type: 'string' as const, description: 'Task description / initial message for the agent' },
         system_prompt_context: { type: 'string' as const, description: 'Optional context to inject' },
-        working_dir: { type: 'string' as const, description: "Optional focus directory for the sub-agent (workspace-relative or absolute; must be inside the workspace). On the sub-agent's FIRST turn, the platform injects the directory-scoped INSTRUCTIONS.md found along the path from the workspace root down to this directory, and tags its prompt with this focus. Does NOT change where tools run (shell/file tools still operate from the project root). Omit for project-root scope." },
+        working_dir: { type: 'string' as const, description: "Optional focus directory for the sub-agent (workspace-relative or absolute; must be inside the workspace). The platform bakes the directory-scoped INSTRUCTIONS.md found along the path from the workspace root down to this directory into the sub-agent's system prompt (present every turn), and tags its prompt with this focus. Does NOT change where tools run (shell/file tools still operate from the project root). Omit for project-root scope." },
       },
       required: ['agent_id', 'message'],
     },
@@ -99,14 +98,10 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
 
       let initialMessage = `[Session ${childSessionId}]\n\n`
       if (params.system_prompt_context) initialMessage += `${params.system_prompt_context}\n\n`
-      // First-turn scope injection: pull the sub-dir INSTRUCTIONS.md along the
-      // working_dir path into this opening message (one-shot — later turns must
-      // re-supply scope via query/interrupt_session). Root-level instructions
-      // are already in the system prompt, so loadScopeInstructions skips them.
-      if (resolvedWorkingDir) {
-        const scopeBlock = await loadScopeInstructions(sm.workspaceRoot, resolvedWorkingDir)
-        if (scopeBlock) initialMessage += `${scopeBlock}\n\n`
-      }
+      // working_dir's directory-chain INSTRUCTIONS.md are baked into the child's
+      // system prompt every turn (see session-agent-builder.composeSystemPrompt) —
+      // working_dir is persistent session identity, so the rules ride in the
+      // system prompt rather than being injected once into this opening message.
       initialMessage += params.message
 
       console.debug(`[SessionManager] start_session called by ${sessionId} — creating child ${childSessionId} (agent: ${params.agent_id}, workingDir: ${resolvedWorkingDir ?? 'project root'})`)
@@ -150,24 +145,14 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       properties: {
         target_session_id: { type: 'string' as const, description: 'Session ID to send the message to' },
         message: { type: 'string' as const, description: 'Message content' },
-        scope: { type: 'string' as const, description: 'Optional workspace-relative directory. Injects that path\'s directory-scoped INSTRUCTIONS.md into THIS message only (one-shot — does not persist to the target\'s later turns, and does not change where tools run).' },
       },
       required: ['target_session_id', 'message'],
     },
     callback: async (input: unknown) => {
-      const params = input as { target_session_id: string; message: string; scope?: string }
+      const params = input as { target_session_id: string; message: string }
       console.debug(`[SessionManager] query_session tool called by ${sessionId} → target ${params.target_session_id} — message: ${params.message.slice(0, 150)}`)
 
-      let message = params.message
-      if (params.scope) {
-        try {
-          await sm.resolveWorkingDir(params.scope)
-          const scopeBlock = await loadScopeInstructions(sm.workspaceRoot, params.scope)
-          if (scopeBlock) message = `${scopeBlock}\n\n${message}`
-        } catch (err) {
-          return JSON.stringify({ code: 1, error: err instanceof Error ? err.message : String(err) })
-        }
-      }
+      const message = params.message
 
       // Emit agent_start so the root session's event-processor initializes a sub-session
       // log under this taskId. Without it, stream/tool/usage events from the target would
@@ -190,19 +175,13 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       properties: {
         session_id: { type: 'string' as const, description: 'Session ID to interrupt' },
         message: { type: 'string' as const, description: 'New message to run after interruption' },
-        scope: { type: 'string' as const, description: 'Optional workspace-relative directory. Injects that path\'s directory-scoped INSTRUCTIONS.md into the re-run message only (one-shot; does not change where tools run).' },
       },
       required: ['session_id', 'message'],
     },
     callback: async (input: unknown) => {
-      const params = input as { session_id: string; message: string; scope?: string }
+      const params = input as { session_id: string; message: string }
       try {
-        let message = params.message
-        if (params.scope) {
-          await sm.resolveWorkingDir(params.scope)
-          const scopeBlock = await loadScopeInstructions(sm.workspaceRoot, params.scope)
-          if (scopeBlock) message = `${scopeBlock}\n\n${message}`
-        }
+        const message = params.message
 
         const sessionInfo = sm.getSessionById(params.session_id)
         const agentName = sessionInfo?.agentName ?? sessionInfo?.agentId ?? 'unknown'
