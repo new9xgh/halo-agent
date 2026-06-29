@@ -36,9 +36,16 @@ one.
 
 ```bash
 cd packages/halo   # repo root
-# 1. build the two upstream artifacts the stage script consumes
-cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
-cd packages/server && ./node_modules/.bin/tsc && cd ../..
+# 1. build the upstream artifacts the stage script consumes, IN ORDER.
+#    - core MUST build before server: server imports @turmind/halo-core
+#      (e.g. GitManager in routes/git.ts). A stale/missing core/dist makes
+#      server's tsc fail with "GitManager has no method X" / type errors.
+#    - admin MUST use the full `pnpm build` (next build + copy-monaco.mjs),
+#      NOT a bare `next build` — the latter skips Monaco and stage-runtime.mjs
+#      now FATAL-aborts on the missing admin-out/monaco/vs/loader.js.
+pnpm --filter @turmind/halo-core build
+pnpm --filter @turmind/halo-server build
+pnpm --filter @turmind/halo-admin build
 
 # 2. stage + package (arm64)
 cd packages/desktop

@@ -29,7 +29,7 @@ pnpm install
 
 pnpm --filter @turmind/halo-core build
 pnpm --filter @turmind/halo-server build
-cd packages/admin && npx next build --no-lint && node scripts/copy-monaco.mjs && cd ../..
+pnpm --filter @turmind/halo-admin build   # next build + copy-monaco; never a bare next build (Monaco would 404)
 ```
 
 ## 2. Create the runtime directory
