@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { EditorPanel } from '@/features/editor/editor-panel'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
@@ -310,6 +311,31 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     if (isRepo === false && activeTab === 'source-control') setActiveTab('explorer')
   }, [isRepo, activeTab])
 
+  // Bottom panel single-render: docked / maximized / floating used to each
+  // render their own <BottomPanel> at a different React-tree position, so
+  // switching mode unmounted one and mounted another. TerminalPanel keeps its
+  // xterm instances in a component-local ref, so every remount re-ran reattach
+  // (with a 2s create-fresh fallback) and spawned duplicate PTY sessions. Fix:
+  // render BottomPanel exactly ONCE into a stable detached host via a portal,
+  // then physically move that host between the three slots. The portal's React
+  // parent never changes, so BottomPanel/TerminalPanel mount once and persist.
+  const [bottomHost] = useState(() => {
+    if (typeof document === 'undefined') return null
+    const el = document.createElement('div')
+    el.className = 'h-full'
+    return el
+  })
+  const bottomDragHandleRef = useRef<HTMLDivElement | null>(null)
+  const [dockedBottomSlot, setDockedBottomSlot] = useState<HTMLDivElement | null>(null)
+  const [overlayBottomSlot, setOverlayBottomSlot] = useState<HTMLDivElement | null>(null)
+  const [floatingBottomSlot, setFloatingBottomSlot] = useState<HTMLDivElement | null>(null)
+  const activeBottomSlot = bottomFloating ? floatingBottomSlot : bottomMaximized ? overlayBottomSlot : dockedBottomSlot
+  useLayoutEffect(() => {
+    if (bottomHost && activeBottomSlot && bottomHost.parentElement !== activeBottomSlot) {
+      activeBottomSlot.appendChild(bottomHost)
+    }
+  }, [bottomHost, activeBottomSlot])
+
   return (
     <div className="flex h-full">
       {/* Activity Bar — hidden when maximized */}
@@ -385,7 +411,7 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
           sidebar={
             <ExplorerSidebar projectId={projectId} pathInput={pathInput} onPathInputChange={setPathInput} onOpenFolder={handleOpenFolder} onOpenPath={openFolderPath} activeProject={activeProject} />
           }
-          main={<ExplorerMainArea projectId={projectId} showBottom={!bottomFloating && !maximized} />}
+          main={<ExplorerMainArea projectId={projectId} showBottom={!bottomFloating && !maximized} bottomSlotRef={setDockedBottomSlot} />}
         />
       </div>
 
@@ -420,14 +446,26 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
         <QuickOpen onSelect={handleQuickOpenSelect} onClose={() => setShowQuickOpen(false)} />
       )}
 
-      {/* Floating Chat + Terminal panel */}
-      {bottomFloating && <FloatingBottomPanel />}
+      {/* Floating Chat + Terminal panel — the panel itself is portaled into
+          this frame's slot (see bottomHost above), so floating is just another
+          slot rather than a separate BottomPanel mount. */}
+      {bottomFloating && (
+        <FloatingBottomPanel slotRef={setFloatingBottomSlot} dragHandleRef={bottomDragHandleRef} />
+      )}
 
-      {/* Maximized bottom panel — full viewport like editor maximize */}
+      {/* Maximized bottom panel — full viewport like editor maximize. Empty
+          slot; the single BottomPanel host is moved here while maximized. */}
       {bottomMaximized && !bottomFloating && (
-        <div className="fixed inset-0 z-50 bg-[var(--background)]">
-          <BottomPanel />
-        </div>
+        <div ref={setOverlayBottomSlot} className="fixed inset-0 z-50 bg-[var(--background)]" />
+      )}
+
+      {/* The one and only BottomPanel. Rendered once into a stable detached
+          host that's relocated between the docked / maximized / floating slots
+          — never unmounted on mode switch, so the terminal's xterm instances
+          (and PTY sessions) survive. */}
+      {bottomHost && createPortal(
+        <BottomPanel floating={bottomFloating} dragHandleRef={bottomDragHandleRef} />,
+        bottomHost,
       )}
     </div>
   )
@@ -470,7 +508,7 @@ function ExplorerRootPanelGroup({ showSidebar, sidebar, main }: { showSidebar: b
 /** Explorer's canvas + bottom panel. CanvasPanel stays mounted across tab switches and maximize
  *  toggles. The PanelGroup always renders; when the bottom panel is hidden, we collapse its Panel
  *  to 0 so the canvas takes the full height. */
-function ExplorerMainArea({ projectId, showBottom }: { projectId: string | null; showBottom: boolean }) {
+function ExplorerMainArea({ projectId, showBottom, bottomSlotRef }: { projectId: string | null; showBottom: boolean; bottomSlotRef: (el: HTMLDivElement | null) => void }) {
   const groupRef = useRef<ImperativePanelGroupHandle | null>(null)
   // Remember the last editor/bottom split so restoring it feels natural
   const lastSplitRef = useRef<[number, number]>([65, 35])
@@ -498,9 +536,7 @@ function ExplorerMainArea({ projectId, showBottom }: { projectId: string | null;
         !showBottom && 'pointer-events-none opacity-0',
       )} />
       <Panel defaultSize={35} minSize={0} collapsible>
-        <div className={cn('h-full', !showBottom && 'hidden')}>
-          <BottomPanel />
-        </div>
+        <div ref={bottomSlotRef} className={cn('h-full', !showBottom && 'hidden')} />
       </Panel>
     </PanelGroup>
   )

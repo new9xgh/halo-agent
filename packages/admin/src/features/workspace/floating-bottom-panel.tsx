@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { BottomPanel } from './bottom-panel'
 import { useEditorStore } from '@/shared/stores/editor-store'
 
 const MIN_W = 320
@@ -9,11 +8,17 @@ const MIN_H = 240
 
 type Edges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean }
 
-export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
+interface FloatingBottomPanelProps {
+  /** Slot the single shared BottomPanel host is portaled into (set by parent). */
+  slotRef: (el: HTMLDivElement | null) => void
+  /** The portaled BottomPanel's tab bar — mousedown there drags the frame. */
+  dragHandleRef: React.RefObject<HTMLDivElement | null>
+}
+
+export function FloatingBottomPanel({ slotRef, dragHandleRef }: FloatingBottomPanelProps) {
   const rect = useEditorStore((s) => s.bottomFloatRect)
   const setRect = useEditorStore((s) => s.setBottomFloatRect)
   const maximized = useEditorStore((s) => s.bottomMaximized)
-  const dragHandleRef = useRef<HTMLDivElement | null>(null)
   // Latest rect for the drag/resize mousedown handlers to read without
   // re-binding listeners. Written after commit, not during render.
   const rectRef = useRef(rect)
@@ -49,7 +54,7 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
 
     handle.addEventListener('mousedown', onMouseDown)
     return () => handle.removeEventListener('mousedown', onMouseDown)
-  }, [setRect, maximized])
+  }, [setRect, maximized, dragHandleRef])
 
   // Keep panel inside viewport on window resize
   useEffect(() => {
@@ -138,9 +143,7 @@ export function FloatingBottomPanel({ cwd }: { cwd?: string }) {
       className="fixed z-50 flex flex-col rounded-md border border-[var(--border)] bg-[var(--background)] shadow-2xl"
       style={style}
     >
-      <div className="min-h-0 flex-1 overflow-hidden rounded-md">
-        <BottomPanel cwd={cwd} floating dragHandleRef={dragHandleRef} />
-      </div>
+      <div ref={slotRef} className="min-h-0 flex-1 overflow-hidden rounded-md" />
 
       {!maximized && (
         <div ref={resizeZoneRef}>
