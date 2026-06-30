@@ -615,6 +615,20 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         return
       }
 
+      if (action.type === 'reveal-in-file-manager') {
+        // Desktop-shell only: open the OS file manager at the target. action.path
+        // is workspace-relative; the native shell needs an absolute path, so join
+        // it onto the absolute workspace root (same as open-as-workspace above).
+        // The menu item only renders when window.haloReveal exists, but guard here
+        // too since the browser build has no bridge.
+        if (!workspaceRoot) return
+        const reveal = (window as unknown as { haloReveal?: { reveal: (p: string, isDir: boolean) => void } }).haloReveal
+        if (!reveal) return
+        const absPath = action.path ? `${workspaceRoot}/${action.path}` : workspaceRoot
+        reveal.reveal(absPath, action.isDir)
+        return
+      }
+
       if (action.type === 'download') {
         const url = api.files.downloadUrl(action.path, projectId)
         const a = document.createElement('a')

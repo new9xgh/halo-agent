@@ -178,6 +178,14 @@ window.haloPin = {
   toggle: () => ipcRenderer.invoke('halo:pin-toggle'),
 }
 
+// Reveal-in-file-manager bridge. shell.showItemInFolder / openPath are
+// main-process APIs; expose a tiny async surface the Explorer context menu
+// calls. Only defined in the desktop shell — in a plain browser
+// `window.haloReveal` is undefined, so the menu item hides itself.
+window.haloReveal = {
+  reveal: (fullPath, isDir) => ipcRenderer.invoke('halo:reveal', fullPath, isDir),
+}
+
 // Screen/window capture bridge for the "let the AI see an app" feature. Only
 // defined in the desktop shell — in a plain browser `window.haloCapture` is
 // undefined, so the chat UI hides the capture button and skips prompt

@@ -54,6 +54,7 @@ Items shown depend on the click target:
 |---|---|---|
 | New File / New Folder | Always | `POST /api/files/new` · `mkdir`; auto-expands the parent folder so the inline input is visible |
 | Open in Integrated Terminal | Always | Spawns a terminal at the target dir (or file's parent) |
+| Reveal in File Manager | Desktop app only | Opens the OS file manager (Finder / Explorer / Linux FM) at the target — a folder opens itself, a file is highlighted in its parent dir. Hidden in a plain browser (gated on the `window.haloReveal` IPC bridge exposed by the desktop preload) |
 | Open to the Side | File only | Splits the editor and opens the file in the right pane |
 | Download | File only | `GET /api/files/download?path=...` |
 | Rename | Single file/folder | `POST /api/files/rename` |

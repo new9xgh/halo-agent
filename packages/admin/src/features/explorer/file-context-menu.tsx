@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal, FolderOpen } from 'lucide-react'
+import { Download, Pencil, Trash2, FilePlus, FolderPlus, Terminal, SplitSquareHorizontal, FolderOpen, FolderSearch } from 'lucide-react'
 
 export interface ContextMenuAction {
-  type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side' | 'open-as-workspace'
+  type: 'download' | 'rename' | 'delete' | 'new-file' | 'new-folder' | 'open-terminal' | 'open-to-side' | 'open-as-workspace' | 'reveal-in-file-manager'
   path: string
   isDir: boolean
   /** For bulk operations — all selected paths */
@@ -92,16 +92,22 @@ export function FileContextMenu({ x, y, path, name, isDir, selectedCount, onActi
   // Single-item mode. Workspace root (path === '' + isDir) gets only the
   // "create" actions — rename / delete / download don't apply at that scope.
   const isRoot = path === '' && isDir
+  // Desktop-shell only: the reveal-in-file-manager item needs the native shell,
+  // exposed by preload as `window.haloReveal`. Undefined in a plain browser →
+  // item hidden (same gating pattern as the pin button / capture bridge).
+  const showReveal = typeof window !== 'undefined' && !!(window as unknown as { haloReveal?: unknown }).haloReveal
   const items: Array<{ icon: typeof Download; label: string; type: ContextMenuAction['type']; danger?: boolean; separatorAfter?: boolean }> = isRoot
     ? [
         { icon: FilePlus, label: 'New File...', type: 'new-file' },
         { icon: FolderPlus, label: 'New Folder...', type: 'new-folder' },
         { icon: Terminal, label: 'Open in Integrated Terminal', type: 'open-terminal' },
+        ...(showReveal ? [{ icon: FolderSearch, label: 'Reveal in File Manager', type: 'reveal-in-file-manager' as const }] : []),
       ]
     : [
         { icon: FilePlus, label: 'New File...', type: 'new-file', separatorAfter: false },
         { icon: FolderPlus, label: 'New Folder...', type: 'new-folder', separatorAfter: false },
-        { icon: Terminal, label: 'Open in Integrated Terminal', type: 'open-terminal', separatorAfter: true },
+        { icon: Terminal, label: 'Open in Integrated Terminal', type: 'open-terminal', separatorAfter: !showReveal },
+        ...(showReveal ? [{ icon: FolderSearch, label: 'Reveal in File Manager', type: 'reveal-in-file-manager' as const, separatorAfter: true }] : []),
         ...(!isDir
           ? [
               { icon: SplitSquareHorizontal, label: 'Open to the Side', type: 'open-to-side' as const, separatorAfter: false },

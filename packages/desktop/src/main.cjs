@@ -328,6 +328,26 @@ ipcMain.handle('halo:pin-toggle', () => {
   return next
 })
 
+// Reveal a file/folder in the OS file manager (Finder / Explorer / Linux file
+// manager), driven by the Explorer context menu (preload exposes
+// `window.haloReveal`). The renderer can't touch the shell module, so we bridge
+// over IPC. A folder opens itself (openPath); a file is highlighted in its
+// parent dir (showItemInFolder). fullPath is absolute — the renderer joins it
+// from the workspace root before invoking.
+ipcMain.handle('halo:reveal', async (_e, fullPath, isDir) => {
+  if (!fullPath) return
+  // The renderer joins the path with '/', so on Windows it arrives with mixed
+  // separators (C:\proj/src). showItemInFolder's Win32 SHOpenFolderAndSelectItems
+  // needs native separators or it fails to select — normalize to the platform's.
+  const native = path.normalize(fullPath)
+  if (isDir) {
+    const err = await shell.openPath(native) // '' on success, message on failure
+    if (err) console.error(`[Reveal] openPath failed: ${err}`)
+  } else {
+    shell.showItemInFolder(native)
+  }
+})
+
 // Screen/window capture for the "let the AI see an app" feature. The admin UI
 // (preload exposes `window.haloCapture`) lets the user bind a window/screen,
 // then the LLM asks for a frame on demand via a <<<CAPTURE>>> marker. Capture
