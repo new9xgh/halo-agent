@@ -40,6 +40,23 @@ const CLI_PUB = path.join(CLI_DIR, 'dist-pub')
 // engines field in repo root.
 const NODE_VERSION = 'v22.11.0'
 
+// Early gate: the build host's node major must match the bundled node's. The
+// staged native modules (better-sqlite3) come from `pnpm deploy` hard-linking
+// whatever ABI the *active* node produced; a mismatched major (e.g. a homebrew
+// node 23 shadowing the pinned 22) bakes in a wrong-ABI .node that crashes the
+// packaged app at dlopen. The unconditional prebuild-install fixup corrects it,
+// but failing fast here points at the real problem (`nvm use 22`) instead of
+// silently doing extra work. Override with HALO_SKIP_NODE_CHECK=1 if you know
+// what you're doing. Skipped when cross-staging only matters for ABI, not major.
+const BUNDLED_NODE_MAJOR = NODE_VERSION.match(/^v?(\d+)/)[1]
+const HOST_NODE_MAJOR = process.versions.node.split('.')[0]
+if (HOST_NODE_MAJOR !== BUNDLED_NODE_MAJOR && process.env.HALO_SKIP_NODE_CHECK !== '1') {
+  console.error(`[stage] FATAL: build host runs node v${process.versions.node} but the bundled runtime is node ${NODE_VERSION}.`)
+  console.error(`[stage]   Native modules would be built for the wrong ABI. Switch to node ${BUNDLED_NODE_MAJOR}.x (e.g. \`nvm use ${BUNDLED_NODE_MAJOR}\`) and rebuild,`)
+  console.error('[stage]   or set HALO_SKIP_NODE_CHECK=1 to override (the post-stage smoke test still gates the result).')
+  process.exit(1)
+}
+
 // Target arch for the staged runtime. Defaults to host arch; pass
 // `--arch=x64` (or set HALO_TARGET_ARCH=x64) to cross-stage for an
 // Intel mac when building from Apple Silicon. We can't validate the
@@ -68,6 +85,13 @@ if (TARGET_PLATFORM !== 'darwin' && TARGET_PLATFORM !== 'win32') {
   process.exit(1)
 }
 console.log(`[stage] target: ${TARGET_PLATFORM}-${TARGET_ARCH}`)
+
+// Absolute path to the bundled node binary in resources/. Defined here (not
+// near the download step) because smokeTestNativeAddons() runs it, and the
+// fast path calls that before the download step's code is reached.
+const NODE_BIN_DST_FILE = TARGET_PLATFORM === 'win32'
+  ? path.join(RES_DIR, 'node.exe')
+  : NODE_BIN_DST
 
 // Fast mode: re-sync only the build outputs (server dist + templates +
 // admin-out) into an already-staged resources/, skipping the network/install
@@ -282,23 +306,27 @@ function trimNativeBloat() {
 // fetch the right combo via prebuild-install.
 function fetchTargetArchNatives() {
   const hostPlatform = process.platform === 'win32' ? 'win32' : 'darwin'
-  if (TARGET_ARCH === process.arch && TARGET_PLATFORM === hostPlatform) return
-  console.log(`[stage] cross-staging — re-fetching ${TARGET_PLATFORM}-${TARGET_ARCH} native binaries`)
-  // better-sqlite3 — re-fetch into every copy node might load (flat +
-  // .pnpm). node-pty ships multi-platform prebuilds, no fixup needed.
+  const crossStaging = TARGET_ARCH !== process.arch || TARGET_PLATFORM !== hostPlatform
+  // better-sqlite3's prebuild is NODE_MODULE_VERSION-specific. pnpm deploy
+  // hard-links whatever ABI the build host's *active* node produced — e.g. ABI
+  // 131 (node 23) on a machine where a homebrew node shadows the pinned 22.
+  // The bundled runtime is node 22.11.0 (ABI 127), so a node-23-built .node
+  // crashes at dlopen ("NODE_MODULE_VERSION 131 ... requires 127"). Re-fetch the
+  // 22.11.0 prebuild UNCONDITIONALLY — not just when cross-staging — so the ABI
+  // always matches the bundled node regardless of the build host's active node.
+  // Re-fetch into every copy node might load (flat + .pnpm).
   for (const pkg of resolvePkgDirs('better-sqlite3')) {
-    console.log(`[stage] prebuild-install better-sqlite3 (${TARGET_PLATFORM}-${TARGET_ARCH}) in ${pkg}`)
+    console.log(`[stage] prebuild-install better-sqlite3 (node 22.11.0, ${TARGET_PLATFORM}-${TARGET_ARCH}) in ${pkg}`)
     execSync(
       `npx --yes prebuild-install --runtime=node --target=22.11.0 --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
       { cwd: pkg, stdio: 'inherit' },
     )
   }
-  // @parcel/watcher loads a per-platform optional dep package
-  // (`@parcel/watcher-<platform>-<arch>`), so pnpm deploy on the host only
-  // brought the host's. Install the TARGET's binary package next to the main
-  // @parcel/watcher so `require('@parcel/watcher-win32-x64')` resolves at
-  // runtime on the packaged app.
-  installParcelWatcherBinary()
+  // @parcel/watcher is NAPI (ABI-stable across node versions); only its
+  // per-platform binary package (`@parcel/watcher-<platform>-<arch>`) differs,
+  // so it only needs swapping when the target platform/arch differs from the
+  // host. node-pty ships multi-platform prebuilds, no fixup needed.
+  if (crossStaging) installParcelWatcherBinary()
 }
 
 // Ensure the @parcel/watcher native binary for the TARGET platform/arch is
@@ -448,14 +476,16 @@ function stageCliRuntime() {
     stdio: 'inherit',
   })
 
-  // 4. Native fixup for the target. better-sqlite3 ships one prebuild per
-  //    platform/arch — npm installed the host's, so re-fetch when cross-staging.
-  //    node-pty ships all platforms' prebuilds; just trim to the target.
+  // 4. Native fixup for the target. better-sqlite3's prebuild is ABI-specific;
+  //    npm installed whatever the build host's active node produced (e.g. ABI
+  //    131 on a node-23 host), which crashes on the bundled node 22 — so always
+  //    re-fetch the 22.11.0 prebuild, not just when cross-staging (same root
+  //    cause as server-runtime; see fetchTargetArchNatives). node-pty ships all
+  //    platforms' prebuilds; just trim to the target.
   const keepPlat = `${TARGET_PLATFORM}-${TARGET_ARCH}`
-  const hostPlatform = process.platform === 'win32' ? 'win32' : 'darwin'
   const sqlDir = path.join(CLI_RT, 'node_modules', 'better-sqlite3')
-  if ((TARGET_ARCH !== process.arch || TARGET_PLATFORM !== hostPlatform) && fs.existsSync(sqlDir)) {
-    console.log(`[stage] prebuild-install better-sqlite3 (${keepPlat}) in cli-runtime`)
+  if (fs.existsSync(sqlDir)) {
+    console.log(`[stage] prebuild-install better-sqlite3 (node 22.11.0, ${keepPlat}) in cli-runtime`)
     execSync(
       `npx --yes prebuild-install --runtime=node --target=22.11.0 --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
       { cwd: sqlDir, stdio: 'inherit' },
@@ -490,9 +520,6 @@ assertMonacoStaged(ADMIN_OUT_DST)
 //
 // macOS:   tar.gz, contains bin/node (no extension), needs strip+codesign
 // Windows: zip,    contains node.exe at root, no strip/codesign step.
-const NODE_BIN_DST_FILE = TARGET_PLATFORM === 'win32'
-  ? path.join(RES_DIR, 'node.exe')
-  : NODE_BIN_DST
 const archiveExt = TARGET_PLATFORM === 'win32' ? 'zip' : 'tar.gz'
 // Node binary download mirror. nodejs.org is often slow/unreliable from China,
 // so default to the npmmirror mirror (same host the repo's ~/.npmrc already
@@ -566,10 +593,45 @@ function downloadFollow(url, dest) {
 // against this layout (same target, node_modules + node binary present).
 writeStageMeta()
 
+smokeTestNativeAddons()
+
 console.log('[stage] done')
 console.log(`  ${SERVER_RT}`)
 console.log(`  ${ADMIN_OUT_DST}`)
 console.log(`  ${NODE_BIN_DST}`)
+
+// Final gate: load the staged better-sqlite3 with the BUNDLED node binary, the
+// exact runtime the packaged app uses. This is what catches an ABI mismatch
+// (NODE_MODULE_VERSION X requires Y) no matter how it crept in — wrong build-
+// host node, a fast-path reusing a stale bad tree, a future native dep. A
+// build that loads here cannot ship a "packages fine but crashes on launch"
+// dmg. Skipped when cross-staging: the build host can't dlopen a foreign
+// platform/arch .node, so there's nothing to test here (the cross-arch
+// prebuild-install fixup is what's trusted in that case).
+function smokeTestNativeAddons() {
+  const hostPlatform = process.platform === 'win32' ? 'win32' : 'darwin'
+  if (TARGET_ARCH !== process.arch || TARGET_PLATFORM !== hostPlatform) {
+    console.log('[stage] skipping native-addon smoke test (cross-staging — host cannot load target binaries)')
+    return
+  }
+  for (const rt of [SERVER_RT, CLI_RT]) {
+    const pkg = path.join(rt, 'node_modules', 'better-sqlite3')
+    if (!fs.existsSync(pkg)) continue
+    try {
+      execSync(
+        `"${NODE_BIN_DST_FILE}" -e "const D=require('${pkg}'); new D(':memory:').prepare('select 1').get()"`,
+        { stdio: 'pipe' },
+      )
+      console.log(`[stage] ✓ better-sqlite3 loads on bundled node (${path.basename(rt)})`)
+    } catch (err) {
+      const detail = (err.stderr?.toString() || err.message).split('\n').find((l) => /NODE_MODULE_VERSION|ERR_DLOPEN|Error:/.test(l)) || err.message
+      console.error(`[stage] FATAL: staged better-sqlite3 in ${path.basename(rt)} fails to load on the bundled node — the dmg would crash on launch.`)
+      console.error(`[stage]   ${detail.trim()}`)
+      console.error('[stage]   This is an ABI mismatch. Re-run a full stage (HALO_STAGE_FULL=1) so prebuild-install re-fetches the node 22.11.0 binary.')
+      process.exit(1)
+    }
+  }
+}
 
 function writeStageMeta() {
   fs.writeFileSync(STAGE_META, JSON.stringify({
@@ -673,6 +735,11 @@ async function fastResync() {
   // 3. resources/admin-out (served by the desktop server).
   syncDir(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, 'admin-out')
   assertMonacoStaged(ADMIN_OUT_DST)
+
+  // Fast path reuses the prior stage's node_modules untouched — if that tree
+  // carried a wrong-ABI better-sqlite3, fast would silently ship it. Smoke-test
+  // it too.
+  smokeTestNativeAddons()
 
   console.log('[fast] done — run electron-builder next (e.g. pnpm dist:win-fast)')
 }

@@ -187,8 +187,10 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
 2. **Copy `templates/`** — `pnpm deploy` doesn't pick these up; copied
    explicitly. This is what carries the built-in skills (incl. `send-file`),
    agents, prompts, models into the dmg.
-3. **Cross-arch native fixup** — when target arch/platform ≠ host, re-fetch
-   `better-sqlite3` prebuilds via `prebuild-install`.
+3. **Native fixup** — re-fetch `better-sqlite3` prebuilds via `prebuild-install
+   --target=22.11.0` **unconditionally** (pins the ABI to the bundled node
+   regardless of the build host's node — see the ABI gotcha below);
+   `@parcel/watcher`'s per-platform binary is swapped only when cross-staging.
 4. **Trim bloat** — drop non-target `node-pty` prebuilds, `better-sqlite3`'s
    C source, and the server's `src/`/`tests/`.
 5. **Copy `admin-out/`** — the Next.js static export.
@@ -196,6 +198,9 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    nodejs.org, extract the `node` binary into `resources/`.
 7. **codesign (ad-hoc)** — `codesign --force --sign -` on the node binary for
    Gatekeeper. **We deliberately do NOT `strip`** — see gotcha below.
+8. **Native-addon smoke test** — load the staged better-sqlite3 with the
+   bundled node binary; abort the build if it can't `dlopen` (the ABI backstop,
+   runs on full and fast paths). See the ABI gotcha below.
 
 ## Gotchas (learned the hard way)
 
@@ -226,6 +231,28 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   with SIGSEGV (server exits `code=null` / 139) before any JS runs. The dmg
   looks fine but won't boot. Keep the full ~114 MB binary; the ~30 MB saved
   isn't worth a dead app. (`stage-runtime.mjs` has the strip step removed.)
+
+- **better-sqlite3's ABI must match the BUNDLED node (22.11.0 / ABI 127), not
+  the build host's node.** `pnpm deploy` / `npm install` hard-link whatever
+  `.node` the build host's *active* node produced. If a homebrew/nvm node 23
+  (ABI 131) shadows the pinned 22 on the build machine, the staged
+  `better_sqlite3.node` is ABI 131 — but the app runs it on the bundled node 22,
+  so it dies at launch with `NODE_MODULE_VERSION 131 ... requires 127`
+  (`ERR_DLOPEN_FAILED`, server `code=1`). The dmg packages fine and runs on the
+  builder's own machine (whose node happens to match), so it ships broken to
+  everyone else. Three guards now prevent this, all in `stage-runtime.mjs`:
+  1. `fetchTargetArchNatives()` runs `prebuild-install --target=22.11.0` for
+     better-sqlite3 **unconditionally** (not just when cross-staging), so the
+     ABI is always re-pinned to the bundled node regardless of the host node.
+  2. An early gate aborts if the build host's node major ≠ the bundled major
+     (`nvm use 22` then rebuild; override with `HALO_SKIP_NODE_CHECK=1`).
+  3. `smokeTestNativeAddons()` loads the staged better-sqlite3 with the bundled
+     node binary at the end of every stage (full AND fast) and aborts the build
+     if it can't `dlopen` — the final backstop no matter how a bad ABI crept in
+     (wrong host node, a fast path reusing a stale tree, a future native dep).
+  Verify a built dmg manually: `"<app>/Contents/Resources/node" -e
+  "new (require('<app>/Contents/Resources/server-runtime/node_modules/better-sqlite3'))(':memory:')"`
+  should exit 0.
 
 - **Desktop port is sequential from 9527 (NOT random), and that's load-bearing
   for persistence.** `main.cjs` `findFreePort()` tries 9527 first, then scans
