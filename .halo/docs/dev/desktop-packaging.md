@@ -36,6 +36,13 @@ one.
 
 ```bash
 cd packages/halo   # repo root
+# 0. VERSION GATE — confirm every package is on the release version BEFORE
+#    building or tagging. The five packages must move in lockstep; a single
+#    lagging one ships a mismatched build and a wrong `halo --version`.
+for f in packages/{core,server,admin,cli,desktop}/package.json; do
+  printf "%-32s " "$f:"; grep -m1 '"version"' "$f"
+done   # all five must read the same x.y.z, and match the tag you're about to cut
+
 # 1. build the upstream artifacts the stage script consumes, IN ORDER.
 #    - core MUST build before server: server imports @turmind/halo-core
 #      (e.g. GitManager in routes/git.ts). A stale/missing core/dist makes
@@ -235,6 +242,16 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   `admin-out/monaco/vs/loader.js` is absent, and every doc's build command ends
   with `&& node scripts/copy-monaco.mjs`. If you must run `next build`
   directly, append the copy step yourself.
+
+- **All five package versions must move in lockstep — check before building or
+  tagging.** `core` / `server` / `admin` / `cli` / `desktop` each carry their own
+  `version` in `package.json`, and nothing auto-syncs them. When cutting 0.1.9,
+  `cli` + `desktop` were already bumped by hand but `server` sat at 0.1.8 and
+  `core` / `admin` at 0.1.0 — a `git tag` then would have shipped a build whose
+  `halo --version` (stamped from `package.json`) disagreed with the tag. The
+  step-0 version gate in "One-shot build" loops over all five so a lagging one is
+  caught before the tag is cut. (npm only publishes `cli` as `@turmind/halo`, but
+  the others feed `halo --version` / the admin sidebar, so they still matter.)
 
 - **Changing anything under `templates/` requires bumping `TEMPLATE_VERSION`
   (`packages/server/src/init.ts`) — otherwise the change never reaches existing
