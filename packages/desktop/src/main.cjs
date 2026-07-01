@@ -276,8 +276,14 @@ function waitForHealth(timeoutMs = 30_000) {
   })
 }
 
+// Create a new main window pointed at the local server. Callable repeatedly —
+// Cmd/Ctrl+N and the macOS Dock 'activate' both open additional windows. All
+// windows share the single server + its origin (so one localStorage), so a
+// window remembers which workspace it's on via its own URL ?folder=, not
+// localStorage (that would be shared and clobbered across windows). The
+// workspace switch flow already full-reloads with ?folder=, so this works out.
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1280,
     height: 840,
     title: 'Halo',
@@ -294,25 +300,45 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   })
-  mainWindow.loadURL(`http://127.0.0.1:${PORT}`)
+  // Track the most-recently-focused window so IPC handlers without a sender
+  // (or before any focus event) have a sensible target.
+  mainWindow = win
+  win.on('focus', () => { mainWindow = win })
+  win.loadURL(`http://127.0.0.1:${PORT}`)
   mainWindowEverShown = true
   // Hand off from the splash once the admin UI has actually painted, so there's
   // no flash of empty window between the two.
-  mainWindow.webContents.once('did-finish-load', () => closeSplash())
-  if (!app.isPackaged || process.env.HALO_DEVTOOLS) mainWindow.webContents.openDevTools({ mode: 'detach' })
+  win.webContents.once('did-finish-load', () => closeSplash())
+  if (!app.isPackaged || process.env.HALO_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' })
   // Admin UI registers beforeunload+preventDefault to warn on tab close.
   // In a browser that pops a "Leave site?" dialog and the user can OK; in
   // Electron the dialog is silently swallowed and navigation is blocked
   // entirely — so workspace switching (which does `location.href = ...`)
   // looks like a no-op. Auto-allow the unload.
-  mainWindow.webContents.on('will-prevent-unload', (event) => { event.preventDefault() })
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.on('will-prevent-unload', (event) => { event.preventDefault() })
+  win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(`http://127.0.0.1:${PORT}`) || url.startsWith(`http://localhost:${PORT}`)) {
       return { action: 'allow' }
     }
     shell.openExternal(url)
     return { action: 'deny' }
   })
+  // Windows/Linux have no app menu (macOS-only, see setupAppMenu), so there's
+  // no menu accelerator to open a new window. Bind Ctrl+N at the webContents
+  // level instead — this avoids adding a native menu bar (which would change
+  // the windows' chrome) just for one shortcut. macOS uses the File menu item.
+  if (process.platform !== 'darwin') {
+    win.webContents.on('before-input-event', (event, input) => {
+      // Fires on every keystroke — short-circuit on the modifier before the
+      // string compare so the common (no-Ctrl) case does no extra work.
+      if (!input.control || input.alt || input.meta) return
+      if (input.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        createWindow()
+      }
+    })
+  }
+  return win
 }
 
 // Always-on-top toggle, driven by a pin button in the admin UI (preload
@@ -320,11 +346,17 @@ function createWindow() {
 // we bridge over IPC. 'floating' level keeps the window above other apps'
 // windows on macOS, not just our own. Both handlers return the resulting
 // state so the button can reflect it without a second round-trip.
-ipcMain.handle('halo:pin-get', () => (mainWindow ? mainWindow.isAlwaysOnTop() : false))
-ipcMain.handle('halo:pin-toggle', () => {
-  if (!mainWindow) return false
-  const next = !mainWindow.isAlwaysOnTop()
-  mainWindow.setAlwaysOnTop(next, 'floating')
+// Pin acts on the window that sent the IPC (each window pins independently),
+// falling back to the last-focused window if the sender is somehow gone.
+ipcMain.handle('halo:pin-get', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow
+  return win ? win.isAlwaysOnTop() : false
+})
+ipcMain.handle('halo:pin-toggle', (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow
+  if (!win) return false
+  const next = !win.isAlwaysOnTop()
+  win.setAlwaysOnTop(next, 'floating')
   return next
 })
 
@@ -534,6 +566,12 @@ function setupAppMenu() {
         { role: 'quit' },
       ],
     },
+    {
+      label: 'File',
+      submenu: [
+        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => createWindow() },
+      ],
+    },
     { role: 'editMenu' },
     { role: 'viewMenu' },
     { role: 'windowMenu' },
@@ -601,14 +639,27 @@ app.on('ready', async () => {
   createWindow()
 })
 
+// macOS convention: closing every window doesn't quit the app — it stays in the
+// Dock and clicking the icon reopens a window. Only Cmd+Q (→ before-quit) truly
+// exits. Recreate a window here if the server is still running; if it somehow
+// died, a click can't do anything useful, so ignore.
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0 && serverProcess) createWindow()
+})
+
 // Don't quit when the (transient) setup window closes — startup runs the
 // sequence setup-window → close → start server → main window. If we
 // quit on window-all-closed during that gap, before-quit kills the
 // server we just started. Only honor window-all-closed once the main
 // window has existed at least once.
+//
+// Platform split: on macOS, keep running when all windows close (Cmd+Q quits
+// via before-quit); on Windows/Linux there's no Dock to resummon from, so a
+// windowless background app is a bug — quit as usual.
 let mainWindowEverShown = false
 app.on('window-all-closed', () => {
-  if (mainWindowEverShown) app.quit()
+  if (!mainWindowEverShown) return
+  if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
