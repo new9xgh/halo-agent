@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification } = require('electron')
 const { spawn, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -377,6 +377,40 @@ ipcMain.handle('halo:reveal', async (_e, fullPath, isDir) => {
     if (err) console.error(`[Reveal] openPath failed: ${err}`)
   } else {
     shell.showItemInFolder(native)
+  }
+})
+
+// Agent-finished desktop notification, driven by the admin (preload exposes
+// `window.haloNotify`) when streaming ends while its window is unfocused. Acts
+// on the window that sent the IPC so each window notifies for its own agent.
+ipcMain.handle('halo:notify', (e, payload) => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  // Belt-and-suspenders: the admin already checked document.hasFocus(), but the
+  // IPC round-trip has latency and focus may have changed since — if the window
+  // is focused now the user is already looking at it, so don't interrupt.
+  if (!win || win.isFocused()) return
+  const { title, body } = payload || {}
+
+  // Notification.isSupported() is false on headless/unsupported setups; skip the
+  // native banner there but still nudge via Dock/taskbar below. On macOS the
+  // first Notification auto-requests permission (no manual request needed).
+  if (Notification.isSupported()) {
+    const notification = new Notification({ title: title || 'Halo', body: body || '' })
+    // Clicking the banner brings the (possibly minimized/background) window front.
+    notification.on('click', () => { win.show(); win.focus() })
+    notification.show()
+  }
+
+  if (process.platform === 'darwin') {
+    // macOS: bounce the Dock icon once to draw attention (returns a request id
+    // we don't need to cancel — 'informational' bounces a single time).
+    app.dock?.bounce('informational')
+  } else {
+    // Windows: flash the taskbar button; the OS stops it when the window is
+    // refocused, but clear it explicitly on 'focus' as a safeguard. Linux: some
+    // DEs honor flashFrame, others ignore it — harmless where unsupported.
+    win.flashFrame(true)
+    win.once('focus', () => win.flashFrame(false))
   }
 })
 

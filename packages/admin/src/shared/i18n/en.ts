@@ -279,6 +279,11 @@ export const en: Record<string, string> = {
   'nav.chat': 'CHAT',
   'nav.terminal': 'TERMINAL',
 
+  // ── Agent status ──
+  'status.busy': 'Working…',
+  'status.idle': 'Idle',
+  'status.notifyBody': 'Agent finished responding.',
+
   // ── Source Control ──
   'sc.refresh': 'Refresh',
   'sc.staged': 'Staged Changes',

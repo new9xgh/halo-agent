@@ -14,6 +14,7 @@ import { SkillsSidebar } from '@/features/skills/skills-sidebar'
 import { SkillsMain } from '@/features/skills/skills-main'
 import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
+import { useChatStore } from '@/features/chat/chat-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
@@ -44,6 +45,11 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
   const t = useT()
   const activeProject = useProjectStore((s) => s.activeProject)
   const openFolder = useProjectStore((s) => s.openFolder)
+  // Agent busy/idle + subscribed session for the dynamic window title +
+  // finished-notification below. sessionId gates the notification so a
+  // session switch can't be mistaken for the current agent finishing.
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const sessionId = useChatStore((s) => s.sessionId)
   const [activeTab, setActiveTab] = useState<SidebarTab>(() => {
     if (typeof window === 'undefined') return 'explorer'
     return (localStorage.getItem('halo_sidebar_tab') as SidebarTab) || 'explorer'
@@ -66,6 +72,41 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
     const pin = (window as unknown as { haloPin?: { toggle: () => Promise<boolean> } }).haloPin
     if (pin) void pin.toggle().then(setPinned)
   }, [])
+
+  // Dynamic window title + finished-notification, driven by agent busy state.
+  // Runs in every environment — document.title is harmless in a plain browser
+  // (the tab label just tracks agent state too), and window.haloNotify only
+  // exists in the desktop shell, so the notification path self-gates to Electron.
+  const prevStreamingRef = useRef(isStreaming)
+  const prevSessionIdRef = useRef(sessionId)
+  useEffect(() => {
+    const name = activeProject?.name
+    // No workspace open → bare "Halo"; otherwise prefix a solid dot while busy.
+    // em dash (U+2014) matches the desktop window/title style.
+    document.title = name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo'
+
+    // Busy→idle falling edge → notify the user their agent finished, but only
+    // when this window is unfocused (focused → they can see it) AND the session
+    // didn't change on this tick. isStreaming tracks the *currently subscribed*
+    // session; switching sessions (loadSession sets sessionId but leaves
+    // isStreaming until the new session's events recalibrate it) can drop it
+    // true→false even though the old session is still running — that's a false
+    // "finished", so a session change on the edge tick is not a real completion.
+    const wasStreaming = prevStreamingRef.current
+    const prevSessionId = prevSessionIdRef.current
+    prevStreamingRef.current = isStreaming
+    prevSessionIdRef.current = sessionId
+    if (
+      wasStreaming && !isStreaming
+      && prevSessionId === sessionId && sessionId != null
+      && !document.hasFocus()
+    ) {
+      const notify = (window as unknown as {
+        haloNotify?: { notify: (p: { title: string; body: string }) => void }
+      }).haloNotify
+      if (notify) notify.notify({ title: name ? `Halo — ${name}` : 'Halo', body: t('status.notifyBody') })
+    }
+  }, [isStreaming, sessionId, activeProject?.name, t])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)

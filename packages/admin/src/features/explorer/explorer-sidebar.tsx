@@ -5,6 +5,7 @@ import { EditorPanel } from '@/features/editor/editor-panel'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { FolderPicker } from '@/features/explorer/folder-picker'
 import { useRecentWorkspaces } from '@/features/explorer/use-recent-workspaces'
+import { useChatStore } from '@/features/chat/chat-store'
 import { api } from '@/shared/api-client'
 import { cn, promptInput } from '@/shared/utils'
 import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
@@ -21,6 +22,10 @@ interface ExplorerSidebarProps {
 
 export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpenFolder, onOpenPath, activeProject }: ExplorerSidebarProps) {
   const t = useT()
+  // Agent status light next to the workspace name: amber pulse while streaming
+  // (busy), static emerald when idle. Sole state source is chat-store's
+  // isStreaming (driven by message-streaming events).
+  const isBusy = useChatStore((s) => s.isStreaming)
   const [loading, setLoading] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -170,7 +175,16 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
       )}
       {projectId && (
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-3 py-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{projectName}</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              title={isBusy ? t('status.busy') : t('status.idle')}
+              className={cn(
+                'inline-block h-2 w-2 shrink-0 rounded-full',
+                isBusy ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500',
+              )}
+            />
+            <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{projectName}</span>
+          </div>
           <div className="flex items-center gap-0.5">
             <button onClick={handleNewFile} title="New File" className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
               <FilePlus className="h-3.5 w-3.5" />

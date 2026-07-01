@@ -310,3 +310,12 @@ window.haloCamera = {
     }
   },
 }
+
+// Desktop notification bridge. Native Notification + Dock/taskbar attention are
+// main-process APIs; expose a tiny fire-and-forget surface the admin calls when
+// the agent finishes responding while the window is unfocused. Only defined in
+// the desktop shell — in a plain browser `window.haloNotify` is undefined, so
+// the admin skips the notify path entirely (no browser Notification fallback).
+window.haloNotify = {
+  notify: (payload) => ipcRenderer.invoke('halo:notify', payload),
+}

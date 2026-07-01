@@ -279,6 +279,11 @@ export const zh: Record<string, string> = {
   'nav.chat': '对话',
   'nav.terminal': '终端',
 
+  // ── Agent status ──
+  'status.busy': '运行中…',
+  'status.idle': '空闲',
+  'status.notifyBody': 'Agent 已完成回复。',
+
   // ── Source Control ──
   'sc.refresh': '刷新',
   'sc.staged': '已暂存的更改',
