@@ -61,6 +61,32 @@ models:
           - { value: high, label: High }
           - { value: max, label: Max }
 
+  - id: global.anthropic.claude-sonnet-5
+    displayName: Claude Sonnet 5
+    maxOutputTokens: 64000
+    capabilities:
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        default: 1h
+        ttlPresets:
+          - { value: 5m, label: 5min }
+          - { value: 1h, label: 1hour }
+      thinking:
+        # Sonnet 5: adaptive thinking is always-on (can't be disabled); the
+        # effort set was confirmed via an invalid-value probe against Bedrock:
+        # low / medium / high / xhigh / max. 1M context, 128K output ceiling.
+        mode: adaptive
+        defaultEnabled: true
+        default: high
+        effortPresets:
+          - { value: low, label: Low }
+          - { value: medium, label: Medium }
+          - { value: high, label: High }
+          - { value: xhigh, label: XHigh }
+          - { value: max, label: Max }
+
   - id: global.anthropic.claude-opus-4-6-v1
     displayName: Claude Opus 4.6
     maxOutputTokens: 128000
