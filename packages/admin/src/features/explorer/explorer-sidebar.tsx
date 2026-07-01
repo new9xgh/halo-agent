@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { EditorPanel } from '@/features/editor/editor-panel'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { FolderPicker } from '@/features/explorer/folder-picker'
+import { useRecentWorkspaces } from '@/features/explorer/use-recent-workspaces'
 import { api } from '@/shared/api-client'
 import { cn, promptInput } from '@/shared/utils'
-import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch } from 'lucide-react'
+import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 interface ExplorerSidebarProps {
@@ -23,6 +24,27 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
   const [loading, setLoading] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const uploadRef = useRef<HTMLInputElement>(null)
+
+  // Recent-workspaces dropdown: focus shows the full MRU list (A), typing filters
+  // it (B). `typed` distinguishes the two — on focus the input still holds the
+  // current workspace path, which we don't want to filter by until the user edits.
+  const { recent, remove } = useRecentWorkspaces()
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [typed, setTyped] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!dropdownOpen) return
+    function onDown(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [dropdownOpen])
+
+  const query = typed ? pathInput.trim().toLowerCase() : ''
+  const recentMatches = recent.filter((p) => p !== activeProject?.path && (!query || p.toLowerCase().includes(query)))
+  const folderName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() || p
 
   function handleRefresh() {
     if (!projectId) return
@@ -90,7 +112,44 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
         )}
       </div>
       <div className="flex items-center gap-1 border-b border-[var(--border)] p-3">
-        <input type="text" value={pathInput} onChange={(e) => onPathInputChange(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onOpenFolder()} placeholder="Enter folder path, press Enter" className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]" />
+        <div ref={dropdownRef} className="relative min-w-0 flex-1">
+          <input
+            type="text"
+            value={pathInput}
+            onChange={(e) => { onPathInputChange(e.target.value); setTyped(true); setDropdownOpen(true) }}
+            onFocus={() => { setTyped(false); setDropdownOpen(true) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { setDropdownOpen(false); onOpenFolder() }
+              else if (e.key === 'Escape') setDropdownOpen(false)
+            }}
+            placeholder="Enter folder path, press Enter"
+            className="w-full rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]"
+          />
+          {dropdownOpen && recentMatches.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
+              {recentMatches.map((p) => (
+                <div
+                  key={p}
+                  onClick={() => { setDropdownOpen(false); onOpenPath(p) }}
+                  className="group flex cursor-pointer items-center gap-2 px-2 py-1.5 hover:bg-[var(--secondary)]"
+                >
+                  <History className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs text-[var(--foreground)]">{folderName(p)}</div>
+                    <div className="truncate text-[10px] text-[var(--muted-foreground)]">{p}</div>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); remove(p) }}
+                    title="Remove from recent"
+                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 hover:bg-[var(--border)] hover:text-[var(--foreground)] group-hover:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           onClick={() => setShowPicker(true)}
           title="Browse for folder"

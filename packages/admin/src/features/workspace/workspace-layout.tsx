@@ -16,6 +16,7 @@ import { SessionChatPanel } from '@/features/agents/session-chat-panel'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
+import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
 import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
@@ -79,6 +80,11 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
         // Remember the opened folder so a launch without ?folder (the desktop
         // app's normal case) reopens here instead of bouncing to home.
         try { localStorage.setItem('halo_last_folder', ws.path) } catch { /* ignore */ }
+        // Record in the recent-workspaces MRU list (dropdown in the Explorer path
+        // input). Written here — the single point every successful switch funnels
+        // through (URL ?folder, restored last-folder, and openFolderPath's post-reload
+        // resolve) — so only validated paths land, in canonical (resolved) form.
+        addRecentWorkspace(ws.path)
         if (writeUrl || ws.path !== target) {
           const url = new URL(window.location.href)
           url.searchParams.set('folder', ws.path)
