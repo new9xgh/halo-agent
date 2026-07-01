@@ -530,7 +530,7 @@ function dumpSnapshotImages(runDir: string, logFd: number): DumpedImage[] {
       const block = (msg.content as unknown[])[b] as Record<string, unknown> | null | undefined
       if (!block || typeof block !== 'object') continue
 
-      // Three places an image block can live:
+      // Two places an image block can live:
       //  1. directly as a top-level content block
       //  2. inside a tool_result.content (array form)
       const candidates: Array<{ block: Record<string, unknown>; subBlockIdx: number | null }> = []
