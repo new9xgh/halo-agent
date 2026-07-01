@@ -44,6 +44,10 @@ export interface AdapterConfig {
    *  (and ACP currently has no per-session agent slot). Falls back to
    *  halo's `'default'`. */
   agentId?: string
+  /** Extra HTTP headers (from `--header`) forwarded on every upstream
+   *  request — for auth in front of the halo server (proxy Cookie,
+   *  CF-Access-*, basic-auth). Passed straight to the HaloClient. */
+  headers?: Record<string, string>
 }
 
 /**
@@ -84,7 +88,7 @@ export class AcpAdapter {
     private readonly conn: JsonRpcConnection,
     private readonly config: AdapterConfig,
   ) {
-    this.client = new HaloClient({ baseUrl: config.baseUrl, token: config.token })
+    this.client = new HaloClient({ baseUrl: config.baseUrl, token: config.token, headers: config.headers })
     this.registerHandlers()
   }
 

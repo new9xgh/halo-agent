@@ -16,10 +16,12 @@ interface ParsedArgs {
   token: string
   workspace: string
   agentId?: string
+  headers?: Record<string, string>
 }
 
 function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const out: Partial<ParsedArgs> = {}
+  const rawHeaders: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     const eat = (name: string): string | undefined => {
@@ -53,6 +55,8 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     if (ws !== undefined) { out.workspace = ws; continue }
     const ag = eat('agent-id')
     if (ag !== undefined) { out.agentId = ag; continue }
+    const hdr = eat('header')
+    if (hdr !== undefined) { rawHeaders.push(hdr); continue }
     if (arg === '--help' || arg === '-h') return { error: HELP }
     return { error: `unknown argument: ${arg}` }
   }
@@ -61,6 +65,17 @@ function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (!out.token) return { error: '--token is required' }
   if (!out.workspace) return { error: '--workspace is required' }
   if (!out.scheme) out.scheme = 'http'
+  if (rawHeaders.length > 0) {
+    // Split each `--header` on the FIRST colon — header values legitimately
+    // contain colons (e.g. `Cookie: a=b:c`), so a naive split would corrupt them.
+    const headers: Record<string, string> = {}
+    for (const h of rawHeaders) {
+      const idx = h.indexOf(':')
+      if (idx <= 0) return { error: `invalid --header (expected "Name: value"): ${h}` }
+      headers[h.slice(0, idx).trim()] = h.slice(idx + 1).trim()
+    }
+    out.headers = headers
+  }
   return out as ParsedArgs
 }
 
@@ -84,6 +99,11 @@ Flags:
                 adapters with the same token for multiple workspaces.
   --agent-id    optional. Halo agent profile to use when creating new
                 sessions. Defaults to 'default'.
+  --header      optional, repeatable. Extra HTTP header sent on every
+                request, "Name: value" (like curl -H). For auth in front
+                of the halo server — a reverse proxy's session cookie,
+                CF-Access-Client-Id/Secret, basic-auth Authorization.
+                e.g. --header "Cookie: session=abc123"
 
 Stdio:
   reads ACP JSON-RPC requests on stdin, writes responses + notifications
@@ -103,6 +123,7 @@ export function main(argv: string[] = process.argv.slice(2)): void {
     token: parsed.token,
     workspace: parsed.workspace,
     agentId: parsed.agentId,
+    headers: parsed.headers,
   }
 
   const conn = new JsonRpcConnection(process.stdin, process.stdout, (msg) => {

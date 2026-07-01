@@ -19,6 +19,11 @@
 export interface HaloClientOptions {
   baseUrl: string  // e.g. https://my-ec2:9527
   token: string
+  /** Extra HTTP headers sent on every request (from `--header`). For
+   *  upstream auth that sits in front of the halo server — a reverse
+   *  proxy's Cookie / CF-Access-* / basic-auth Authorization. The
+   *  adapter's own `x-token` always wins over these (see `headers()`). */
+  headers?: Record<string, string>
 }
 
 export interface ChatOpts {
@@ -39,6 +44,14 @@ export interface SseEvent {
 export class HaloClient {
   constructor(private readonly opts: HaloClientOptions) {}
 
+  /** Merge the per-request base headers with the `--header` extras.
+   *  Extras go first so the adapter's own `x-token` / `content-type`
+   *  always win — `--header` is for the upstream proxy in front of
+   *  halo, not for overriding how the adapter talks to halo. */
+  private authHeaders(base: Record<string, string>): Record<string, string> {
+    return { ...this.opts.headers, ...base }
+  }
+
   /** POST /api/web/chat as SSE. Yields parsed events until the stream
    *  ends. Caller is responsible for reacting to `complete`/`error`. */
   async *chat(args: ChatOpts, signal?: AbortSignal): AsyncGenerator<SseEvent> {
@@ -50,10 +63,10 @@ export class HaloClient {
 
     const res = await fetch(`${this.opts.baseUrl}/api/web/chat`, {
       method: 'POST',
-      headers: {
+      headers: this.authHeaders({
         'content-type': 'application/json',
         'x-token': this.opts.token,
-      },
+      }),
       body: JSON.stringify(body),
       signal,
     })
@@ -70,7 +83,7 @@ export class HaloClient {
     const url = new URL(`${this.opts.baseUrl}/api/web/history`)
     url.searchParams.set('workspace', workspace)
     url.searchParams.set('sessionId', sessionId)
-    const res = await fetch(url, { headers: { 'x-token': this.opts.token } })
+    const res = await fetch(url, { headers: this.authHeaders({ 'x-token': this.opts.token }) })
     if (res.status === 404) return false
     if (!res.ok) {
       const msg = await safeText(res)
@@ -90,7 +103,7 @@ export class HaloClient {
     if (sessionId) url.searchParams.set('sessionId', sessionId)
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'x-token': this.opts.token },
+      headers: this.authHeaders({ 'x-token': this.opts.token }),
     })
     if (!res.ok) {
       const msg = await safeText(res)

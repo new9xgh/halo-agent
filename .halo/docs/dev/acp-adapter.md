@@ -81,8 +81,34 @@ To remove a binding: `/acp remove` (deletes the skill directory and points out t
 | `--token`        | yes      | Web-channel token from admin UI. `full` access required for multi-workspace use.         |
 | `--workspace`    | yes      | Absolute server-side path for the workspace this adapter drives.                         |
 | `--agent-id`     | no       | Halo agent profile to use when ACP `session/new` creates a new halo session. Default: `default`. |
+| `--header`       | no       | Extra HTTP header on every upstream request, `"Name: value"` (like `curl -H`). Repeatable. For auth that sits **in front of** the halo server — see "Upstream auth" below. |
 
 One adapter process binds to one workspace. To drive multiple workspaces concurrently from the same token, run multiple adapter processes — see "Multi-workspace" below.
+
+## Upstream auth (`--header`)
+
+`--token` authenticates the adapter to *halo itself* (it becomes the `x-token` header on every web-channel call). It does **not** cover a proxy sitting in front of the server — an SSO/session-cookie gateway, Cloudflare Access, ALB OIDC, nginx basic-auth. Those reject the request before halo ever sees the token.
+
+`--header` is the generic escape hatch: it forwards arbitrary headers on every request the adapter makes (`/api/web/chat`, `/history`, `/stop`), exactly like `curl -H`. The adapter deliberately knows nothing about any specific gateway — you supply whatever that layer wants:
+
+```sh
+# session-cookie gateway
+halo acp --host h --port 9527 --scheme https --token <t> --workspace /ws \
+  --header "Cookie: <the gateway's session cookie, verbatim>"
+
+# Cloudflare Access (two headers — --header is repeatable)
+halo acp … --header "CF-Access-Client-Id: <id>" --header "CF-Access-Client-Secret: <secret>"
+
+# HTTP basic auth
+halo acp … --header "Authorization: Basic <base64 user:pass>"
+```
+
+Notes:
+
+- **Repeatable** — pass `--header` as many times as the gateway needs.
+- **Colon-safe** — the value is split on the *first* `:` only, so header values that themselves contain colons (`Cookie: a=b:c`) survive intact.
+- **`x-token` always wins** — `--header` cannot override the adapter's own `x-token` / `content-type`; it only adds headers for the layer in front of halo.
+- The generated `ask-<label>` bindings (halo→halo, via `ask.py`) do **not** yet expose `--header`; upstream auth through a binding isn't wired. `halo acp` direct is the path when a gateway is in play.
 
 ## ACP method coverage
 

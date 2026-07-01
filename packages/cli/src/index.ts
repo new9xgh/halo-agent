@@ -167,7 +167,7 @@ Options:
   -h, --help                 Show this help
 `
 
-const HELP_ACP = `Usage: halo acp --host <h> --port <p> --token <t> --workspace <path> [--scheme <http|https>] [--agent-id <id>]
+const HELP_ACP = `Usage: halo acp --host <h> --port <p> --token <t> --workspace <path> [--scheme <http|https>] [--agent-id <id>] [--header "Name: value"]
 
 Bridge a running halo server to an ACP (Agent Client Protocol) client
 such as Claude Code. Reads JSON-RPC requests on stdin, writes responses
@@ -186,6 +186,9 @@ Flags:
                           adapters with the same token to drive N
                           workspaces concurrently.
   --agent-id <id>        optional agent profile (default: 'default')
+  --header "N: v"        optional, repeatable. Extra HTTP header on every
+                          request (like curl -H). For auth in front of the
+                          server: proxy Cookie, CF-Access-*, basic auth.
 
 ACP method coverage:
   initialize, authenticate, session/new, session/prompt, session/cancel.
