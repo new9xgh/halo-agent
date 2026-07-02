@@ -44,6 +44,13 @@ function resolvePath(filePath: string, workspaceRoot: string): string {
  * recursion that pins the CPU and can't be interrupted. `find`/`ripgrep`
  * default to the same non-following behaviour.
  *
+ * Windows caveat: a directory junction (pnpm's node_modules layout is built
+ * from these) is a reparse point, but lstat reports isSymbolicLink() === false
+ * and isDirectory() === true — so the lstat guard above does NOT catch it, and
+ * a junction pointing back at an ancestor recurses forever (the Linux-only fix
+ * left Windows exposed). readlink succeeds on junctions too, so on win32 we
+ * probe with readlink and skip any dir that is actually a reparse point.
+ *
  * The optional signal lets a caller abort a long walk; we check it once per
  * directory level so a stopped session actually unwinds the recursion.
  */
@@ -66,10 +73,25 @@ async function* walkDir(dir: string, signal?: AbortSignal): AsyncGenerator<strin
       continue
     }
     if (stat.isDirectory()) {
+      if (process.platform === 'win32' && await isReparsePoint(fullPath)) continue
       yield* walkDir(fullPath, signal)
     } else if (stat.isFile()) {
       yield fullPath
     }
+  }
+}
+
+/**
+ * True if `dir` is a Windows reparse point (junction / symlink). lstat can't
+ * distinguish a junction from a real directory, but readlink succeeds only on
+ * reparse points — so a successful readlink means "don't recurse into this".
+ */
+async function isReparsePoint(dir: string): Promise<boolean> {
+  try {
+    await fs.readlink(dir)
+    return true
+  } catch {
+    return false
   }
 }
 
