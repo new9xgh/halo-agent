@@ -109,7 +109,7 @@ Sandbox is whitelist-cp from main workspace (only: `INSTRUCTIONS.md`, `INDEX.md`
 ### Phase B — Dry-run + Fix Loop
 
 ```
-timeout 600 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox \
+timeout 1800 halo cli -a <patch.testScenario.agentId> -n -w <runDir>/sandbox \
   --access workspace <patch.testScenario.testMessage>
 ```
 
@@ -174,7 +174,7 @@ The wrapper clears any stale ABORT.md (from a crashed previous attempt) at the s
 For each source_run_id:
 
 1. Read `testScenario` from source run's `patch.md`.
-2. Run `timeout 600 halo cli -a <agentId> -n -w <applyDir>/sandbox <testMessage>` against merged sandbox.
+2. Run `timeout 1800 halo cli -a <agentId> -n -w <applyDir>/sandbox <testMessage>` against merged sandbox.
 3. Spawn `__score__` with regress-mode brief, write `regress/<runId>/score.json`.
 4. Any score with `lint < 50` or `behavior < 50` → regression, abort with `failed`.
 

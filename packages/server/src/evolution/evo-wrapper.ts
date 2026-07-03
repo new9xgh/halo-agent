@@ -67,20 +67,23 @@ const FIX_BUDGET = 1
 
 /** Timeout for each dry-run sub-cli, in seconds. The dry-run runs the user's
  *  target agent (which may be a slow model doing several tool calls), so it
- *  gets the same generous 600s budget as the LLM-driven phases — 180s was
+ *  gets the same generous budget as the LLM-driven phases — 180s was
  *  tripping legitimate-but-slow runs. */
-const DRY_RUN_TIMEOUT_SEC = 600
+const DRY_RUN_TIMEOUT_SEC = 1800
 
 /** Wall-clock cap for the LLM-driven phases (draft / fix / score / apply-merge
  *  / apply-score), in seconds. The wrapper heartbeats the row for as long as
  *  the wrapper process itself lives, so a sub-cli that wedges — a model looping
  *  over tool calls, a stalled response stream — would otherwise run unbounded
  *  without the ticker's heartbeat-timeout ever firing (the wrapper is healthy;
- *  only the inner cli is stuck). 10 minutes covers a multi-turn draft on the
- *  default __evo_agent__ model (Opus + xhigh thinking), which legitimately
- *  needed >5min on a long source session; past it, kill and let the phase
- *  fail. Same SIGTERM→exit-124 contract as the dry-run timeout. */
-const PHASE_TIMEOUT_SEC = 600
+ *  only the inner cli is stuck). 30 minutes gives a multi-turn draft on a slow
+ *  model (Opus + xhigh thinking legitimately needed >5min on a long source
+ *  session; slower providers need more) real headroom while still bounding a
+ *  wedged cli — one wedge costs at most one phase, and the row fails cleanly
+ *  instead of hanging. Same SIGTERM→exit-124 contract as the dry-run timeout.
+ *  Note this is NOT gated by evolution.run_timeout_minutes — that setting only
+ *  detects dead wrappers (heartbeat loss), never slow phases. */
+const PHASE_TIMEOUT_SEC = 1800
 
 /** Prompt-surface entries copied into the evo sandbox (read side — every
  *  LLM phase reads these via buildEvoSandbox). This is the source of truth
