@@ -29,6 +29,20 @@ export class SessionManagerRegistry {
     return sm
   }
 
+  /**
+   * Cache lookup only — never constructs. Read-only surfaces (/api/show/*)
+   * MUST use this instead of getOrCreate: constructing a SessionManager is
+   * not idempotent (reconcileOrphansOnBoot writes stoppedAt over every live
+   * sub-session row), and ensureWorkspaceHalo would scaffold `.halo/` into
+   * directories this process doesn't own. Returns undefined when the
+   * workspace has no live runtime in this process.
+   */
+  peek(workspacePath: string): SessionManager | undefined {
+    let resolved: string
+    try { resolved = fs.realpathSync(workspacePath) } catch { return undefined }
+    return this.cache.get(resolved)
+  }
+
   list(): Array<{ workspacePath: string; sm: SessionManager }> {
     return [...this.cache.entries()].map(([wp, sm]) => ({ workspacePath: wp, sm }))
   }

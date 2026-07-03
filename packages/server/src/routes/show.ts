@@ -1,13 +1,15 @@
 import { Hono, type Context } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
-import { readSessionFileMeta } from '../sessions/session-store.js'
+import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
+import type { SessionMessage } from '../sessions/session-types.js'
 import type { TurnState } from '../sessions/ui-log-builder.js'
 
 /** Shared lockout bucket with the rest of the public web surface — an attacker
@@ -130,7 +132,7 @@ function liveActivity(sm: SessionManager, sessionId: string): { lastTool: string
 interface MetaCacheEntry { updatedAt: number; contextTokens: number; outputTokens: number; messageCount: number }
 const _metaCache = new Map<string, MetaCacheEntry>()
 
-function sessionMeta(r: SessionInfo, wsPath: string): MetaCacheEntry {
+function sessionMeta(r: { id: string; agentId: string; updatedAt: number }, wsPath: string): MetaCacheEntry {
   const cached = _metaCache.get(r.id)
   if (cached && cached.updatedAt === r.updatedAt) return cached
   const meta = readSessionFileMeta(r.id, r.agentId, wsPath)
@@ -183,6 +185,148 @@ function snapshotWorkspace(sm: SessionManager, wsPath: string, label: string): S
     totalSessions: counts.total,
     skills: wsSkills,
   }
+}
+
+// ── Read-only degraded workspace reader ───────────────────────────────
+//   A workspace can appear in discoverWorkspaces() without a live
+//   SessionManager in this process (fresh server boot, or the directory is
+//   actively driven by a DIFFERENT server process sharing the same disk).
+//   Constructing one just to list sessions is not an option: the constructor
+//   is write-heavy — reconcileOrphansOnBoot batch-stops every live
+//   sub-session row (real incident: a read-only city poll from a second
+//   server marked the owning server's running sub-agents stopped), and
+//   ensureWorkspaceHalo scaffolds `.halo/` into directories this process
+//   doesn't own. So the fallback opens the workspace's halo.db READ-ONLY and
+//   projects rows straight into ShowSessions. Live-only signals
+//   (lastTool/activeSkill) are empty by definition: nothing in this process
+//   drives those sessions, so there is no live signal to show.
+interface RoSessionRow {
+  id: string
+  parent_id: string | null
+  agent_id: string
+  agent_name: string
+  description: string
+  updated_at: number
+  stopped_at: number | null
+}
+
+interface RoReader {
+  db: InstanceType<typeof Database>
+  listPage: Database.Statement<[number], RoSessionRow>
+  liveParents: Database.Statement<[], { parent_id: string }>
+  getById: Database.Statement<[string], { agent_id: string }>
+}
+const _roReaders = new Map<string, RoReader>()
+
+function roReader(rawPath: string): RoReader | null {
+  // Normalize: /show/session gets the path from the client; symlink variants
+  // of one workspace must share a single connection.
+  let wsPath: string
+  try { wsPath = fs.realpathSync(rawPath) } catch { return null }
+  const cached = _roReaders.get(wsPath)
+  if (cached) return cached
+  const dbPath = path.join(wsPath, '.halo', 'halo.db')
+  if (!fs.existsSync(dbPath)) return null
+  try {
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true })
+    const reader: RoReader = {
+      db,
+      listPage: db.prepare(
+        `SELECT id, parent_id, agent_id, agent_name, description, updated_at, stopped_at
+         FROM agent_sessions WHERE archived_at IS NULL
+         ORDER BY updated_at DESC LIMIT ?`),
+      // Every parent id that still has a non-stopped child — the same signal
+      // SessionQueryStore.computeActiveParents derives, without the IN(...)
+      // arity dance (the result set is small: one row per active delegation).
+      liveParents: db.prepare(
+        `SELECT DISTINCT parent_id FROM agent_sessions
+         WHERE parent_id IS NOT NULL AND stopped_at IS NULL AND archived_at IS NULL`),
+      getById: db.prepare(`SELECT agent_id FROM agent_sessions WHERE id = ?`),
+    }
+    _roReaders.set(wsPath, reader)
+    return reader
+  } catch (err) {
+    console.log(`[Show] read-only open failed ${dbPath}: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
+}
+
+/** Drop (and close) a cached read-only connection — after a query error (db
+ *  file may have been deleted/replaced; next poll reopens fresh) or when a
+ *  live SessionManager takes the workspace over. No-op when nothing is
+ *  cached (the steady state once every workspace has a live runtime). */
+function dropRoReader(rawPath: string): void {
+  if (_roReaders.size === 0) return
+  let wsPath = rawPath
+  try { wsPath = fs.realpathSync(rawPath) } catch { /* keep raw as the key */ }
+  const r = _roReaders.get(wsPath)
+  if (r) { try { r.db.close() } catch { /* already closed */ } }
+  _roReaders.delete(wsPath)
+}
+
+function snapshotWorkspaceReadonly(wsPath: string, label: string): ShowWorkspace {
+  let rows: RoSessionRow[] = []
+  let liveParents = new Set<string>()
+  const reader = roReader(wsPath)
+  if (reader) {
+    try {
+      rows = reader.listPage.all(SESSIONS_PER_WS)
+      liveParents = new Set(reader.liveParents.all().map((r) => r.parent_id))
+    } catch (err) {
+      console.log(`[Show] read-only query failed ${wsPath}: ${err instanceof Error ? err.message : String(err)}`)
+      dropRoReader(wsPath)
+      rows = []
+    }
+  }
+  const counts = { running: 0, idle: 0, stopped: 0, total: rows.length }
+  const sessions: ShowSession[] = rows.map((r) => {
+    // Same derivation as SessionQueryStore.toSessionInfo minus the in-memory
+    // promise check (nothing is in memory here by construction).
+    const status = r.stopped_at ? 'stopped' as const : liveParents.has(r.id) ? 'running' as const : 'idle' as const
+    counts[status]++
+    const meta = sessionMeta({ id: r.id, agentId: r.agent_id, updatedAt: r.updated_at }, wsPath)
+    return {
+      id: r.id,
+      parentId: r.parent_id,
+      depth: r.id.split('>').length - 1,
+      agentName: r.agent_name || r.agent_id,
+      description: r.description ?? '',
+      status,
+      lastTool: '',
+      activeSkill: '',
+      updatedAt: r.updated_at,
+      contextTokens: meta.contextTokens,
+      outputTokens: meta.outputTokens,
+      messageCount: meta.messageCount,
+    }
+  })
+  return {
+    path: wsPath,
+    key: path.basename(wsPath) || wsPath,
+    label,
+    sessions,
+    counts,
+    totalSessions: counts.total,
+    skills: scanSkills(path.join(wsPath, '.halo', 'skills')),
+  }
+}
+
+/** Wire shape shared by both /show/session paths: last N messages, content
+ *  capped, tool I/O reduced to name + a one-line input preview. */
+const SESSION_LOG_MAX_MSGS = 40
+function trimSessionMessages(messages: SessionMessage[]) {
+  return messages.slice(-SESSION_LOG_MAX_MSGS).map((m) => ({
+    id: m.id,
+    role: m.role,
+    type: m.type ?? null,
+    agentName: m.agentName ?? null,
+    content: (m.content || '').slice(0, 600),
+    timestamp: m.timestamp,
+    toolName: m.toolName ?? null,
+    toolInput: m.toolInput != null ? JSON.stringify(m.toolInput).slice(0, 200) : null,
+    durationMs: m.durationMs ?? null,
+    toolCalls: (m.toolCalls || []).map((tc) => ({ name: tc.name, input: (tc.input || '').slice(0, 200) })),
+  }))
 }
 
 // Workspace directory creation time, memoized by path. A folder's birthtime is
@@ -260,8 +404,13 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     const workspaces: ShowWorkspace[] = []
     for (const [wsPath, label] of targets) {
       try {
-        const sm = registry.getOrCreate(wsPath)
-        workspaces.push(snapshotWorkspace(sm, wsPath, label))
+        // peek, never getOrCreate: this is a read-only surface, and
+        // constructing a SessionManager has write side effects (see
+        // snapshotWorkspaceReadonly's comment for the incident). No live
+        // runtime in this process → degraded read-only db snapshot.
+        const sm = registry.peek(wsPath)
+        if (sm) dropRoReader(wsPath)   // live runtime took over — retire the ro connection
+        workspaces.push(sm ? snapshotWorkspace(sm, wsPath, label) : snapshotWorkspaceReadonly(wsPath, label))
       } catch (err) {
         // One broken workspace must not blank the whole world.
         console.log(`[Show] skip workspace ${wsPath}: ${err instanceof Error ? err.message : String(err)}`)
@@ -302,36 +451,46 @@ export function createShowRoutes(registry: SessionManagerRegistry) {
     }
 
     try {
-      const sm = registry.getOrCreate(wsPath)
-      const view = await sm.getSessionView(id)
-      if (!view) return c.json({ error: 'session not found' }, 404)
-      // Trim the log for the wire: the inspector shows a feed, not a full
-      // transcript. Last N messages, content capped, tool I/O reduced to
-      // name + a one-line input preview.
-      const MAX_MSGS = 40
-      const messages = view.messages.slice(-MAX_MSGS).map((m) => ({
-        id: m.id,
-        role: m.role,
-        type: m.type ?? null,
-        agentName: m.agentName ?? null,
-        content: (m.content || '').slice(0, 600),
-        timestamp: m.timestamp,
-        toolName: m.toolName ?? null,
-        toolInput: m.toolInput != null ? JSON.stringify(m.toolInput).slice(0, 200) : null,
-        durationMs: m.durationMs ?? null,
-        toolCalls: (m.toolCalls || []).map((tc) => ({ name: tc.name, input: (tc.input || '').slice(0, 200) })),
-      }))
+      // peek, never getOrCreate — same rule as /show/state.
+      const sm = registry.peek(wsPath)
+      if (sm) {
+        const view = await sm.getSessionView(id)
+        if (!view) return c.json({ error: 'session not found' }, 404)
+        return c.json({
+          id,
+          messages: trimSessionMessages(view.messages),
+          totalMessages: view.messages.length,
+          contextTokens: view.contextTokens,
+          outputTokens: view.outputTokens,
+          maxContextTokens: view.maxContextTokens,
+          isRunning: view.isRunning,
+        })
+      }
+
+      // Degraded read-only view: no live runtime for this workspace in this
+      // process, so serve the persisted session file (db row → agentId →
+      // file). maxContextTokens needs a live agent config — report 0, the
+      // city's inspector hides the meter when the cap is unknown.
+      const reader = roReader(wsPath)
+      if (!reader) return c.json({ error: 'session not found' }, 404)
+      const row = reader.getById.get(id)
+      if (!row) return c.json({ error: 'session not found' }, 404)
+      const data = loadSessionFileData(id, wsPath, row.agent_id)
+      if (!data) return c.json({ error: 'session not found' }, 404)
+      const messages = data.messages ?? []
+      const liveParents = new Set(reader.liveParents.all().map((r) => r.parent_id))
       return c.json({
         id,
-        messages,
-        totalMessages: view.messages.length,
-        contextTokens: view.contextTokens,
-        outputTokens: view.outputTokens,
-        maxContextTokens: view.maxContextTokens,
-        isRunning: view.isRunning,
+        messages: trimSessionMessages(messages),
+        totalMessages: messages.length,
+        contextTokens: data.contextTokens ?? 0,
+        outputTokens: data.totalOutputTokens ?? 0,
+        maxContextTokens: 0,
+        isRunning: liveParents.has(id),
       })
     } catch (err) {
       console.log(`[Show] session detail ${wsPath} ${id}: ${err instanceof Error ? err.message : String(err)}`)
+      dropRoReader(wsPath)
       return c.json({ error: 'failed to load session' }, 500)
     }
   })
