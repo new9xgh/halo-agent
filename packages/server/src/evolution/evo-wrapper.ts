@@ -480,11 +480,12 @@ interface DumpedImage {
 
 /** Walk the snapshot's rawMessages, decode every base64 image content block
  *  to `<runDir>/images/<msgIdx>-<blockIdx>.<ext>`, and return a manifest
- *  the brief builders can render. Image content stays as proper vision
- *  blocks in the inherited messages — these dumped paths just give evo a
- *  way to *reference* an image as a prompt resource (e.g. cp into the
- *  sandbox for a skill that needs an example screenshot). Failures are
- *  logged and skipped, never aborting the run.
+ *  the brief builders can render. Evo runs a fresh session (the snapshot
+ *  is a disk file, not inherited history), so these decoded files are its
+ *  only way to *see* an image (`view_image`) or to reference one as a
+ *  prompt resource (e.g. cp into the sandbox for a skill that needs an
+ *  example screenshot). Failures are logged and skipped, never aborting
+ *  the run.
  *
  *  Video / audio / document blocks are not dumped — Halo currently has
  *  no view_video / view_audio tool, so those rarely appear as content
@@ -587,13 +588,13 @@ function renderImageManifest(images: DumpedImage[]): string[] {
   const lines: string[] = []
   lines.push('=== Images extracted from the source conversation ===')
   lines.push('')
-  lines.push('(decoded from inline image content blocks; the same images are')
-  lines.push('also visible to you as vision blocks in your message history.')
-  lines.push('Use these file paths only when your patch needs to keep an')
+  lines.push('(decoded from the snapshot\'s inline base64 image blocks — the')
+  lines.push('source conversation is NOT in your message history, so these')
+  lines.push('files are the only way to see the images. `view_image` one when')
+  lines.push('its content is load-bearing for your patch; the per-image context')
+  lines.push('text below is usually enough. The paths also let a patch keep an')
   lines.push('image as a prompt resource — e.g. a screenshot inside a skill\'s')
-  lines.push('reference doc — and you want the wrapper to reference it later.')
-  lines.push('Most patches won\'t need this; the conversation evidence in your')
-  lines.push('message history is usually enough.)')
+  lines.push('reference doc.)')
   lines.push('')
   for (const img of images) {
     const sizeKb = (img.sizeBytes / 1024).toFixed(0)
@@ -691,7 +692,9 @@ function buildDraftBrief(args: {
     '',
     `Run id: ${args.runId}`,
     `Workspace: ${args.workspacePath}`,
-    `Working dir: ${args.runDir}`,
+    `Run dir: ${args.runDir}`,
+    '(relative tool paths resolve against the sandbox, not the run dir —',
+    'write run-dir artifacts like patch.md / .skip.md with absolute paths)',
     `Trigger: ${args.triggerKind}`,
   ]
   if (args.userHint) lines.push(`Reviewer hint: ${args.userHint}`)
@@ -712,8 +715,8 @@ function buildDraftBrief(args: {
     ...renderImageManifest(args.images),
     '=== Non-text media note ===',
     '',
-    'Inline images in source-snapshot.json are base64 — you can\'t view them',
-    'directly the way you would inherited vision blocks. The `images/` dump',
+    'Inline images in source-snapshot.json are base64 — you can\'t read them',
+    'directly. The `images/` dump',
     '(see manifest above) decodes them to disk so you can `view_image` if',
     'a specific image is load-bearing. Video, audio, and binary documents',
     '(PDF, etc.) are even more limited: at trigger time the source agent',
@@ -738,14 +741,15 @@ function buildDraftBrief(args: {
     '',
     `Sandbox path: ${path.join(args.runDir, 'sandbox')}`,
     '',
-    'When you have a change worth making, write `patch.md` (frontmatter +',
-    'body) and one new file at `<runDir>/sandbox/.halo/<target>` with the',
+    `When you have a change worth making, write ${path.join(args.runDir, 'patch.md')}`,
+    '(frontmatter + body) and one new file at',
+    `${path.join(args.runDir, 'sandbox', '.halo')}/<target> with the`,
     'full new contents. AGENT.md describes the patch.md schema.',
     '',
     'When the conversation has no signal worth a patch (rule already covers,',
     'too short to learn from, agent did fine, depends on media content',
-    'you can\'t see), write `<runDir>/.skip.md` with a one or two sentence',
-    'reason instead, and skip the rest.',
+    `you can't see), write ${path.join(args.runDir, '.skip.md')} with a`,
+    'one or two sentence reason instead, and skip the rest.',
     '',
     ...buildLanguageClause(args.langHint, 'all natural-language content (patch.md body, prose drafted into sandbox files, .skip.md body)'),
   )
@@ -774,7 +778,9 @@ function buildFixBrief(args: {
     '',
     `Run id: ${args.runId}`,
     `Workspace: ${args.workspacePath}`,
-    `Working dir: ${args.runDir}`,
+    `Run dir: ${args.runDir}`,
+    '(relative tool paths resolve against the sandbox, not the run dir —',
+    'write run-dir artifacts like patch.md with absolute paths)',
     `Fix attempt: ${args.attempt}/${args.maxAttempts}`,
     '',
     `An earlier draft pass produced patch.md + a sandbox at`,
@@ -798,8 +804,10 @@ function buildFixBrief(args: {
 }
 
 /** Build the brief for the scorer (`__score__`). Packs patch.md +
- *  dry-run-output.txt + meta.json + evo-context.json so the scorer needs
- *  no `file_read` to inspect inputs. */
+ *  dry-run-output.txt + meta.json + evo-context.json inline; the baseline
+ *  conversation stays on disk (tool-flow.md / source-snapshot.json) and the
+ *  brief directs the scorer to `file_read` it — fresh `-n` session, no
+ *  inherited history. */
 function buildScoreBrief(args: {
   runId: string
   workspacePath: string
@@ -824,7 +832,9 @@ function buildScoreBrief(args: {
     '',
     `Run id: ${args.runId}`,
     `Workspace: ${args.workspacePath}`,
-    `Working dir: ${args.runDir}`,
+    `Run dir: ${args.runDir}`,
+    '(relative tool paths resolve against the sandbox, not the run dir —',
+    'write score.json with the absolute path given below)',
     '',
     `The original conversation lives on disk:`,
     `  ${path.join(args.runDir, 'tool-flow.md')}    — clipped, fast skim`,
@@ -854,15 +864,15 @@ function buildScoreBrief(args: {
     '    behavior. Score behavior on whether the agent gave the right',
     '    KIND of response, not on whether external side effects fired.',
     '',
-    ' 2. Inline images in your message history are real vision blocks',
-    '    you can see; video / audio / binary documents (PDF, etc.) are',
-    '    not in your context. At trigger time the source agent worked',
-    '    with them via shell tooling (ffmpeg, pdftotext, etc.); your view',
-    '    is limited to the textual results. The dry-run\'s `testMessage`',
-    '    is also text-only — patches whose value depends on understanding',
-    '    media internals naturally show low-signal dry-runs and that\'s',
-    '    correctly reflected in `confidence: low` rather than punished',
-    '    via behavior score.)',
+    ' 2. Media in the source conversation is not directly visible to',
+    '    you — images live in source-snapshot.json as base64, and video /',
+    '    audio / binary documents (PDF, etc.) were only ever handled by',
+    '    the source agent via shell tooling (ffmpeg, pdftotext, etc.), so',
+    '    your view is limited to the textual results. The dry-run\'s',
+    '    `testMessage` is also text-only — patches whose value depends on',
+    '    understanding media internals naturally show low-signal dry-runs',
+    '    and that\'s correctly reflected in `confidence: low` rather than',
+    '    punished via behavior score.)',
     '```',
     dryRun,
     '```',
@@ -878,7 +888,7 @@ function buildScoreBrief(args: {
     'find the assistant turn that followed it in tool-flow.md (or',
     'source-snapshot.json) — that\'s your baseline. Compare baseline to',
     'dry-run-output.txt, rate lint / behavior / scope, write',
-    '`<runDir>/score.json` with the shape AGENT.md describes.',
+    `${path.join(args.runDir, 'score.json')} with the shape AGENT.md describes.`,
     '',
     ...buildLanguageClause(args.langHint, 'the score.json "notes" field'),
     'The numeric fields and "confidence" enum stay in their canonical form.',
@@ -1105,12 +1115,9 @@ async function runFix(args: {
     maxAttempts: FIX_BUDGET,
     langHint: args.langHint,
   })
-  // Fix mode resumes the same `evo_<runId>` session draft mode created. That
-  // way the agent inherits the source conversation AND its own draft turn —
-  // it sees what it just produced, the failure log, and decides what to fix.
   appendSubCliHeader(args.runDir, `Phase B: __evo_agent__ fix attempt ${attempt}`)
   // Fresh `-n` like draft. Brief inlines the failure log + tells the
-  // agent to file_read patch.md in the sandbox to see what it
+  // agent to file_read patch.md in the runDir to see what it
   // produced last time. No session resume — same simplicity as draft.
   const sandboxWs = path.join(args.runDir, 'sandbox')
   const result = await spawnProc(
@@ -1417,7 +1424,9 @@ function buildApplyMergeBrief(args: ApplyCtx): string {
     '',
     `Apply id: ${args.applyId}`,
     `Workspace: ${args.workspacePath}`,
-    `Working dir: ${args.applyDir}`,
+    `Apply dir: ${args.applyDir}`,
+    '(relative tool paths resolve against the sandbox, not the apply dir —',
+    'write apply-dir artifacts like apply.log with absolute paths)',
     `source_run_ids: [${args.sourceRunIds.join(', ')}]`,
     `Reviewer hint: ${args.reviewerHint ?? '(none)'}`,
     '',
@@ -1432,7 +1441,14 @@ function buildApplyMergeBrief(args: ApplyCtx): string {
     '',
     'Hard rules: only edit files under sandbox/.halo/ — main workspace',
     'and ~/.halo/global/ are off-limits. Do NOT spawn halo cli. Do NOT',
-    'write score.json. Write apply.log with a summary of what you did.',
+    `write score.json. Write ${path.join(args.applyDir, 'apply.log')}`,
+    'with a summary of what you did.',
+    '',
+    'If the merge cannot proceed (irreconcilable patch conflicts, malformed',
+    `input, missing sandbox), write ${path.join(args.applyDir, 'ABORT.md')}`,
+    'with the diagnosis — the wrapper treats its presence as "abort this',
+    'apply" and fails the apply instead of publishing. You cannot signal',
+    'abort via exit code; ABORT.md is the only abort channel.',
     ...buildLanguageClause(args.langHint, 'apply.log and any natural-language commentary'),
   ].join('\n')
 }
@@ -1456,18 +1472,26 @@ function buildApplyScoreBrief(args: {
     `Source run id: ${args.runId}`,
     `Workspace: ${args.workspacePath}`,
     `Regress dir: ${args.regressDir}`,
+    '(relative tool paths resolve against the sandbox — use the absolute',
+    'paths below)',
     '',
     'The apply agent has merged this patch (and possibly others) into',
     'an apply sandbox. The wrapper just ran the patch\'s testScenario',
     'against the merged sandbox; stdout is in',
     `${path.join(args.regressDir, 'dry-run-output.txt')}.`,
+    'An empty dry-run-output.txt means the dry-run against the merged',
+    'sandbox failed — score lint 0 (that is the regression signal the',
+    `wrapper acts on); the failure detail is in`,
+    `${path.join(args.regressDir, 'dry-run-fail.log')} when present.`,
     '',
     'Follow your AGENT.md procedure. Read:',
     `  patch.md      → ${args.patchMdPath}`,
+    `  tool-flow.md  → ${path.join(path.dirname(args.patchMdPath), 'tool-flow.md')} (baseline conversation)`,
     `  source-snapshot.json → ${args.snapshotPath}`,
     `  dry-run output  → ${path.join(args.regressDir, 'dry-run-output.txt')}`,
     '',
-    `Write score.json into ${args.regressDir}. Same format as run mode.`,
+    `Write ${path.join(args.regressDir, 'score.json')} — NOT the source`,
+    'run\'s score.json. Same format as run mode.',
     'Do not modify any other file.',
     ...buildLanguageClause(args.langHint, 'the score.json "notes" field'),
     'The numeric fields and "confidence" enum stay as-is.',
@@ -1476,13 +1500,25 @@ function buildApplyScoreBrief(args: {
 
 /**
  * Phase A' — wrapper builds sandbox, then spawns apply agent to merge.
- * Returns true iff apply.log exists after the agent exits (proxy for
- * "agent ran the procedure to completion"). Empty sandbox still gets
- * detected at phase B' — there'll be no patched behavior to regress on.
+ *
+ * Success is "apply.log exists and no ABORT.md" (proxy for "agent ran the
+ * procedure to completion"). ABORT.md is the agent's only abort channel:
+ * the cli always exits 0 when the agent finishes a turn, so "exit non-zero
+ * on conflict" is not something the agent can do — instead it writes
+ * `<applyDir>/ABORT.md` with the conflict diagnosis, and the wrapper checks
+ * for it BEFORE the apply.log gate. Empty sandbox still gets detected at
+ * phase B' — there'll be no patched behavior to regress on.
  */
-async function phaseApplyMerge(ctx: ApplyCtx): Promise<boolean> {
+type ApplyMergeResult = { ok: true } | { ok: false; reason: string }
+
+async function phaseApplyMerge(ctx: ApplyCtx): Promise<ApplyMergeResult> {
   writeLog(ctx.logFd, `\n=== Phase A': merge ===\n`)
   buildApplySandbox(ctx.workspacePath, ctx.applyDir, ctx.logFd)
+
+  // A stale ABORT.md from a crashed previous attempt would insta-fail this
+  // one before the agent even runs. Clear it; the agent re-decides.
+  const abortPath = path.join(ctx.applyDir, 'ABORT.md')
+  try { fs.rmSync(abortPath, { force: true }) } catch { /* best-effort */ }
 
   const brief = buildApplyMergeBrief(ctx)
   // Run apply agent against the sandbox (where it will read patches and
@@ -1500,7 +1536,17 @@ async function phaseApplyMerge(ctx: ApplyCtx): Promise<boolean> {
   )
   if (result.exitCode !== 0) {
     writeLog(ctx.logFd, `[phaseApplyMerge] apply cli exited ${result.exitCode}\n`)
-    return false
+    return { ok: false, reason: `apply cli exited ${result.exitCode}` }
+  }
+  // Sentinel check first: ABORT.md means the agent hit an irreconcilable
+  // conflict (or another dead end) and is telling us NOT to treat the
+  // sandbox as a valid merge — regardless of whether apply.log also exists.
+  if (fs.existsSync(abortPath)) {
+    let abortText = ''
+    try { abortText = fs.readFileSync(abortPath, 'utf-8').trim() } catch { /* keep empty */ }
+    writeLog(ctx.logFd, `[phaseApplyMerge] ABORT.md present — agent aborted the merge:\n${abortText}\n`)
+    const firstLine = abortText.split('\n')[0]?.slice(0, 300) ?? ''
+    return { ok: false, reason: `apply agent aborted: ${firstLine || 'see ABORT.md in apply dir'}` }
   }
   // apply.log is the agent's audit trail; if it didn't write one, it likely
   // bailed early. The sandbox contents themselves are what matters for
@@ -1508,7 +1554,8 @@ async function phaseApplyMerge(ctx: ApplyCtx): Promise<boolean> {
   // signal.
   const hasLog = fs.existsSync(path.join(ctx.applyDir, 'apply.log'))
   writeLog(ctx.logFd, `[phaseApplyMerge] apply.log=${hasLog}\n`)
-  return hasLog
+  if (!hasLog) return { ok: false, reason: "apply agent didn't produce apply.log" }
+  return { ok: true }
 }
 
 /**
@@ -1718,8 +1765,8 @@ async function applyMode(id: string, logFd: number): Promise<void> {
   try {
     if (!isResume) {
       const merged = await phaseApplyMerge(ctx)
-      if (!merged) {
-        finalizeApply(id, 'failed', "phase A': apply agent didn't produce apply.log", logFd)
+      if (!merged.ok) {
+        finalizeApply(id, 'failed', `phase A': ${merged.reason}`, logFd)
         return
       }
 

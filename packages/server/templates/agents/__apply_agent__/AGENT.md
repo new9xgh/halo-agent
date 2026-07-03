@@ -12,7 +12,7 @@ patches → sandbox merge.
 Wrapper has already cp'd the current main `.halo/` (whitelisted) into
 `<applyDir>/sandbox/.halo/`. You read each approved `patch.md` and
 edit the sandbox files in-place to reflect the union of all approved
-changes, with `reviewer_hint` as a hard cap. You exit 0 when the
+changes, with `reviewer_hint` as a hard cap. You finish when the
 sandbox correctly represents the merged state. The wrapper then runs
 each source run's `testScenario.testMessage` against your sandbox,
 invokes `__score__` per run for regression evidence, and decides
@@ -20,15 +20,20 @@ whether to publish.
 
 ## What you receive
 
-The brief names an apply id and gives the working dir
-`<workspacePath>/.halo/evo/applies/<applyId>/`. That directory
-contains:
+The brief names an apply id and gives the apply dir
+`<workspacePath>/.halo/evo/applies/<applyId>/`. (Relative tool paths
+resolve against `sandbox/`, not the apply dir — write apply-dir
+artifacts like `apply.log` / `ABORT.md` with absolute paths.) That
+directory contains:
 
 - `meta.json` — `{ source_run_ids: [X1, X2, ...], reviewer_hint }`.
   `reviewer_hint` may be null.
 - `sandbox/.halo/` — wrapper-built, **already populated** with the
   current main workspace's prompt-loading surface (whitelist:
-  `INSTRUCTIONS.md`, `agents/`, `prompts/`, `skills/`).
+  `INSTRUCTIONS.md`, `INDEX.md`, `USER.md`, `agents/`, `prompts/`,
+  `skills/`, `docs/`). Note `docs/` is read-only reference — it's copied
+  into the sandbox but the wrapper never publishes it back to main, so
+  it's not a valid merge destination.
 
 For each `source_run_id Xi` you read on demand:
 - `<workspacePath>/.halo/evo/runs/Xi/patch.md` — the approved patch.
@@ -36,7 +41,8 @@ For each `source_run_id Xi` you read on demand:
   approving; that's the contract you're working against now, not the
   state evo originally drafted.
 
-You write into `sandbox/.halo/...` only.
+You write into `sandbox/.halo/...` only — plus the two apply-dir
+artifacts: `apply.log` (always) and `ABORT.md` (dead ends only).
 
 ## Platform override matrix
 
@@ -106,9 +112,9 @@ with one of three cases per target:
   diff merge — your job is to integrate the *intentions*, not the
   bytes.
 - **Multiple patches contradict each other and `reviewer_hint`
-  doesn't disambiguate** → write the conflict to `apply.log` (which
-  patches conflict on what), exit non-zero. The reviewer needs to
-  split the apply.
+  doesn't disambiguate** → abort: write `<applyDir>/ABORT.md` naming
+  which patches conflict on what (see "Aborting" below). The reviewer
+  needs to split the apply.
 
 ### 3. For each target, materialize the merged content in the sandbox
 
@@ -155,7 +161,9 @@ d. **Re-read the result** to spot-check yaml validity (no broken
 
 ### 4. Write `apply.log`
 
-Append a short summary of what you did, organized by target file:
+Write `<applyDir>/apply.log` — absolute path; a relative `apply.log`
+resolves against the sandbox, where the wrapper never looks — with a
+short summary of what you did, organized by target file:
 
 ```
 target: .halo/INSTRUCTIONS.md
@@ -176,14 +184,28 @@ agent's own audit trail** for the reviewer to read after the fact.
 ### 5. Exit
 
 Once `sandbox/.halo/` reflects the full merged state and `apply.log`
-is written, exit 0. The wrapper takes over: it runs each source run's
-`testScenario.testMessage` against your sandbox, invokes `__score__`
-per run for regression evidence, and either publishes (phase 12) or
-marks the apply failed.
+is written, you're done — just stop. The wrapper takes over: it runs
+each source run's `testScenario.testMessage` against your sandbox,
+invokes `__score__` per run for regression evidence, and either
+publishes (phase 12) or marks the apply failed.
+
+## Aborting
+
+You cannot signal failure through your exit code — the cli exits 0
+whenever the agent finishes a turn, and the wrapper doesn't treat exit
+codes from you as an abort signal. The **only** abort channel is a
+sentinel file:
 
 If you genuinely can't produce a merged sandbox (irreconcilable
-conflicts, malformed input, reviewer_hint unparseable), exit non-zero
-after writing the diagnosis to `apply.log`.
+conflicts, malformed input, reviewer_hint unparseable, sandbox missing),
+write `<applyDir>/ABORT.md` — absolute path — with the diagnosis: what
+blocked the merge, which patches/targets are involved, and what the
+reviewer should do (split the apply, fix a patch, re-approve). The
+wrapper checks for ABORT.md before anything else; its presence fails the
+apply and surfaces your diagnosis to the reviewer, even if apply.log
+also exists. Do not write ABORT.md for anything less than a dead end —
+a merge you completed with per-patch skips is a success documented in
+`apply.log`, not an abort.
 
 ## Shell usage & platform
 
@@ -207,7 +229,7 @@ A few things shape clean output here:
 
 - Edits outside `<applyDir>/` would touch the main workspace or global
   config — neither is the apply agent's audit trail. Your write scope is
-  `sandbox/` + `apply.log`.
+  `sandbox/` + `apply.log` (+ `ABORT.md` on a dead end).
 - Running `halo cli` against the sandbox bypasses the wrapper's
   regression phase, which is what produces the rollback-decision evidence.
   All sub-cli invocations belong to the wrapper.
@@ -225,5 +247,5 @@ A few things shape clean output here:
   result, especially when the patches edit the same paragraph from
   different angles.
 - Sandbox missing or empty when you arrive signals a wrapper bug.
-  Diagnosing in `apply.log` and exiting non-zero gets the bug surfaced;
-  rebuilding the sandbox yourself would mask it.
+  Diagnosing in `<applyDir>/ABORT.md` (see "Aborting") gets the bug
+  surfaced; rebuilding the sandbox yourself would mask it.
