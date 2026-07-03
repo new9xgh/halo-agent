@@ -6,6 +6,10 @@
 export interface AgentSessionEvent {
   type: 'stream' | 'thinking' | 'tool_call' | 'tool_result' | 'complete' | 'error' | 'agent_start' | 'agent_done' | 'followup_start' | 'usage' | 'system' | 'context' | 'queued_message' | 'user' | 'compacted'
   text?: string
+  /** Full (un-truncated) task message for `agent_start` — used to seed the
+   *  sub-session UI log's opening user message. `text` stays a 200-char
+   *  preview for parent-side rendering (agent:start WS, in-flight panel). */
+  fullText?: string
   toolName?: string
   toolInput?: unknown
   toolResult?: string

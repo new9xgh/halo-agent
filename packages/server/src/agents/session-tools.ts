@@ -56,7 +56,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       properties: {
         agent_id: { type: 'string' as const, description: 'The agent ID — must be one of the agents listed in your system prompt. Do not invent ids.' },
         message: { type: 'string' as const, description: 'Task description / initial message for the agent' },
-        system_prompt_context: { type: 'string' as const, description: 'Optional context to inject' },
+        system_prompt_context: { type: 'string' as const, description: "Optional background material prepended to the opening message BEFORE your task text — despite the name, it is NOT injected into the system prompt. Put here what frames the whole task: relevant file paths, prior findings, user-stated constraints, role framing. Keep one-shot task instructions in `message` itself so it stays a clean task statement. Note the cost: this text lives in the child's conversation history and is re-sent on every one of its model calls until compaction — include what the child genuinely needs throughout, not bulk material it could read from files instead." },
         working_dir: { type: 'string' as const, description: "Optional focus directory for the sub-agent (workspace-relative or absolute; must be inside the workspace). The platform bakes the directory-scoped INSTRUCTIONS.md found along the path from the workspace root down to this directory into the sub-agent's system prompt (present every turn), and tags its prompt with this focus. Does NOT change where tools run (shell/file tools still operate from the project root). Omit for project-root scope." },
       },
       required: ['agent_id', 'message'],
@@ -117,7 +117,11 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       initialMessage += params.message
 
       console.debug(`[SessionManager] start_session called by ${sessionId} — creating child ${childSessionId} (agent: ${params.agent_id}, workingDir: ${resolvedWorkingDir ?? 'project root'})`)
-      sm.emitEvent(sessionId, { type: 'agent_start', agentName: agentYaml.name ?? params.agent_id, agentId: params.agent_id, text: params.message.slice(0, 200), taskId: childSessionId, sessionId: childSessionId })
+      // fullText = the user-visible task brief (context + message, without the
+      // [Session id] assembly) so the sub-session UI log's opening user message
+      // isn't cut to the 200-char preview that `text` carries for parent-side UI.
+      const fullTaskText = params.system_prompt_context ? `${params.system_prompt_context}\n\n${params.message}` : params.message
+      sm.emitEvent(sessionId, { type: 'agent_start', agentName: agentYaml.name ?? params.agent_id, agentId: params.agent_id, text: params.message.slice(0, 200), fullText: fullTaskText, taskId: childSessionId, sessionId: childSessionId })
 
       sm.runSession(childSessionId, initialMessage).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err)

@@ -332,7 +332,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
           timestamp: Date.now(), agentName, taskId,
         })
       }
-      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? '', agentName, event.text ?? '')
+      if (taskId) initSubSessionLog(state, taskId, event.agentId ?? '', agentName, event.fullText ?? event.text ?? '')
       break
 
     case 'agent_done':

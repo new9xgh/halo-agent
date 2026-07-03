@@ -994,7 +994,7 @@ export class SessionManager implements SessionManagerInternals {
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
         const resultStr = event.toolResultFull ?? event.toolResult ?? ''
-        this.emitEvent(session.id, { type: 'tool_result', toolResult: resultStr, durationMs: event.durationMs, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'tool_result', toolName: event.toolName, toolResult: resultStr, durationMs: event.durationMs, agentName, agentId, taskId })
         break
       }
 
