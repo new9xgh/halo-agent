@@ -137,7 +137,11 @@ export function applyPathPick(value: string, ref: ActiveRef, pick: PathItem): st
   if (value[markerStart - 1] === '"') markerStart -= 1   // and a possible opening quote
 
   // If the marker was already `@file ` / `@image ` / `@scope `, walk back over those too.
-  const explicitMatch = value.slice(0, markerStart + 1).match(/@(file|image|scope)\s+$/)
+  // The optional trailing `"` covers the quoted-partial form (`@file "my dir/`):
+  // there markerStart lands on the opening quote, so without it the marker was
+  // never recognized and the fallback re-derived markerStart past the keyword —
+  // emitting a doubled `@file@file "…"` on every descend into a quoted dir.
+  const explicitMatch = value.slice(0, markerStart + 1).match(/@(file|image|scope)\s+"?$/)
   if (explicitMatch) markerStart = (explicitMatch.index ?? markerStart) // start of the @
   else {
     // bare `@` — point markerStart at the @ itself.
