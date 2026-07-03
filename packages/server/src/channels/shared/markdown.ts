@@ -75,30 +75,31 @@ function splitInlineCode(line: string): Segment[] {
 }
 
 function transformProse(text: string): string {
-  // Headers (#, ##, …) — Slack has no real headers; collapse to bold.
-  // Six leading hashes is the CommonMark cap.
-  text = text.replace(/^(#{1,6})\s+(.*)$/, (_m, _h, body) => `*${body}*`)
-
   // Markdown links `[text](url)` → `<url|text>`. Image syntax
   // `![alt](url)` is rare in agent output; if it shows up we let
   // it fall through as-is so users still see the URL.
   text = text.replace(/(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/g, '<$2|$1>')
 
-  // Bold: `**bold**` or `__bold__` → `*bold*`. Order matters — do
-  // strong before emphasis so `**foo**` doesn't get half-eaten by
-  // the italic rule below.
+  // Italic first, strong second. The italic lookarounds only skip
+  // asterisks that are adjacent to ANOTHER asterisk, so they leave
+  // `**bold**` alone while it is still double-asterisk — but they can't
+  // distinguish a single-asterisk pair the strong pass just produced from
+  // a real italic. Root cause of the reversed-order bug: running strong
+  // first turned `**bold**` into `*bold*`, which the italic pass then
+  // converted to `_bold_` — every bold reached Slack as italic.
+  text = text.replace(/(?<![*_])\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g, '_$1_')
+  text = text.replace(/(?<![_*])_(?!_)([^_\n]+?)(?<!_)_(?!_)/g, '_$1_')
+
+  // Bold: `**bold**` or `__bold__` → `*bold*` (Slack's strong form).
   text = text.replace(/\*\*([^*\n]+?)\*\*/g, '*$1*')
   text = text.replace(/__([^_\n]+?)__/g, '*$1*')
 
-  // Italic: `*italic*` or `_italic_` → `_italic_`. Slack uses the
-  // underscore form. Be careful not to touch the bold markers we
-  // just produced — those are now single-asterisk strong, not
-  // italic, and they should stay that way. The lookbehind/ahead
-  // here ensures we only convert single-asterisk pairs that aren't
-  // adjacent to another asterisk (i.e. wouldn't have been part of
-  // a `**bold**` pair).
-  text = text.replace(/(?<![*_])\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g, '_$1_')
-  text = text.replace(/(?<![_*])_(?!_)([^_\n]+?)(?<!_)_(?!_)/g, '_$1_')
+  // Headers (#, ##, …) — Slack has no real headers; collapse to bold.
+  // Six leading hashes is the CommonMark cap. Runs LAST for the same
+  // reason as the italic/strong ordering above: the `*body*` this emits
+  // is already Slack-strong output, and an earlier italic pass would
+  // re-read it as markdown italic (`# H` came out `_H_`).
+  text = text.replace(/^(#{1,6})\s+(.*)$/, (_m, _h, body) => `*${body}*`)
 
   return text
 }

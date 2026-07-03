@@ -199,4 +199,71 @@ describe('repairConversationMessages', () => {
     expect(out).toHaveLength(1)
     expect(out[0].content).toEqual([text('I am a string-content turn')])
   })
+
+  // ── Boundary cases around the synthesized-interrupt path ──
+
+  it('DUPLICATE tool_use ids in one assistant message synthesize ONE result, not two', () => {
+    // Two results for one id is itself an API-rejected shape — the dedupe in
+    // Phase 2 exists exactly for this.
+    const input: AnthropicMessage[] = [
+      { role: 'assistant', content: [toolUse('t1'), toolUse('t1')] },
+    ]
+    const out = repairConversationMessages(input)
+    const results = (out[1].content as ContentBlock[]).filter((b) => b.type === 'tool_result')
+    expect(results).toHaveLength(1)
+  })
+
+  it('consecutive assistant messages each with orphan tool_use: each gets its own user insert', () => {
+    // Double-abort shape (two turns interrupted back-to-back). Role
+    // alternation must come out valid: a/u/a/u.
+    const input: AnthropicMessage[] = [
+      { role: 'assistant', content: [toolUse('a')] },
+      { role: 'assistant', content: [toolUse('b')] },
+    ]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant', 'user'])
+  })
+
+  it('multiple orphan tool_use in one assistant: all synthesized into ONE user message', () => {
+    const input: AnthropicMessage[] = [
+      { role: 'assistant', content: [toolUse('t1'), toolUse('t2'), toolUse('t3')] },
+    ]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out).toHaveLength(2)
+    const ids = (out[1].content as ContentBlock[])
+      .filter((b): b is ContentBlock & { type: 'tool_result' } => b.type === 'tool_result')
+      .map((r) => r.tool_use_id)
+    expect(ids.sort()).toEqual(['t1', 't2', 't3'])
+  })
+
+  it('orphan tool_use followed by a STRING-content user: synth inserted, string turn dropped', () => {
+    // Documented Phase 2 comment: a string-content neighbor is not a valid
+    // tool_result carrier — a user message with synthesized results is
+    // inserted between, and Phase 3 drops the string-content turn (same
+    // fold-safe rule as above). Pins that the output is still API-valid.
+    const input = [
+      { role: 'assistant', content: [toolUse('t1')] },
+      { role: 'user', content: 'typed right after Esc' },
+    ] as unknown as AnthropicMessage[]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out).toHaveLength(2)
+    expect(out[1].role).toBe('user')
+    expect((out[1].content as ContentBlock[])[0].type).toBe('tool_result')
+  })
+
+  it('user message whose content is ONLY orphan tool_results is removed entirely', () => {
+    // Phase 2b strips the orphans; Phase 3 must then drop the now-empty
+    // message rather than leaving `content: []` (an API-rejected shape).
+    const input: AnthropicMessage[] = [
+      { role: 'user', content: [toolResult('ghost1'), toolResult('ghost2')] },
+      { role: 'assistant', content: [text('hello')] },
+    ]
+    const out = repairConversationMessages(input)
+    assertValidForApi(out)
+    expect(out).toHaveLength(1)
+    expect(out[0].role).toBe('assistant')
+  })
 })

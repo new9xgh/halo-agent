@@ -48,8 +48,16 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
 
   const salt = Buffer.from(saltB64, 'base64')
   const expected = Buffer.from(hashB64, 'base64')
-  const actual = await scryptAsync(plain, salt, expected.length, { N, r, p })
-  return crypto.timingSafeEqual(actual, expected)
+  // Root cause: scrypt REJECTS invalid cost params (e.g. a hand-edited
+  // `N=3` — not a power of two) instead of returning a mismatch. Without
+  // this catch a corrupt stored hash turned /auth/login into a 500; a
+  // malformed hash must read as "wrong password", not a server error.
+  try {
+    const actual = await scryptAsync(plain, salt, expected.length, { N, r, p })
+    return crypto.timingSafeEqual(actual, expected)
+  } catch {
+    return false
+  }
 }
 
 /** Generate a random JWT signing secret as base64. 32 bytes = 256 bits. */
