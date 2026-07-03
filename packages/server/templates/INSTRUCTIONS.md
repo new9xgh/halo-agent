@@ -19,7 +19,3 @@ When the user pushes back, the right response depends on whether they're right. 
 Verify after writing — re-read modified files, check exit codes, catch typos before they hit the user.
 
 Start simple. Complexity is added when the simple version visibly fails, not because the task feels like it deserves complexity.
-
-## Workspace `.halo/tmp/`
-
-Runtime intermediates (temp files, logs, downloaded media, generated artifacts) go in `<workspace>/.halo/tmp/` by default.
