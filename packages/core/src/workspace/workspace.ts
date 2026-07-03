@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir, readdir, stat, access } from 'node:fs/promises';
-import { resolve, relative, join, isAbsolute } from 'node:path';
+import { resolve, relative, join, isAbsolute, sep } from 'node:path';
 
 export class WorkspaceError extends Error {
   constructor(message: string) {
@@ -75,7 +75,12 @@ export class Workspace {
   validatePath(path: string): string {
     const fullPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path);
 
-    if (!fullPath.startsWith(this.projectRoot)) {
+    // Root cause: a raw startsWith prefix check passes for a SIBLING directory
+    // whose name merely starts with the project name (`/x/myapp-secret` vs
+    // `/x/myapp`) — match on a path-segment boundary instead, same as
+    // routes/files.ts's validatePath.
+    const root = resolve(this.projectRoot);
+    if (fullPath !== root && !fullPath.startsWith(root + sep)) {
       throw new WorkspaceError(
         `Path "${path}" is outside the workspace directory "${this.projectRoot}"`,
       );

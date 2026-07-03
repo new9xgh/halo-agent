@@ -212,8 +212,11 @@ export class GitManager {
    *  empty tree instead of reporting nothing. */
   async getCommitFiles(hash: string): Promise<GitCommitFile[]> {
     try {
+      // `-M` is required: diff-tree is plumbing, so rename detection is OFF by
+      // default (it ignores diff.renames) — without it the R### branch below
+      // never fires and every rename shows as D+A with no `from` side.
       const raw = await this.git.raw([
-        'diff-tree', '--no-commit-id', '--name-status', '-r', '-m', '--root', hash,
+        'diff-tree', '--no-commit-id', '--name-status', '-r', '-m', '-M', '--root', hash,
       ]);
       const seen = new Set<string>();
       const files: GitCommitFile[] = [];
