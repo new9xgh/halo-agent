@@ -77,6 +77,9 @@ importers:
       clsx:
         specifier: ^2.1.0
         version: 2.1.1
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       lucide-react:
         specifier: ^0.469.0
         version: 0.469.0(react@19.2.5)
@@ -159,9 +162,6 @@ importers:
       ink-spinner:
         specifier: ^5.0.0
         version: 5.0.0(ink@7.0.3(@types/react@19.2.14)(react@19.2.5))(react@19.2.5)
-      ink-text-input:
-        specifier: ^6.0.0
-        version: 6.0.0(ink@7.0.3(@types/react@19.2.14)(react@19.2.5))(react@19.2.5)
       marked:
         specifier: ^15.0.0
         version: 15.0.12
@@ -3906,13 +3906,6 @@ packages:
       ink: '>=4.0.0'
       react: '>=18.0.0'
 
-  ink-text-input@6.0.0:
-    resolution: {integrity: sha512-Fw64n7Yha5deb1rHY137zHTAbSTNelUKuB5Kkk2HACXEtwIHBCf9OH2tP/LQ9fRYTl1F0dZgbW0zPnZk6FA9Lw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      ink: '>=5'
-      react: '>=18'
-
   ink@7.0.3:
     resolution: {integrity: sha512-5kxHkIj9+RuqCU3zyvP4qvYWNOSHP2TW/SHayHGHOmk87KwfVcZwvJGemi9ch+ci2gXUqerK/Eh2DGEDt5q45g==}
     engines: {node: '>=22'}
@@ -5437,10 +5430,6 @@ packages:
   type-fest@0.13.1:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
     engines: {node: '>=10'}
-
-  type-fest@4.41.0:
-    resolution: {integrity: sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA==}
-    engines: {node: '>=16'}
 
   type-fest@5.6.0:
     resolution: {integrity: sha512-8ZiHFm91orbSAe2PSAiSVBVko18pbhbiB3U9GglSzF/zCGkR+rxpHx6sEMCUm4kxY4LjDIUGgCfUMtwfZfjfUA==}
@@ -9842,13 +9831,6 @@ snapshots:
       ink: 7.0.3(@types/react@19.2.14)(react@19.2.5)
       react: 19.2.5
 
-  ink-text-input@6.0.0(ink@7.0.3(@types/react@19.2.14)(react@19.2.5))(react@19.2.5):
-    dependencies:
-      chalk: 5.6.2
-      ink: 7.0.3(@types/react@19.2.14)(react@19.2.5)
-      react: 19.2.5
-      type-fest: 4.41.0
-
   ink@7.0.3(@types/react@19.2.14)(react@19.2.5):
     dependencies:
       '@alcalzone/ansi-tokenize': 0.3.0
@@ -11666,8 +11648,6 @@ snapshots:
 
   type-fest@0.13.1:
     optional: true
-
-  type-fest@4.41.0: {}
 
   type-fest@5.6.0:
     dependencies:
