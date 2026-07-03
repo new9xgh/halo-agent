@@ -562,8 +562,11 @@ function AgentEditorWithChat({ agent, allAgents, modelsRegistry, onSaved }: { ag
               onToggleArrayItem={toggleArrayItem}
             />
             {agentMd.trim() && (
-              <div className="mx-auto max-w-prose px-6 py-8 border-t border-[var(--border)]">
-                <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">
+              <div className="border-t border-[var(--border)]">
+                {/* MarkdownPreview brings its own outline + article two-column
+                    layout and expects full width — don't wrap it in a prose/
+                    centered container (that squeezes the article to a sliver). */}
+                <div className="flex items-center gap-1.5 px-8 pt-6 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">
                   <span className="rounded bg-[var(--secondary)] px-1.5 py-0.5">AGENT.md</span>
                   <span>{t('agent.mdPreviewHint')}</span>
                 </div>
