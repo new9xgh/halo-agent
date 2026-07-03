@@ -122,6 +122,14 @@ export class World {
 
   fitAll() { if (this.city.order.length) this.cam.fit(this.city.bounds(), 50) }
 
+  /** World-space visibility test for a building incl. its overhangs (balcony
+   *  right, blade sign left, roof gear above). */
+  buildingVisible(b, view) {
+    const x0 = b.x0()
+    return x0 + OUTER_W + BALCONY_W >= view.x - 16 && x0 - 16 <= view.x + view.w &&
+      b.topY() - 44 <= view.y + view.h && view.y <= 8
+  }
+
   start() {
     const loop = (t) => {
       const dt = Math.min(0.05, (t - this.lastT) / 1000); this.lastT = t
@@ -132,6 +140,7 @@ export class World {
         if (cz.gone) { this.citizens.delete(cz.id); this.buildingOf.delete(cz.id) }
       }
       this.render()
+      if (this.onFrame) this.onFrame()
       requestAnimationFrame(loop)
     }
     requestAnimationFrame(loop)
@@ -156,26 +165,47 @@ export class World {
     this.city.drawStreet(ctx, t, sk, view)
     this.traffic.drawGround(ctx, sk)       // bus-stop shelter — behind people
 
-    // building interiors (lit set per building: floors with any present citizen
-    // that isn't stopped — running OR idle keeps the room's lights on)
-    for (const key of this.city.order) {
-      const b = this.city.get(key)
-      const lit = new Set()
-      for (const cz of this.citizens.values()) {
-        if (this.buildingOf.get(cz.id) !== key) continue
-        if (cz.status === 'running' || cz.status === 'idle') lit.add(this.anchorFloor(cz))
-      }
-      if (((b.ws.counts?.running || 0) + (b.ws.counts?.idle || 0)) > 0) lit.add(-1)   // lobby stays warm
-      b.drawBack(ctx, t, sk, lit)
+    // lit floors per building, one pass over citizens (floors with any present
+    // citizen that isn't stopped — running OR idle keeps the room's lights on)
+    const litBy = this._litBy || (this._litBy = new Map())
+    for (const s of litBy.values()) s.clear()
+    for (const cz of this.citizens.values()) {
+      if (cz.status !== 'running' && cz.status !== 'idle') continue
+      const key = this.buildingOf.get(cz.id)
+      let s = litBy.get(key)
+      if (!s) litBy.set(key, (s = new Set()))
+      s.add(this.anchorFloor(cz))
     }
 
-    // citizens, sorted by y then a stable per-id jitter for overlap order
-    const list = [...this.citizens.values()].sort((a, c) =>
-      (a._sy ?? 0) - (c._sy ?? 0) || (fnv(a.id) % 13) - (fnv(c.id) % 13))
+    // building interiors — skipped entirely when off-screen (viewport culling)
+    for (const key of this.city.order) {
+      const b = this.city.get(key)
+      if (!this.buildingVisible(b, view)) continue
+      let lit = litBy.get(key)
+      if (!lit) litBy.set(key, (lit = new Set()))
+      if (((b.ws.counts?.running || 0) + (b.ws.counts?.idle || 0)) > 0) lit.add(-1)   // lobby stays warm
+      b.drawBack(ctx, t, sk, lit, view)
+    }
+
+    // citizens, sorted by y then a stable per-id jitter for overlap order.
+    // _sx/_sy update for EVERY citizen (picking + links need them), but only
+    // the on-screen ones draw. The draw list array is reused across frames.
+    const list = this._drawList || (this._drawList = [])
+    list.length = 0
+    for (const cz of this.citizens.values()) {
+      const p = cz.worldPos()
+      cz._sx = p.x; cz._sy = p.y
+      if (p.x >= view.x - 60 && p.x <= view.x + view.w + 60 &&
+          p.y >= view.y - 20 && p.y <= view.y + view.h + 70) list.push(cz)
+    }
+    list.sort((a, c) => (a._sy - c._sy) || (fnv(a.id) % 13) - (fnv(c.id) % 13))
     for (const cz of list) cz.draw(ctx)
 
-    // facades + signage on top
-    for (const key of this.city.order) this.city.get(key).drawFront(ctx, t, sk)
+    // facades + signage on top (same cull as interiors)
+    for (const key of this.city.order) {
+      const b = this.city.get(key)
+      if (this.buildingVisible(b, view)) b.drawFront(ctx, t, sk)
+    }
 
     // road vehicles + construction effects — in front of buildings & people
     this.traffic.drawFg(ctx, sk)
@@ -228,6 +258,22 @@ export class World {
     ctx.restore()
   }
 
+  /** measureText cache for rooftop labels: keyed on exact (font, text) so the
+   *  result is bit-identical; hits 100% while the zoom is at rest and only
+   *  re-measures during a zoom glide (font size sweeps). */
+  measure(ctx, font, text) {
+    const cache = this._textW || (this._textW = new Map())
+    const key = font + '\u0000' + text
+    let w = cache.get(key)
+    if (w === undefined) {
+      ctx.font = font
+      w = ctx.measureText(text).width
+      if (cache.size > 512) cache.clear()
+      cache.set(key, w)
+    }
+    return w
+  }
+
   label(ctx, b) {
     // the rooftop sign scales with zoom (1× = baseline) so it shrinks with the
     // city when zoomed out and grows with the building when zoomed in
@@ -236,9 +282,10 @@ export class World {
     if (s.x < -160 || s.x > this.cam.vw + 160 || s.y < -40 || s.y > this.cam.vh + 20) return
     const c = b.ws.counts || { running: 0, idle: 0, stopped: 0 }
     ctx.save()
-    ctx.font = `bold ${11 * z}px monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    const font = `bold ${11 * z}px monospace`
     const occ = `${c.running}▶ ${c.idle}● ${c.stopped}○`
-    const w = Math.max(ctx.measureText(b.label).width, ctx.measureText(occ).width) + 22 * z
+    const w = Math.max(this.measure(ctx, font, b.label), this.measure(ctx, font, occ)) + 22 * z
+    ctx.font = font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
     ctx.fillStyle = 'rgba(10,12,24,0.88)'
     ctx.beginPath(); ctx.roundRect(Math.round(s.x - w / 2), Math.round(s.y - 13 * z), w, 26 * z, 6 * z); ctx.fill()
     ctx.strokeStyle = alpha(b.neon, 0.55); ctx.lineWidth = Math.max(1, z); ctx.stroke()

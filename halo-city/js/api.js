@@ -48,11 +48,14 @@ export async function probe(api, token) {
   return asJson(res)
 }
 
-/** Poll driver with error backoff. Returns a stop(). */
+/** Poll driver with error backoff. Returns a stop(). Parks while the tab is
+ *  hidden (rAF is already paused then; polling would be pure waste) and fires
+ *  an immediate tick when the tab becomes visible again. */
 export function startPolling({ onData, onStatus }) {
-  let stopped = false, timer = null, ctrl = null, fails = 0
+  let stopped = false, timer = null, ctrl = null, fails = 0, inflight = false
   async function tick() {
-    if (stopped) return
+    if (stopped || document.hidden) return   // parked; onVis resumes
+    inflight = true
     ctrl = new AbortController()
     onStatus('live')
     try {
@@ -64,9 +67,16 @@ export function startPolling({ onData, onStatus }) {
       fails++
       onStatus('err', e.message || t('connFail'))
     } finally {
+      inflight = false
       if (!stopped) timer = setTimeout(tick, fails ? Math.min(POLL_MS * fails, 30000) : POLL_MS)
     }
   }
+  const onVis = () => {
+    if (document.hidden || stopped || inflight) return
+    clearTimeout(timer)
+    tick()
+  }
+  document.addEventListener('visibilitychange', onVis)
   tick()
-  return () => { stopped = true; clearTimeout(timer); ctrl?.abort() }
+  return () => { stopped = true; clearTimeout(timer); ctrl?.abort(); document.removeEventListener('visibilitychange', onVis) }
 }

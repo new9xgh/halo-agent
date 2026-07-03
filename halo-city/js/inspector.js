@@ -76,6 +76,13 @@ export function hideInspector() {
 function stopLog() { clearTimeout(logTimer); logTimer = null; logKey = '' }
 
 // ── live session log ─────────────────────────────────────────────────────
+// The 6s re-fetch parks while the tab is hidden and resumes (immediately) on
+// visibility — same policy as the main state poll in api.js.
+let logResume = null
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && logResume) logResume()
+})
+
 function startLog(vm) {
   const key = `${vm.wsPath}|${vm.id}`
   if (logKey === key) return                  // already streaming this session
@@ -83,6 +90,7 @@ function startLog(vm) {
   logKey = key
   const tick = async () => {
     if (logKey !== key) return
+    if (document.hidden) return               // parked; visibilitychange resumes
     const box = document.getElementById('insp-log')
     if (!box) return
     try {
@@ -95,6 +103,7 @@ function startLog(vm) {
     }
     logTimer = setTimeout(tick, 6000)
   }
+  logResume = () => { if (logKey === key) { clearTimeout(logTimer); tick() } }
   tick()
 }
 

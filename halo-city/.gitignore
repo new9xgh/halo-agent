@@ -2,7 +2,9 @@
 .breaktest.mjs
 .devmock.mjs
 .floortest.html
+.perf.mjs
 .picktest.html
 .shot.mjs
 .simtest.html
 .zlabel.mjs
+.count.mjs

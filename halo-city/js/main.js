@@ -61,25 +61,40 @@ function boot(initialState) {
     bindTicker()
     bindInput()
     bindZoomBar()
+    // DOM side-panels ride the world's own rAF (one loop, not two); both are
+    // internally dirty-guarded so a static frame writes no DOM.
+    world.onFrame = () => { renderTicker(); syncZoomBar() }
     world.start()
-    const tloop = () => { renderTicker(); syncZoomBar(); requestAnimationFrame(tloop) }
-    requestAnimationFrame(tloop)
     startClock()
   }
-  if (initialState) { world.ingest(initialState); hud(initialState) }
+  if (initialState) { world.ingest(initialState); hud(initialState); lastSig = stateSig(initialState) }
 
   applyStaticI18n()
   syncLangBtn()
 
   if (stopPoll) stopPoll()
   stopPoll = startPolling({
-    onData: (s) => { world.ingest(s); hud(s); setConn('ok') },
+    onData: (s) => {
+      // Identical snapshot (ignoring serverTime; uptime at display granularity)
+      // → skip the whole ingest/rebuild/HUD path. An idle server stays cheap.
+      const sig = stateSig(s)
+      if (sig !== lastSig) { lastSig = sig; world.ingest(s); hud(s) }
+      setConn('ok')
+    },
     onStatus: (st, msg) => {
       if (st === 'live') setConn('live')
       else if (st === 'ok') setConn('ok')
       else { setConn('err', msg); toast(msg) }
     },
   })
+}
+
+// Normalized snapshot signature: serverTime always changes and is unused;
+// uptime only matters at the HUD's minute granularity.
+let lastSig = ''
+function stateSig(s) {
+  const { serverTime, uptime, ...rest } = s
+  return Math.floor((uptime || 0) / 60) + '|' + JSON.stringify(rest)
 }
 
 // ── HUD ──
@@ -244,10 +259,14 @@ function bindZoomBar() {
 }
 
 // Reflect the camera's live zoom into the bar each frame, so wheel / pinch /
-// F-key zoom changes move the thumb too.
+// F-key zoom changes move the thumb too. Dirty-guarded: zoom is a stepped
+// value (rungs), so this writes DOM only on an actual zoom change.
+let zbShown = -1
 function syncZoomBar() {
   if (!world) return
   const frac = world.cam.zoomFrac()
+  if (frac === zbShown) return
+  zbShown = frac
   $('zb-fill').style.width = (frac * 100) + '%'
   $('zb-thumb').style.left = (frac * 100) + '%'
   $('zb-val').textContent = world.cam.zoomLabel()

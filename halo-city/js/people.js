@@ -20,10 +20,25 @@ export const RIGHT = 1, LEFT = -1
 
 // When _outline is set, every px() paints that flat color instead of its own —
 // used to stamp a dark silhouette behind the body for a crisp 1px edge.
+// Outline mode paints the union of the four 1px offsets (±x, ±y) directly as
+// two expanded rects (horizontal + vertical), which covers the same pixels as
+// stamping the silhouette four times but walks the body only once (5 body
+// passes → 2). On integer-aligned geometry the flat opaque color makes the
+// union bit-identical to the stamps; where geometry lands fractional (citizen
+// scale ≠ 1, fractional zoom rungs) the anti-aliased fringe accumulates
+// differently (4 over-stamps darken fringes ~(1-(1-a)^4); the union doesn't) —
+// measured ≤14/255 on scattered outline-edge pixels, invisible at 1×.
 let _outline = null
 function px(ctx, x, y, w, h, c) {
-  ctx.fillStyle = _outline || c
-  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h))
+  const rx = Math.round(x), ry = Math.round(y), rw = Math.round(w), rh = Math.round(h)
+  if (_outline) {
+    ctx.fillStyle = _outline
+    ctx.fillRect(rx - 1, ry, rw + 2, rh)
+    ctx.fillRect(rx, ry - 1, rw, rh + 2)
+    return
+  }
+  ctx.fillStyle = c
+  ctx.fillRect(rx, ry, rw, rh)
 }
 
 // ── species table ────────────────────────────────────────────────────────
@@ -137,11 +152,9 @@ export function drawPerson(ctx, x, y, look, opts = {}) {
     head(ctx, look, ty, t, action)
   }
 
-  // ── dark outline: stamp the silhouette at 4 offsets, then the real body ──
+  // ── dark outline: one expanded-silhouette pass, then the real body ──
   _outline = C.outline
-  for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    ctx.save(); ctx.translate(ox, oy); body(); ctx.restore()
-  }
+  body()
   _outline = null
   body()
 

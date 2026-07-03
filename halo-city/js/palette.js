@@ -20,24 +20,89 @@ export const C = {
   outline: '#241a20',   // warm near-black for the citizen silhouette edge
 }
 
+// Color math is called thousands of times per frame from the render loop, so
+// every function below is memoized. Inputs recur heavily (a handful of base
+// colors × a handful of amounts), so hit rates are ~100% after the first
+// frame; the caps only guard against a pathological input churn.
+const _rgbCache = new Map()
+function rgbOf(hex) {
+  let v = _rgbCache.get(hex)
+  if (v === undefined) {
+    const n = hex.charCodeAt(0) === 35 ? hex.slice(1) : hex
+    v = [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)]
+    if (_rgbCache.size > 4096) _rgbCache.clear()
+    _rgbCache.set(hex, v)
+  }
+  return v
+}
+const _hex2 = []
+for (let i = 0; i < 256; i++) _hex2.push(i.toString(16).padStart(2, '0'))
+const toHex = (r, g, b) => `#${_hex2[r]}${_hex2[g]}${_hex2[b]}`
+
+// Two-level maps (hex → amount → result) rather than concatenated string
+// keys: number-keyed lookups allocate nothing, so the hot path is GC-free.
+const _sub = (outer, key) => {
+  let m = outer.get(key)
+  if (m === undefined) {
+    if (outer.size > 512) outer.clear()
+    outer.set(key, (m = new Map()))
+  }
+  return m
+}
+const _shadeCache = new Map()
 export function shade(hex, amt) {
-  const n = hex.replace('#', '')
-  const f = (i) => Math.max(0, Math.round(parseInt(n.slice(i, i + 2), 16) * (1 - amt)))
-  return `#${[f(0), f(2), f(4)].map((x) => x.toString(16).padStart(2, '0')).join('')}`
+  const m = _sub(_shadeCache, hex)
+  let v = m.get(amt)
+  if (v === undefined) {
+    const [r, g, b] = rgbOf(hex)
+    const f = (c) => Math.max(0, Math.round(c * (1 - amt)))
+    v = toHex(f(r), f(g), f(b))
+    if (m.size > 512) m.clear()
+    m.set(amt, v)
+  }
+  return v
 }
+const _tintCache = new Map()
 export function tint(hex, amt) {
-  const n = hex.replace('#', '')
-  const f = (i) => { const c = parseInt(n.slice(i, i + 2), 16); return Math.min(255, Math.round(c + (255 - c) * amt)) }
-  return `#${[f(0), f(2), f(4)].map((x) => x.toString(16).padStart(2, '0')).join('')}`
+  const m = _sub(_tintCache, hex)
+  let v = m.get(amt)
+  if (v === undefined) {
+    const [r, g, b] = rgbOf(hex)
+    const f = (c) => Math.min(255, Math.round(c + (255 - c) * amt))
+    v = toHex(f(r), f(g), f(b))
+    if (m.size > 512) m.clear()
+    m.set(amt, v)
+  }
+  return v
 }
+const _alphaCache = new Map()
 export function alpha(hex, a) {
-  const n = hex.replace('#', '')
-  return `rgba(${parseInt(n.slice(0, 2), 16)},${parseInt(n.slice(2, 4), 16)},${parseInt(n.slice(4, 6), 16)},${a})`
+  // Quantize to 8-bit alpha before keying: canvas color strings are parsed to
+  // 8-bit channels anyway, so this is bit-identical — and it collapses the
+  // animated call sites (per-star twinkle, per-wave shimmer) from unbounded
+  // float inputs into ≤256 buckets per color.
+  const q = (a * 255 + 0.5) | 0
+  const m = _sub(_alphaCache, hex)
+  let v = m.get(q)
+  if (v === undefined) {
+    const [r, g, b] = rgbOf(hex)
+    v = `rgba(${r},${g},${b},${q / 255})`
+    m.set(q, v)                    // bounded: q ∈ 0..255
+  }
+  return v
 }
+const _mixCache = new Map()
 export function mix(ha, hb, t) {
-  const a = ha.replace('#', ''), b = hb.replace('#', '')
-  const f = (i) => Math.round(parseInt(a.slice(i, i + 2), 16) * (1 - t) + parseInt(b.slice(i, i + 2), 16) * t)
-  return `#${[f(0), f(2), f(4)].map((x) => x.toString(16).padStart(2, '0')).join('')}`
+  const m = _sub(_sub(_mixCache, ha), hb)
+  let v = m.get(t)
+  if (v === undefined) {
+    const a = rgbOf(ha), b = rgbOf(hb)
+    const f = (i) => Math.round(a[i] * (1 - t) + b[i] * t)
+    v = toHex(f(0), f(1), f(2))
+    if (m.size > 512) m.clear()
+    m.set(t, v)
+  }
+  return v
 }
 
 export const STATUS_COLOR = { running: '#63c74d', idle: '#feae34', stopped: '#5a6988' }
@@ -91,11 +156,21 @@ const SKY = [
   { h: 21,   top: '#0c1126', bot: '#1a1f3c', amb: 0.09 },
   { h: 24,   top: '#0a0e22', bot: '#181c34', amb: 0.08 },
 ]
+// The clock hour is quantized to 5s steps: keyframe transitions span hours,
+// so a 5s color quantum is far below perceptible, and a stable `sk` object
+// between steps lets downstream caches (gradients keyed on sk colors, the
+// memoized mix calls) hit instead of churn.
+const SKY_Q = 5 / 3600
+let _skyHour = -1, _skyVal = null
 export function sky(hour) {
+  const q = Math.round(hour / SKY_Q) * SKY_Q
+  if (q === _skyHour && _skyVal) return _skyVal
   let a = SKY[0], b = SKY[SKY.length - 1]
   for (let i = 0; i < SKY.length - 1; i++) {
-    if (hour >= SKY[i].h && hour <= SKY[i + 1].h) { a = SKY[i]; b = SKY[i + 1]; break }
+    if (q >= SKY[i].h && q <= SKY[i + 1].h) { a = SKY[i]; b = SKY[i + 1]; break }
   }
-  const t = b.h === a.h ? 0 : (hour - a.h) / (b.h - a.h)
-  return { top: mix(a.top, b.top, t), bot: mix(a.bot, b.bot, t), amb: a.amb + (b.amb - a.amb) * t }
+  const t = b.h === a.h ? 0 : (q - a.h) / (b.h - a.h)
+  _skyHour = q
+  _skyVal = { top: mix(a.top, b.top, t), bot: mix(a.bot, b.bot, t), amb: a.amb + (b.amb - a.amb) * t }
+  return _skyVal
 }

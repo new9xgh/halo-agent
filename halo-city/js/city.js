@@ -56,6 +56,49 @@ function px(ctx, x, y, w, h, c) {
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h))
 }
 
+// Vertical-gradient cache for the big background fills (sky / beach / sea /
+// haze). Geometry is stable while the camera rests and colors only change on
+// the 5s sky quantum, so steady-state gradient allocs drop to zero; while
+// panning/zooming it degrades to one alloc per fill per frame (= old cost).
+const _grads = new Map()
+function vGradient(ctx, y0, y1, stops) {
+  let key = y0 + '|' + y1
+  for (let i = 1; i < stops.length; i += 2) key += '|' + stops[i]
+  let g = _grads.get(key)
+  if (!g) {
+    g = ctx.createLinearGradient(0, y0, 0, y1)
+    for (let i = 0; i < stops.length; i += 2) g.addColorStop(stops[i], stops[i + 1])
+    if (_grads.size > 128) _grads.clear()
+    _grads.set(key, g)
+  }
+  return g
+}
+
+// Offscreen layer cache for backdrop passes (currently: the skyline). Keyed
+// on the device transform + canvas size + the quantized sky, so at camera
+// rest the layer renders once per 5s sky tick instead of every frame; during
+// a pan/zoom glide the key churns and cost degrades to the old live path +
+// one blit. The blit is at an integer device offset with no scaling. Opaque
+// pixels round-trip exactly; semi-transparent layer pixels (slab edges, lit
+// windows) pick up ≤±1 LSB from the premultiplied-alpha round-trip — measured
+// ~0.03% of pixels, imperceptible. Do NOT route gradients through a layer:
+// Skia anchors gradient dither to device y, and the band offset shifts it by
+// ±1 LSB across the whole fill (why drawSea stays a direct pass).
+class Layer {
+  constructor() { this.cv = document.createElement('canvas'); this.key = '' }
+  /** A ctx to redraw with if stale; null when fresh (caller just blits). */
+  begin(key, w, h) {
+    const sized = this.cv.width === w && this.cv.height === h
+    if (key === this.key && sized) return null
+    if (!sized) { this.cv.width = w; this.cv.height = h }
+    this.key = key
+    const g = this.cv.getContext('2d')
+    g.setTransform(1, 0, 0, 1, 0, 0)
+    if (sized) g.clearRect(0, 0, w, h)
+    return g
+  }
+}
+
 /** Is stacked floor index i (0-based above lobby) a commons floor?
  *  Pattern: W W W C W W W C …  → commons at i % 4 === 3. */
 const isCommons = (i) => i % (WORK_PER_COMMONS + 1) === WORK_PER_COMMONS
@@ -116,8 +159,9 @@ export class Building {
     }))
     // one root session = one dedicated work floor, assigned by snapshot order
     // (#1). Keyed by session id so parallel sessions of one agent never collide.
-    // workFloors only grows, so workIdxs.length >= roots.length: extra floors
-    // above stay empty until filled.
+    // workFloors >= roots.length always holds (it shrinks only down to the
+    // live count + 1 slack), so every root gets a floor; a spare floor above
+    // stays empty until filled.
     const next = new Map()
     roots.forEach((s, i) => {
       const floor = workIdxs[i]
@@ -126,6 +170,7 @@ export class Building {
       next.set(s.id, { floor, x: DESK_XS[1], agentName: s.agentName || s.agentId, busy: prev ? prev.busy : false })
     })
     this._seatBy = next
+    this._seatIndexDirty = true
     const r = rng(this.seed)
     this.roofKind = ['tank', 'ac', 'antenna', 'billboard'][Math.floor(r() * 4)]
   }
@@ -191,10 +236,14 @@ export class Building {
   restSpots(floor) { return floor < 0 ? this.lounge() : this.commonsSpots() }
 
   // ── drawing ──
-  drawBack(ctx, t, sk, litFloors) {
+  drawBack(ctx, t, sk, litFloors, view) {
     const x0 = this.x0()
     const m = this.mat, itr = this.itr
     const top = this.topY()
+    // vertical cull band (world y): floors fully outside it skip entirely —
+    // matters when zoomed into one part of a tall tower
+    const vTop = view ? view.y - 2 : -Infinity
+    const vBot = view ? view.y + view.h + 2 : Infinity
     px(ctx, x0, top, OUTER_W, -top, m.base)
     px(ctx, x0, top, 2, -top, m.hi)                                  // lit left corner pier
     px(ctx, x0 + OUTER_W - 2, top, 2, -top, m.lo)                    // shadowed right corner pier
@@ -202,6 +251,7 @@ export class Building {
     this.facadeTexture(ctx, x0, top)                                 // material grain on the corner piers
 
     // ── lobby ──
+    if (0 < vTop || -LOBBY_H > vBot) { this.drawFloors(ctx, t, sk, litFloors, vTop, vBot); return }
     const lobTop = -LOBBY_H
     px(ctx, x0 + WALL, lobTop, INNER_W, LOBBY_H, itr.wall)
     px(ctx, x0 + WALL, lobTop, INNER_W, 1, shade(itr.wall, 0.25))
@@ -229,8 +279,20 @@ export class Building {
     this.drawStairs(ctx, 0, true)
 
     // ── stacked floors ──
+    this.drawFloors(ctx, t, sk, litFloors, vTop, vBot)
+  }
+
+  /** Stacked floors above the lobby, each culled against the view band.
+   *  A floor paints strictly inside [fy - FLOOR_H, fy + SLAB] (lamp glow cones
+   *  end at cy+43, stairs/balcony/props stay within the floor), and adjacent
+   *  bands touch without overlap — so skipping an off-band floor is pixel-safe
+   *  and saves its ~60 fillRects when zoomed into part of a tall tower. */
+  drawFloors(ctx, t, sk, litFloors, vTop, vBot) {
+    const x0 = this.x0()
+    const m = this.mat, itr = this.itr
     this.stack.forEach((f, i) => {
       const fy = this.floorY(i)
+      if (fy - FLOOR_H > vBot || fy + SLAB < vTop) return           // fully outside view
       const cy = fy - FLOOR_H
       const lit = litFloors.has(i)
       px(ctx, x0, fy, OUTER_W, SLAB, shade(m.base, 0.35))           // inter-floor slab band
@@ -295,8 +357,14 @@ export class Building {
     ceilLamp(ctx, this.ix(124), cy + 1, lit)
     const st = this.stations.find((s) => s.floor === idx)
     if (st) station(ctx, this.ix(st.x), fy, st.kind, st.glow, t, this.itr.accent)
+    // seat lookup indexed by floor|x (rebuilt on update(), not per frame)
+    if (this._seatIndexDirty || !this._seatAt) {
+      this._seatAt = new Map()
+      for (const s of this._seatBy.values()) this._seatAt.set(s.floor + '|' + s.x, s)
+      this._seatIndexDirty = false
+    }
     for (const dx of DESK_XS) {
-      const seat = [...this._seatBy.values()].find((s) => s.floor === idx && s.x === dx)
+      const seat = this._seatAt.get(idx + '|' + dx)
       desk(ctx, this.ix(dx), fy, t, seat ? !!seat.busy : false, this.itr.accent)
     }
     // per-floor flavor prop at the right end
@@ -486,9 +554,7 @@ export class City {
 
   drawSky(ctx, hour, view, camX) {
     const sk = sky(hour)
-    const g = ctx.createLinearGradient(0, view.y, 0, 30)
-    g.addColorStop(0, sk.top); g.addColorStop(1, sk.bot)
-    ctx.fillStyle = g
+    ctx.fillStyle = vGradient(ctx, view.y, 30, [0, sk.top, 1, sk.bot])
     ctx.fillRect(view.x, view.y, view.w, view.h)
 
     if (sk.amb < 0.5) {
@@ -532,9 +598,39 @@ export class City {
         ctx.fill()
       }
     }
-    this.skylineLayer(ctx, view, camX, 0.25, mix(sk.top, '#10142c', 0.55), -36, 110, sk, 31)
-    this.skylineLayer(ctx, view, camX, 0.5, mix(sk.bot, '#141833', 0.6), -16, 80, sk, 73)
+    this.skyline(ctx, view, camX, sk)
     return sk
+  }
+
+  /** Both parallax skyline bands, rendered through a cached offscreen layer.
+   *  At camera rest the ~1000 slab/window rects + their hash rolls re-render
+   *  only when the quantized sky ticks (5s); every other frame is one blit.
+   *  The key carries the device transform + view + sky colors, so any camera
+   *  motion, resize or sky change re-renders — output stays bit-identical.
+   *  The layer is BANDED to the skyline's only visible strip (world y < 0;
+   *  drawStreet/drawSea paint every row below opaquely), so the blit is a
+   *  fraction of the canvas, not all of it. */
+  skyline(ctx, view, camX, sk) {
+    const cw = ctx.canvas.width, ch = ctx.canvas.height
+    const m = ctx.getTransform()               // s,0,0,s,ox,oy — no rotation
+    // device-y band of world y ∈ [-190, 2]: tallest slab tops ≈ -185, and
+    // everything below y=0 is overpainted by the street/sea passes.
+    const y0 = Math.max(0, Math.floor(m.f - 190 * m.a))
+    const y1 = Math.min(ch, Math.ceil(m.f + 2 * m.a))
+    const bandH = y1 - y0
+    if (bandH <= 0) return                     // skyline entirely off-screen
+    const L = this._skylineL || (this._skylineL = new Layer())
+    const key = `${m.a}|${m.e}|${m.f}|${y0}|${view.x}|${view.w}|${sk.top}|${sk.bot}|${sk.amb}`
+    const g = L.begin(key, cw, bandH)
+    if (g) {
+      g.setTransform(m.a, 0, 0, m.a, m.e, m.f - y0)
+      this.skylineLayer(g, view, camX, 0.25, mix(sk.top, '#10142c', 0.55), -36, 110, sk, 31)
+      this.skylineLayer(g, view, camX, 0.5, mix(sk.bot, '#141833', 0.6), -16, 80, sk, 73)
+    }
+    ctx.save()
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.drawImage(L.cv, 0, y0)
+    ctx.restore()
   }
 
   skylineLayer(ctx, view, camX, factor, color, baseY, maxH, sk, seed) {
@@ -720,9 +816,7 @@ export class City {
     const night = lit < 0.5
     const dry = shade(mix(C.cream, C.tan, 0.4), (1 - lit) * 0.5)
     const damp = shade(mix(C.tan, C.darkBrown, 0.3), (1 - lit) * 0.45)
-    const g = ctx.createLinearGradient(0, top, 0, bot)
-    g.addColorStop(0, dry); g.addColorStop(0.6, dry); g.addColorStop(1, damp)
-    ctx.fillStyle = g
+    ctx.fillStyle = vGradient(ctx, top, bot, [0, dry, 0.6, dry, 1, damp])
     ctx.fillRect(view.x, top, view.w, bot - top)
     px(ctx, view.x, top, view.w, 1, shade(tint(dry, 0.2), (1 - lit) * 0.4))  // sunlit top of sand
     // grain speckle + the occasional pebble, stable per 5px cell
@@ -777,32 +871,33 @@ export class City {
   /** Infinite sea filling the foreground down to the screen bottom: a depth
    *  gradient (pale near the horizon → deep toward the viewer), drifting
    *  perspective wave-lines, and the sun/moon reflection column. Colors track
-   *  the sky's ambience so the water reads day/dusk/night. */
+   *  the sky's ambience so the water reads day/dusk/night.
+   *
+   *  Deliberately NOT routed through an offscreen Layer: gradients drawn into
+   *  a separate canvas get a different Skia dither anchor, shifting the whole
+   *  water band by ±1 LSB (measured), and the savable part (gradient + ~80
+   *  trough rows) is tiny next to the per-frame crest/sparkle animation. The
+   *  two gradients ride the vGradient cache, so rest-state allocs are zero. */
   drawSea(ctx, t, sk, view, water) {
     const bottom = view.y + view.h
     if (bottom <= water) return
     const night = sk.amb < 0.5
+    const depth = bottom - water
     // day/night water palette, blended by ambience. The dark end stays a
     // moonlit blue (not a black void) so night water still reads as water.
     const near = mix('#16314e', '#3a86b0', sk.amb)               // horizon band (far)
     const far = mix('#0a1d33', '#10456e', sk.amb)                // deep band (near viewer)
-    const g = ctx.createLinearGradient(0, water, 0, bottom)
-    g.addColorStop(0, near); g.addColorStop(1, far)
-    ctx.fillStyle = g
+    ctx.fillStyle = vGradient(ctx, water, bottom, [0, near, 1, far])
     ctx.fillRect(view.x, water, view.w, bottom - water)
-
     // horizon haze: a soft brighter strip at the waterline (the sky reflecting
     // off distant water), fading out within ~26px.
-    const haze = ctx.createLinearGradient(0, water, 0, water + 26)
     const hazeC = night ? '#3a4f78' : '#a9d6ea'
-    haze.addColorStop(0, alpha(hazeC, night ? 0.4 : 0.5)); haze.addColorStop(1, alpha(hazeC, 0))
-    ctx.fillStyle = haze
+    ctx.fillStyle = vGradient(ctx, water, water + 26, [0, alpha(hazeC, night ? 0.4 : 0.5), 1, alpha(hazeC, 0)])
     ctx.fillRect(view.x, water, view.w, 26)
 
-    // perspective wave-lines: rows get taller and sparser toward the viewer and
-    // drift at their own speed (parallax). Each row is broken into UNEVEN dashes
-    // by a stable per-cell hash, so it reads as choppy water, not a ruled grid.
-    const depth = bottom - water
+    // perspective wave-lines: rows get taller and sparser toward the viewer
+    // and drift at their own speed (parallax). Each row is broken into UNEVEN
+    // dashes by a stable per-cell hash — choppy water, not a ruled grid.
     const crestC = mix('#6fa8cf', '#dff2ff', sk.amb)             // muted by night, bright by day
     let y = water + 2
     let row = 0
