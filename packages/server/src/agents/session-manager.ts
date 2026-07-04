@@ -26,7 +26,7 @@ import { buildSessionTools } from './session-tools.js'
 import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
-import { saveSessionToFile, fileSegment, findInternalSession } from '../sessions/session-store.js'
+import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
   createSaveSnapshot,
@@ -217,6 +217,7 @@ export interface SessionManagerInternals {
     explicitId?: string,
     workingDir?: string | null,
     accessLevel?: 'readonly' | 'workspace' | null,
+    title?: string,
   ): Promise<string>
   runSession(sessionId: string, message: string | ContentBlock[]): Promise<string>
   querySession(targetSessionId: string, callerSessionId: string, message: string, interrupt?: boolean): Promise<string>
@@ -657,6 +658,7 @@ export class SessionManager implements SessionManagerInternals {
     explicitId?: string,
     workingDir?: string | null,
     accessLevel: 'readonly' | 'workspace' | null = null,
+    title?: string,
   ): Promise<string> {
     const segment = generateSessionId()
     const sessionId = explicitId ?? (parentId ? `${parentId}>${segment}` : segment)
@@ -681,6 +683,23 @@ export class SessionManager implements SessionManagerInternals {
       createdAt: now,
       updatedAt: now,
     }).run()
+
+    // Caller-provided title: pre-seed the session JSON file before the first
+    // run so both persist paths (saveAgentState's `if (!existing.title)` and
+    // saveSessionToFile's sticky-existing-title logic) respect it instead of
+    // deriving a default from the description / first user message.
+    if (title) {
+      try {
+        const dir = this.sessionDir(agentId)
+        fsSync.mkdirSync(dir, { recursive: true })
+        atomicWriteSessionFile(
+          path.join(dir, `${fileSegment(sessionId)}.json`),
+          JSON.stringify({ id: sessionId, agentId, title, createdAt: new Date(now).toISOString() }, null, 2),
+        )
+      } catch (err) {
+        console.warn(`[SessionManager] Failed to pre-seed title for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
 
     const createdImageOverride = (createdYaml?.model as Record<string, unknown> | undefined)?.image as boolean | undefined
     const session = this.createAgentSession(

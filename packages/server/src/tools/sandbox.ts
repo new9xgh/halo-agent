@@ -259,6 +259,12 @@ const DEFAULT_HIDDEN_DIRS = [
   '~/.gnupg',
   '~/.docker',
   '~/.config/gh',
+  // Cross-workspace state under ~/.halo/global — internal-agent session
+  // transcripts and server/cron logs would leak other workspaces' activity
+  // to a workspace/readonly session (global/ is readable by design for
+  // skills/agents/prompts, so the sensitive subtrees are hidden explicitly).
+  '~/.halo/global/internal-sessions',
+  '~/.halo/global/logs',
 ]
 // Keep in sync with the schema default in settings-schema.ts and the callsite
 // fallback in config.ts — the server overwrites this list at boot via
@@ -272,6 +278,15 @@ const DEFAULT_HIDDEN_FILES = [
   // in plaintext) — must be hidden like ~/.aws & co.
   '~/.git-credentials',
   '~/.netrc',
+  // Global evolution / cron databases (plus sqlite WAL/SHM sidecars) carry
+  // cross-workspace prompts, run history and channel targets — hidden from
+  // workspace/readonly sessions like the dirs above.
+  '~/.halo/global/evo.db',
+  '~/.halo/global/evo.db-wal',
+  '~/.halo/global/evo.db-shm',
+  '~/.halo/global/cron.db',
+  '~/.halo/global/cron.db-wal',
+  '~/.halo/global/cron.db-shm',
 ]
 
 let _hiddenDirs: string[] = DEFAULT_HIDDEN_DIRS
@@ -399,11 +414,29 @@ export function assertPathAllowed(filePath: string, opts: SandboxOptions, write 
     return resolved
   }
 
-  if (!write && (resolved === GLOBAL_DIR || resolved.startsWith(GLOBAL_DIR + '/'))) {
+  if (!write && (resolved === GLOBAL_DIR || resolved.startsWith(GLOBAL_DIR + '/')) && !isHiddenGlobalPath(resolved)) {
     return resolved
   }
 
   throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
+}
+
+/** True when a path inside ~/.halo/global hits a configured hidden entry.
+ *  bwrap enforces the hidden lists with tmpfs//dev/null binds, but the
+ *  no-bwrap fallback's only boundary is assertPathAllowed — without this
+ *  check its blanket GLOBAL_DIR read allowance would leak evo.db / cron.db /
+ *  internal-sessions / logs on platforms without bwrap. Entries outside
+ *  GLOBAL_DIR (~/.aws & co) need no check here: they're already denied by
+ *  the workspace/global boundary above. */
+function isHiddenGlobalPath(resolved: string): boolean {
+  for (const raw of _hiddenFiles) {
+    if (resolved === expandTilde(raw)) return true
+  }
+  for (const raw of _hiddenDirs) {
+    const dir = expandTilde(raw)
+    if (resolved === dir || resolved.startsWith(dir + '/')) return true
+  }
+  return false
 }
 
 // ── Injection-safe `bash -c` argv builders ──────────────────────────

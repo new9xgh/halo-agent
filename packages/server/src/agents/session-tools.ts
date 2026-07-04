@@ -58,11 +58,12 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
         message: { type: 'string' as const, description: 'Task description / initial message for the agent' },
         system_prompt_context: { type: 'string' as const, description: "Optional background material prepended to the opening message BEFORE your task text — despite the name, it is NOT injected into the system prompt. Put here what frames the whole task: relevant file paths, prior findings, user-stated constraints, role framing. Keep one-shot task instructions in `message` itself so it stays a clean task statement. Note the cost: this text lives in the child's conversation history and is re-sent on every one of its model calls until compaction — include what the child genuinely needs throughout, not bulk material it could read from files instead." },
         working_dir: { type: 'string' as const, description: "Optional focus directory for the sub-agent (workspace-relative or absolute; must be inside the workspace). The platform bakes the directory-scoped INSTRUCTIONS.md found along the path from the workspace root down to this directory into the sub-agent's system prompt (present every turn), and tags its prompt with this focus. Does NOT change where tools run (shell/file tools still operate from the project root). Omit for project-root scope." },
+        title: { type: 'string' as const, description: 'Optional session title shown in the admin sidebar. When omitted, auto-generated from the task message.' },
       },
       required: ['agent_id', 'message'],
     },
     callback: async (input: unknown) => {
-      const params = input as { agent_id: string; message: string; system_prompt_context?: string; working_dir?: string }
+      const params = input as { agent_id: string; message: string; system_prompt_context?: string; working_dir?: string; title?: string }
       if (!params.agent_id || !params.message) return JSON.stringify({ code: 1, error: 'agent_id and message are required' })
 
       const agentYaml = await loadAgentYaml(params.agent_id, sm.workspaceRoot)
@@ -106,7 +107,7 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // delegate to a full-access child and escape the sandbox.
       const parentSession = sm.sessions.get(sessionId)
       const inheritedAccessLevel = parentSession?.accessLevel ?? null
-      const childSessionId = await sm.createSession(params.agent_id, sessionId, params.message.slice(0, 200), displayName, undefined, resolvedWorkingDir, inheritedAccessLevel)
+      const childSessionId = await sm.createSession(params.agent_id, sessionId, params.message.slice(0, 200), displayName, undefined, resolvedWorkingDir, inheritedAccessLevel, params.title)
 
       let initialMessage = `[Session ${childSessionId}]\n\n`
       if (params.system_prompt_context) initialMessage += `${params.system_prompt_context}\n\n`
