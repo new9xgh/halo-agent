@@ -191,7 +191,7 @@ export class HaloAgentCoreStack extends cdk.Stack {
 
     new s3deploy.BucketDeployment(this, 'DeployDemo', {
       sources: [s3deploy.Source.asset(path.join(__dirname, '..', '..'), {
-        exclude: ['*', '!index.html'],
+        exclude: ['*', '!index.html', '!favicon.ico'],
       })],
       destinationBucket: siteBucket,
       distribution,

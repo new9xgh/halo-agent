@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
+    "@types/node": "^22.19.17",
     "aws-cdk": "^2.1100.0",
     "aws-cdk-lib": "^2.261.0",
     "constructs": "^10.4.0",

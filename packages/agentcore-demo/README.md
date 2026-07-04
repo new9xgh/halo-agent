@@ -22,13 +22,16 @@ Halo implements the AgentCore contract when started with
 
 | Endpoint | Behavior |
 |---|---|
-| `GET /ping` | `{"status":"healthy"}` |
+| `GET /ping` | `{"status":"Healthy"}`, or `{"status":"HealthyBusy"}` while any agent session is running — AgentCore keeps busy sessions alive past the idle timeout |
 | `POST /invocations` | `{"input":{"prompt":"..."}}` → `{"output":{"message":{"role":"assistant","content":[{"text":"..."}]}}}` |
 | `WS /ws` | send `{"inputText":"..."}` / `{"type":"stop"}`; receive `{"type":"stream"\|"thinking"\|"tool_call"\|"tool_result"\|"queued"\|"complete"\|"error", ...}` frames |
 
 Session identity: the `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` header
-(set by AgentCore) or a `sessionId` query param (browsers). The same id maps
-to the same persistent Halo session — reload the page, keep the conversation.
+(set by AgentCore) or a `sessionId` query param (browsers). Each runtime
+session id maps to its **own workspace** under
+`HALO_WORKSPACE/users/<sanitized-id>/` with an isolated `.halo/` (sqlite +
+session files) — use one id per user and users never see each other's
+history. Reload the page with the same id, keep the conversation.
 
 In this mode the server skips admin password/JWT auth (AgentCore terminates
 auth upstream), messaging channels (telegram/wechat/slack/feishu), cron and
@@ -69,7 +72,7 @@ Quick smoke test without the frontend:
 
 ```bash
 curl http://localhost:8080/ping
-# {"status":"healthy"}
+# {"status":"Healthy"}
 
 curl -X POST http://localhost:8080/invocations \
   -H 'content-type: application/json' \
@@ -167,9 +170,106 @@ filesystem; switch to `RETAIN` before putting real data on it.
 | `HALO_RUNTIME_MODE` | `agentcore` enables the adapter | unset (normal server) |
 | `HALO_PORT` | listen port | `8080` in the image (halo default 9527) |
 | `HALO_WORKSPACE` | agent workspace directory | cwd |
+| `HALO_LOG_LEVEL` | set `info` so server logs reach CloudWatch (see Gotchas) | `warn` |
 
 Model / provider selection, skills, and agent profiles are standard halo
 configuration under `~/.halo/` — see the main repo docs.
+
+## Operational notes & gotchas
+
+Everything below was learned the hard way running this demo. Read before
+operating or debugging a deployment.
+
+### Session lifecycle (when does a session die?)
+
+Three ways a runtime session terminates:
+
+| Trigger | Detail |
+|---|---|
+| Idle timeout | `/ping` returns `Healthy` (idle) for longer than `idleRuntimeSessionTimeout` → terminated. |
+| Max lifetime | `maxLifetime` (default 8h) is a hard cap — even a continuously-busy session is force-terminated. |
+| Failed health check | `/ping` erroring / non-200 → terminated. |
+
+Points that are easy to get wrong:
+
+- **An open WebSocket keeps the session alive.** A hanging WS stream is an
+  in-flight invocation from the platform's perspective, so the session never
+  counts as idle while the socket is open. The frontend's 30s keepalive ping
+  exists to stop the AgentCore proxy from cutting an idle socket — which, in
+  turn, keeps the session warm. Net effect: idle timeout ≈ "time after the
+  tab closes", not "time since the last message".
+- **`HealthyBusy` is the official keep-alive** for background work without an
+  open connection. This server returns it whenever any agent session is
+  running, so long tool chains survive the idle timeout.
+- **Never put a current timestamp in `time_of_last_update` on every ping** —
+  that signals a continuous status change, the idle timeout never fires,
+  sessions pile up until `maxLifetime` and exhaust the concurrent-session
+  quota.
+- Session data lives on EFS, so termination is cheap: the next connect
+  cold-starts a fresh microVM (~3s) and history reloads from disk.
+
+### Observing and managing sessions
+
+There is **no list/get-runtime-sessions API**. What exists:
+
+```bash
+# Concurrent session count — CloudWatch metric (1-min granularity, ~1-2 min lag)
+aws cloudwatch get-metric-data --region <region> ... \
+  # namespace AWS/Bedrock-AgentCore, metric Sessions / ActiveStreamingConnections,
+  # dimensions Resource=<runtime-arn>, Operation=InvokeAgentRuntimeWithWebSocketStream
+
+# Per-session activity — filter the runtime log group for the session id
+aws logs filter-log-events --region <region> \
+  --log-group-name "/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT" \
+  --filter-pattern '"<session-id>"' \
+  --start-time $(( $(date +%s) * 1000 - 21600000 ))
+
+# Kill one session immediately (data on EFS survives; next connect cold-starts)
+aws bedrock-agentcore stop-runtime-session \
+  --agent-runtime-arn <runtime-arn> \
+  --runtime-session-id <session-id> --region <region>
+```
+
+(`date +%s%3N` is GNU-only — the `* 1000` form above works on macOS too.)
+
+### Logging to CloudWatch
+
+AgentCore captures container **stdout** into
+`/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT`. Halo's logger
+intercepts `console.*` and drops entries below the configured level *before*
+they reach stdout — at the default `warn`, CloudWatch shows almost nothing.
+Set `HALO_LOG_LEVEL=info` (baked into the Dockerfile here).
+
+### update-agent-runtime pitfalls
+
+- The call **replaces the full configuration** — omitting
+  `--filesystem-configurations` silently drops the EFS mount. Always fetch
+  the current config (`get-agent-runtime`), modify, and send everything back.
+- Runtimes created after 2026-06 reject `requireServiceS3Endpoint` inside
+  `networkModeConfig` on update — strip it from the fetched config first.
+- Every update bumps the runtime version and rolls new sessions to it;
+  existing live sessions keep the old version until they terminate.
+
+### VPC networking
+
+The runtime gets **no public IP** in VPC mode. Private subnets must have a
+route `0.0.0.0/0 → NAT gateway`, or every outbound call (Bedrock, npm, ...)
+hangs and invocations fail with opaque 502s. If the frontend suddenly gets
+502 on connect after an infra change, check the private route table first.
+
+### Frontend / WS proxy quirks
+
+- The AgentCore WS proxy only forwards frames containing `inputText` — it
+  won't push server-initiated frames on connect, so the frontend must send
+  `{"inputText":"/init"}` after open to fetch history (the server treats it
+  as a protocol message, not a prompt).
+- The proxy cuts idle WS connections after ~1 min; the frontend sends a
+  `{type:'ping'}` keepalive every 30s (the server silently ignores frames
+  without `inputText`).
+- Browsers can't set headers on WS connections, so auth rides a **presigned
+  URL** minted by a small Lambda (see `lambda/ws-presign/`) — the presigned
+  URL embeds the session id and expires in 5 minutes; mint a fresh one per
+  (re)connect.
 
 ---
 
