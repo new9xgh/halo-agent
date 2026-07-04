@@ -48,6 +48,15 @@ jobs:
           pnpm --filter @turmind/halo-acp-adapter build
           pnpm --filter @turmind/halo-cli build
 
-      # server 是唯一有测试的包(130 用例)。挂一个即红。
+      # 四个包都有测试了(core 36 / server 239 / cli 63 / admin 7)。挂一个即红。
+      - name: Test (core)
+        run: pnpm --filter @turmind/halo-core test
+
       - name: Test (server)
         run: pnpm --filter @turmind/halo-server test
+
+      - name: Test (cli)
+        run: pnpm --filter @turmind/halo-cli test
+
+      - name: Test (admin)
+        run: pnpm --filter @turmind/halo-admin test
