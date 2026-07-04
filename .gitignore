@@ -103,6 +103,9 @@ packages/cli/dist-pub/
 # dir (migration scripts, verify checklists). Not shipped.
 /tmp/
 halo-changelog-*.md
--e 
 # AgentCore demo: pnpm-deploy output baked into the Docker image (238MB)
 packages/agentcore-demo/deploy/
+
+# CDK synth output + context cache (context caches account id / AZs)
+cdk.out/
+cdk.context.json
