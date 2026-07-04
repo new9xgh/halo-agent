@@ -48,6 +48,12 @@ jobs:
           pnpm --filter @turmind/halo-acp-adapter build
           pnpm --filter @turmind/halo-cli build
 
+      # git-manager 测试需要 user identity（CI runner 默认没有）
+      - name: Configure git identity
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@turmind.com"
+
       # 四个包都有测试了(core 36 / server 239 / cli 63 / admin 7)。挂一个即红。
       - name: Test (core)
         run: pnpm --filter @turmind/halo-core test
