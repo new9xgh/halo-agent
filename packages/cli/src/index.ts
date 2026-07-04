@@ -282,7 +282,11 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
   const { hashPassword, generateJwtSecret } = await import('@turmind/halo-server/middleware/password-hash')
   const { updateConfigLeaves, configLeafSet, readConfigLeaf } = await import('@turmind/halo-server/setup-config')
   const { readSetting, writeSetting, maskSecret } = await import('@turmind/halo-server/setup-settings')
-  const { listModelProviders, listOptionalSkills, listRequiredSkillsWithSecrets } = await import('@turmind/halo-server/setup-providers')
+  const {
+    listModelProviders, listOptionalSkills, listRequiredSkillsWithSecrets,
+    listConfiguredSwitchableProviders, readDefaultAgentProvider, bindBuiltinAgentsToProvider,
+  } = await import('@turmind/halo-server/setup-providers')
+  const { buildBindProviderPlan, KEEP_CURRENT, AWS_CHAIN_PROVIDER } = await import('./setup-bind-provider.js')
   const { promptText, promptPassword, promptSelect, promptMultiSelect } = await import('./setup-prompts.js')
 
   // `--non-interactive` (alias `-y`) — for Dockerfile / CI: skip all prompts,
@@ -313,6 +317,17 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
         process.stderr.write(`[setup] WARNING: no password set. Either set HALO_PASSWORD env, or re-run \`halo setup\` interactively.\n`)
       }
     }
+    // Explicit opt-in only — never guess (Bedrock may work with zero keys via
+    // the AWS credential chain, and that can't be probed reliably).
+    const envProvider = process.env.HALO_DEFAULT_PROVIDER
+    if (envProvider && envProvider.length > 0) {
+      const bound = bindBuiltinAgentsToProvider(envProvider)
+      if (bound) {
+        process.stderr.write(`[setup] built-in agents (${bound.agents.join(', ')}) bound to ${envProvider}${bound.modelId ? ` / ${bound.modelId}` : ''} (HALO_DEFAULT_PROVIDER)\n`)
+      } else {
+        process.stderr.write(`[setup] WARNING: HALO_DEFAULT_PROVIDER=${envProvider} is not a known provider — agents unchanged\n`)
+      }
+    }
     process.stderr.write(`[setup] done\n`)
     return
   }
@@ -327,6 +342,12 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
 
   // 4. Model provider secrets (optional sub-menu).
   await stepModelProviders()
+
+  // 4b. Close the "key configured but agent still on Bedrock" gap: when a
+  //     non-Bedrock provider has keys and the default agent isn't bound to
+  //     any configured provider, offer an explicit switch (never automatic —
+  //     Bedrock via the AWS credential chain needs zero keys).
+  await stepBindDefaultAgent()
 
   // 5. Optional skills (toggle list + post-install secret walk).
   await stepOptionalSkills()
@@ -344,6 +365,17 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
   }
 
   process.stderr.write('\n[setup] done\n')
+
+  // Next-step hints — a fresh user finishing setup shouldn't have to go back
+  // to the README to learn what to run next.
+  {
+    const portLeaf = readConfigLeaf('server.port')
+    const port = typeof portLeaf === 'number' ? portLeaf : 9527
+    process.stderr.write('\nNext steps:\n')
+    process.stderr.write('  1. halo server start\n')
+    process.stderr.write(`  2. Open http://localhost:${port} and log in with the password you just set\n`)
+    process.stderr.write('  3. Agents, model providers, and channels (Telegram / Slack / …) are all configurable in the admin UI\n')
+  }
 
   // ── step impls ─────────────────────────────────────────────────────────
 
@@ -455,6 +487,37 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
       await configureSecretGroup(provider.id, provider.bucket, provider.fields)
     }
     process.stderr.write('\n')
+  }
+
+  async function stepBindDefaultAgent(): Promise<void> {
+    const configured = listConfiguredSwitchableProviders()
+    const current = readDefaultAgentProvider()
+    // Keys explicitly stored for the current provider (e.g. AWS AKSK typed
+    // during this very setup) → the agent likely works; cursor defaults to
+    // Keep. Keyless Bedrock might still work via the machine credential
+    // chain, but that can't be probed — the prompt text carries the caveat.
+    const currentHasKeys = current != null
+      && listModelProviders().some((p) => p.id === current && p.fields.some((f) => {
+        const v = readSetting(`${p.id}.secrets.${f.key}`)
+        return v != null && v.length > 0
+      }))
+
+    const plan = buildBindProviderPlan(configured, current, currentHasKeys)
+    if (!plan) return
+
+    for (const line of plan.intro) process.stderr.write(`${line}\n`)
+    const pick = await promptSelect(plan.question, plan.options, plan.initialIndex)
+    if (pick == null) abort()
+    if (pick === KEEP_CURRENT) {
+      process.stderr.write(`[setup] default agent unchanged (${current ?? AWS_CHAIN_PROVIDER})\n\n`)
+      return
+    }
+    const bound = bindBuiltinAgentsToProvider(pick)
+    if (bound) {
+      process.stderr.write(`[setup] built-in agents (${bound.agents.join(', ')}) bound to ${pick}${bound.modelId ? ` / ${bound.modelId}` : ''}\n\n`)
+    } else {
+      process.stderr.write(`[setup] could not bind agents to ${pick} — provider template missing; agents unchanged\n\n`)
+    }
   }
 
   async function stepOptionalSkills(): Promise<void> {

@@ -6,8 +6,10 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { TEMPLATES_DIR } from './init.js'
+import { readSetting, writeSetting } from './setup-settings.js'
 
 export interface SecretSpec {
   /** Setting-leaf key e.g. `api_key`. The full path is `<id>.<bucket>.<key>`. */
@@ -129,6 +131,114 @@ export function listOptionalSkills(): SkillInfo[] {
     })
   }
   return out.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+// ── Default-agent provider binding ──────────────────────────────────────────
+//
+// Closes the top onboarding gap: `halo setup` writes provider keys into
+// settings.yaml, but the seeded built-in agents hardcode
+// aws-bedrock-claude-invoke — so a fresh user with only e.g. a DeepSeek key
+// gets `Could not load credentials from any providers` on the first message.
+
+/** The one provider that authenticates with zero configured secrets via the
+ *  AWS credential chain (env / ~/.aws / EC2 instance role / ECS task role).
+ *  Chain availability can't be probed reliably (IMDS probing is slow and
+ *  flaky), so setup must never auto-switch agents away from it just because
+ *  no AWS keys were typed — moving off it is always an explicit user choice. */
+export const AWS_CREDENTIAL_CHAIN_PROVIDER = 'aws-bedrock-claude-invoke'
+
+/** User-facing built-in agents whose model gets rebound on an explicit
+ *  provider switch. `default` is what answers the first message; executor /
+ *  deep-executor are its delegation team — leaving them on Bedrock would
+ *  reproduce the same credentials error one delegation later. Internal
+ *  (`__*__`) agents are left alone. */
+const REBIND_BUILTIN_AGENT_IDS = ['default', 'executor', 'deep-executor']
+
+/** Same location as agent-loader's GLOBAL_AGENTS_DIR — kept local so this
+ *  setup-time module doesn't pull the agent-runtime import chain into the CLI. */
+const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
+
+/** Providers with ≥1 secret leaf set in settings.yaml (a literal `<<ENV>>`
+ *  placeholder counts — the user explicitly opted into env expansion).
+ *  Excludes {@link AWS_CREDENTIAL_CHAIN_PROVIDER}: its keys being set doesn't
+ *  create the "key configured but agent unbound" gap this list feeds. */
+export function listConfiguredSwitchableProviders(): ProviderInfo[] {
+  return listModelProviders().filter((p) => {
+    if (p.id === AWS_CREDENTIAL_CHAIN_PROVIDER) return false
+    return p.fields.some((f) => {
+      const v = readSetting(`${p.id}.secrets.${f.key}`)
+      return v != null && v.length > 0
+    })
+  })
+}
+
+/** Current `model.provider` of the seeded global default agent, or undefined
+ *  when the file is missing / unparseable / uses the string-model shorthand. */
+export function readDefaultAgentProvider(): string | undefined {
+  const data = readYamlFile(path.join(GLOBAL_AGENTS_DIR, 'default', 'agent.yaml')) as
+    | { model?: { provider?: unknown } }
+    | null
+  const provider = data?.model && typeof data.model === 'object' ? data.model.provider : undefined
+  return typeof provider === 'string' && provider.length > 0 ? provider : undefined
+}
+
+/** Derive an agent.yaml `model:` block from the bundled provider template.
+ *  Near-duplicate of routes/agent-configs.ts:buildScaffoldModelBlock, but
+ *  reads templates/models/ directly (setup runs outside the server process,
+ *  so the seeded registry cache isn't available) — kept separate so the CLI
+ *  setup path doesn't import the routes/tools chain. */
+function buildTemplateModelBlock(providerId: string): Record<string, unknown> | null {
+  const data = readYamlFile(path.join(TEMPLATES_DIR, 'models', `${providerId}.yaml`)) as Record<string, unknown> | null
+  if (!data || typeof data !== 'object') return null
+  const models = Array.isArray(data.models) ? data.models as Array<Record<string, unknown>> : []
+  const modelId = (typeof data.defaultModelId === 'string' ? data.defaultModelId : undefined)
+    ?? (models[0] ? models[0].id as string | undefined : undefined)
+  const endpoint = typeof data.defaultEndpoint === 'string' ? data.defaultEndpoint : undefined
+  const model = models.find((m) => m.id === modelId)
+  const caps = (model?.capabilities as Record<string, unknown> | undefined) ?? {}
+  const promptCaching = (caps.promptCaching as { default?: string } | undefined)?.default
+  const thinkingCap = caps.thinking as
+    | { defaultEnabled?: boolean; default?: string; defaultBudgetTokens?: number }
+    | undefined
+
+  const block: Record<string, unknown> = { provider: providerId }
+  if (modelId) block.id = modelId
+  if (endpoint) block.endpoint = endpoint
+  if (promptCaching) block.promptCaching = promptCaching
+  if (thinkingCap?.defaultEnabled) {
+    const thinking: Record<string, unknown> = { enabled: true }
+    if (thinkingCap.default) thinking.effort = thinkingCap.default
+    if (thinkingCap.defaultBudgetTokens != null) thinking.budget_tokens = thinkingCap.defaultBudgetTokens
+    block.thinking = thinking
+  }
+  return block
+}
+
+/** Rebind the user-facing built-in agents to `providerId`, deriving model id /
+ *  endpoint / promptCaching / thinking from the provider's bundled YAML.
+ *  Writes via the yaml Document API so user comments in agent.yaml survive,
+ *  and init.ts's mergeAgentYaml preserves the new `model:` block across
+ *  template reseeds. Returns the ids actually updated (missing / broken agent
+ *  files are skipped), or null when the provider is unknown. */
+export function bindBuiltinAgentsToProvider(providerId: string): { modelId?: string; agents: string[] } | null {
+  const block = buildTemplateModelBlock(providerId)
+  if (!block) return null
+  const agents: string[] = []
+  for (const id of REBIND_BUILTIN_AGENT_IDS) {
+    const yamlPath = path.join(GLOBAL_AGENTS_DIR, id, 'agent.yaml')
+    if (!fs.existsSync(yamlPath)) continue
+    try {
+      const doc = YAML.parseDocument(fs.readFileSync(yamlPath, 'utf-8'))
+      doc.set('model', block)
+      fs.writeFileSync(yamlPath, doc.toString(), 'utf-8')
+      agents.push(id)
+    } catch { /* skip agents with broken yaml — never fail the whole setup */ }
+  }
+  // Keep future scaffolds consistent with the explicit choice: without this,
+  // agents created later from the admin UI would still default to Bedrock
+  // (config.agent.defaultProvider falls back to it when unset).
+  writeSetting('general.agent.default_provider', providerId)
+  return { modelId: typeof block.id === 'string' ? block.id : undefined, agents }
 }
 
 /** Look up info for required skills (templates/skills/<id>/) — only those whose
