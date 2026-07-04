@@ -22,6 +22,7 @@ import { createSessionRoutes } from './routes/sessions.js'
 import { createShowRoutes } from './routes/show.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
+import { createAgentCoreRoutes, setupAgentCoreWebSocket } from './routes/agentcore.js'
 import { commandRegistry } from './commands/index.js'
 import { DISPATCH_COMMANDS } from './channels/shared/commands.js'
 import { setupWebSocketHandler } from './ws/handler.js'
@@ -175,16 +176,22 @@ if (!fs.existsSync(path.join(HALO_HOME, 'global', '.template-version'))) {
   }
 }
 
+// Amazon Bedrock AgentCore Runtime mode: auth is terminated upstream by
+// AgentCore (SigV4/OAuth), each session runs in its own microVM, and the only
+// exposed surface is /ping + /invocations + WS /ws (routes/agentcore.ts).
+// So: no password/JWT gate, no single-instance lock, no channels/cron/evo.
+const AGENTCORE = config.server.runtimeMode === 'agentcore'
+
 // HALO_PASSWORD env (plaintext) is a first-class credential, not just a login
 // bypass: the Docker/CI flow (`halo setup -y && HALO_PASSWORD=... halo server
 // start`) never stores a scrypt hash, so the gate must accept either. The
 // login path in middleware/auth.ts already compares env plaintext first.
-if ((!config.server.password && !config.server.passwordEnvPlaintext) || !config.server.jwtSecret) {
+if (!AGENTCORE && ((!config.server.password && !config.server.passwordEnvPlaintext) || !config.server.jwtSecret)) {
   process.stderr.write('\x1b[31m[Server] admin password not configured. Run `halo setup` to set one, or set the HALO_PASSWORD env.\x1b[0m\n')
   process.exit(1)
 }
 
-acquireSingleInstanceLock(path.join(HALO_HOME, 'global', 'server.lock'))
+if (!AGENTCORE) acquireSingleInstanceLock(path.join(HALO_HOME, 'global', 'server.lock'))
 
 // Sanity check: every server-handled command must have a dispatch case, and
 // every dispatch case must have a registered descriptor (regardless of type
@@ -347,8 +354,10 @@ setCronDb(createCronDb(path.join(HALO_HOME, 'global')))
 // executes. A cheap no-op when the queue is empty. Started here so any
 // `running` rows from a previous server process get cleaned up promptly.
 setEvoSpawner(realEvoSpawner)
-startEvoTicker()
-startArchiveDaemon()
+if (!AGENTCORE) {
+  startEvoTicker()
+  startArchiveDaemon()
+}
 // Server owns the workspace runtime (holds server.lock) — reconcile
 // crash-orphaned sub-sessions when each workspace's manager is first built.
 // CLI/TUI registries deliberately omit this so they never disturb a running
@@ -375,11 +384,19 @@ app.route('/api', commandRoutes)
 // Boot every registered channel: registers its cron dispatcher, starts
 // long-poll/SSE runners, mounts admin routes. Adding a new channel =
 // add an entry to `defaultChannelDescriptors`; this block stays untouched.
-bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
+if (!AGENTCORE) {
+  bootChannels(app, defaultChannelDescriptors, { registry, db: channelDb })
 
-// Cron daemon runs after channels boot so every cron dispatcher is
-// registered before the first scheduled fire could happen.
-startCronDaemon()
+  // Cron daemon runs after channels boot so every cron dispatcher is
+  // registered before the first scheduled fire could happen.
+  startCronDaemon()
+} else {
+  // AgentCore adapter: /ping + /invocations at the root (the AgentCore
+  // contract paths, not under /api — no auth middleware applies to them).
+  const agentcoreRoutes = createAgentCoreRoutes({ registry, workspace: config.server.agentcoreWorkspace })
+  app.route('/', agentcoreRoutes)
+  console.log(`[Server] AgentCore runtime mode — workspace: ${config.server.agentcoreWorkspace}`)
+}
 
 // ------------------------------------------------------------------
 // Serve static frontend (Next.js static export)
@@ -438,7 +455,9 @@ const server = serve({
 const wss = new WebSocketServer({
   server: server as import('node:http').Server,
   path: '/ws',
-  verifyClient: (info, callback) => {
+  // AgentCore terminates auth upstream (SigV4/OAuth) before the connection
+  // reaches the container, so its /ws is open; normal mode keeps cookie auth.
+  verifyClient: AGENTCORE ? undefined : (info, callback) => {
     // Authenticate WebSocket connections via cookie
     const token = getTokenFromCookieHeader(info.req.headers.cookie)
     if (isAuthenticated(token)) {
@@ -449,11 +468,17 @@ const wss = new WebSocketServer({
   },
 })
 
-setupWebSocketHandler({ wss, registry })
-// Make `wss` reachable from non-handler code (evo wrapper, cron runner,
-// admin route mutations) so they can `broadcast({ type, ... })` without
-// having to thread the handle through every call site.
-setBroadcastWss(wss)
+if (AGENTCORE) {
+  setupAgentCoreWebSocket({ wss, registry, workspace: config.server.agentcoreWorkspace })
+  // No setBroadcastWss: admin broadcast frames (session:changed etc.) must
+  // not leak into the AgentCore WS protocol; broadcast() no-ops unset.
+} else {
+  setupWebSocketHandler({ wss, registry })
+  // Make `wss` reachable from non-handler code (evo wrapper, cron runner,
+  // admin route mutations) so they can `broadcast({ type, ... })` without
+  // having to thread the handle through every call site.
+  setBroadcastWss(wss)
+}
 
 console.log(`[Server] WebSocket server ready on ws://localhost:${PORT}/ws`)
 

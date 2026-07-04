@@ -273,6 +273,14 @@ export const config = {
     get trustProxy(): boolean {
       return settingsBool('general.server.trust_proxy', false)
     },
+    /** `HALO_RUNTIME_MODE=agentcore` runs the server as an Amazon Bedrock
+     *  AgentCore Runtime container: auth is terminated upstream by AgentCore,
+     *  so password/JWT checks, channels, cron/evolution and the instance lock
+     *  are skipped, and the /ping + /invocations + WS /ws adapter is mounted
+     *  (see routes/agentcore.ts). Unset / any other value → normal server. */
+    runtimeMode: process.env.HALO_RUNTIME_MODE ?? null,
+    /** Workspace for agentcore mode. Env `HALO_WORKSPACE`, fallback cwd. */
+    agentcoreWorkspace: process.env.HALO_WORKSPACE ?? process.cwd(),
   },
 
   // `model.compressAt` is intentionally a getter — it reads from

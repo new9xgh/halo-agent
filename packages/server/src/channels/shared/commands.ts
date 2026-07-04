@@ -318,7 +318,12 @@ function visibleSessions(ctx: CommandContext) {
       ? { rootOnly: true, limit: CHANNEL_LIST_LIMIT }
       : { rootOnly: true, prefix: ctx.sessionPrefix, limit: CHANNEL_LIST_LIMIT },
   )
-  return sessions
+  // Sort by createdAt DESC so session indices are stable during a
+  // conversation. The DB query sorts by updatedAt (most-recently-active
+  // first) which is useful for the admin panel, but for channel /list and
+  // /switch it causes index drift: sending a message bumps updatedAt,
+  // shuffling the numbering and making `/session switch N` unreliable.
+  return sessions.sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export function execList(ctx: CommandContext): CommandResult {
