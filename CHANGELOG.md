@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Amazon Bedrock AgentCore runtime mode (`HALO_RUNTIME_MODE=agentcore`): `/ping` + `/invocations` + streaming WS adapter, per-user EFS-backed workspaces, channels/cron/evolution disabled — plus a full demo package (Dockerfile, chat frontend, CDK stack, auth/presign Lambdas) under `packages/agentcore-demo/`.
 - Halo City: gentle procedural background music — a quiet music-box pentatonic line, pure Web Audio with zero assets, 🎵/🔇 HUD toggle with localStorage persistence.
 - Halo City: desk-slacking idle activities — citizens can play a falling-blocks mini-game on their own monitor or scroll their phone at their desk.
 - Web demo rebuilt on the agentcore-demo visual foundation: markdown rendering with streaming typewriter, collapsible thinking/tool blocks, mobile-first layout, and a direct-connect mode (server URL + web token straight from the browser, no proxy).
