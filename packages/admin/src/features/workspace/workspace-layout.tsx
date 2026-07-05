@@ -277,8 +277,10 @@ export function WorkspaceLayout({ connected }: WorkspaceLayoutProps) {
         const store = useEditorStore.getState()
         store.setBottomTab(store.bottomTab === 'terminal' ? 'chat' : 'terminal')
       }
-      // Alt + W → Close active editor tab (Cmd+W can't be overridden in browsers)
-      if (e.altKey && e.key === 'w') {
+      // Alt/Option + W → Close active editor tab (Cmd+W can't be overridden
+      // in browsers). Match on e.code (physical key): on macOS Option+W types
+      // '∑', so an e.key === 'w' check never fires there.
+      if (e.altKey && e.code === 'KeyW' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault()
         closeActiveTab()
       }
