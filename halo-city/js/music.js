@@ -115,11 +115,13 @@ function playChord() {
     const ng = ctx.createGain()
     ng.gain.value = NOTE_LEVELS[i] || 0.06
     ng.connect(chordGain)
-    for (const [type, cents] of [['sine', -4], ['triangle', 4]]) {
+    // Fixed ±0.2Hz offset, NOT cents: cents scale with pitch, so high notes
+    // beat 2-3×/s — reads as a nervous fast shimmer. A constant Hz offset
+    // gives every note the same slow ~0.4Hz breathing beat.
+    for (const [type, dHz] of [['sine', -0.2], ['triangle', 0.2]]) {
       const o = ctx.createOscillator()
       o.type = type
-      o.frequency.value = hz(m)
-      o.detune.value = cents
+      o.frequency.value = hz(m) + dHz
       o.connect(ng)
       o.start(now)
       o.stop(end + 0.1)
