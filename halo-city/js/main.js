@@ -5,6 +5,7 @@ import { showInspector, hideInspector, bindInspector } from './inspector.js'
 import { bindTicker, renderTicker } from './ticker.js'
 import { kfmt } from './util.js'
 import { t, getLang, nextLang, setLang, applyStaticI18n, onLangChange } from './i18n.js'
+import { initMusic } from './music.js'
 
 const $ = (id) => document.getElementById(id)
 const canvas = $('stage')
@@ -290,6 +291,7 @@ $('in-token').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryCon
 $('in-api').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryConnect() })
 $('btn-settings').addEventListener('click', () => { if (stopPoll) { stopPoll(); stopPoll = null } showSetup() })
 $('btn-lang').addEventListener('click', () => setLang(nextLang()))
+initMusic()
 syncLangBtn()
 applyStaticI18n()  // localize the setup modal before first connect
 
