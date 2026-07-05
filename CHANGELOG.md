@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Admin explorer: dragging a file over a collapsed folder no longer bursts it open in passing — spring-loaded expand after a ~600ms hover (VSCode/Finder behaviour), cancelled on drag-leave; dropping into a collapsed folder still expands it.
 - Halo City: stable desk assignment — `/api/show/state` orders sessions by `updated_at`, which reshuffled desks every poll; citizens now keep one desk for their whole stay and return to it after breaks.
 - Halo City: citizens roam within ±4 floors of their home floor instead of trekking the whole tower; deeply-nested sub-agents spawn on their session tree's root floor instead of the lobby; floor panel lists a citizen on their desk floor even while away on a break.
 - Web demo: `GET /file` proxy route was missing auth middleware.
