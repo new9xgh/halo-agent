@@ -109,3 +109,6 @@ packages/agentcore-demo/deploy/
 # CDK synth output + context cache (context caches account id / AZs)
 cdk.out/
 cdk.context.json
+
+# halo-city .musictest.mjs screenshot output (lands in whatever cwd ran it)
+.musictest.png

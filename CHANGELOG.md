@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-05
+
+### Fixed
+
+- Admin explorer: dragging a file over a collapsed folder no longer bursts it open in passing — spring-loaded expand after a ~600ms hover (VSCode/Finder behaviour), cancelled on drag-leave; dropping into a collapsed folder still expands it.
+
 ## [0.2.2] - 2026-07-05
 
 ### Added
@@ -19,7 +25,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Admin explorer: dragging a file over a collapsed folder no longer bursts it open in passing — spring-loaded expand after a ~600ms hover (VSCode/Finder behaviour), cancelled on drag-leave; dropping into a collapsed folder still expands it.
 - Halo City: stable desk assignment — `/api/show/state` orders sessions by `updated_at`, which reshuffled desks every poll; citizens now keep one desk for their whole stay and return to it after breaks.
 - Halo City: citizens roam within ±4 floors of their home floor instead of trekking the whole tower; deeply-nested sub-agents spawn on their session tree's root floor instead of the lobby; floor panel lists a citizen on their desk floor even while away on a break.
 - Web demo: `GET /file` proxy route was missing auth middleware.
@@ -222,7 +227,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/turmind/halo-agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/turmind/halo-agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/turmind/halo-agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/turmind/halo-agent/compare/v0.1.9...v0.2.0
