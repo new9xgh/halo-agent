@@ -1,9 +1,8 @@
-// Procedurally generated ambient background music — pure Web Audio API, no
-// audio assets, no network. A slow lo-fi pad drifts through a warm C-major
-// I–vi–IV–V progression (maj9 / add9 voicings, ~24s per chord with long
-// crossfades), plus a sparse pentatonic pluck with a soft echo tail. Every
-// node runs behind one master gain + gentle lowpass so nothing is ever harsh,
-// and the whole graph is independent of the canvas render loop.
+// Gentle procedural background music — pure Web Audio API, no audio assets,
+// no network. A quiet music-box line: single soft sine notes wandering a
+// C-major pentatonic scale (small steps, occasional rests), each one struck
+// and left to decay naturally — no sustained tones at all, so there is
+// nothing to hum or throb. A damped echo gives the notes a little air.
 //
 // Browsers gate audio behind a user gesture, so the AudioContext is created
 // on the first pointerdown / keydown anywhere. The 🎵 HUD button toggles it
@@ -12,37 +11,28 @@
 import { t, onLangChange } from './i18n.js'
 
 const LS_KEY = 'halo_city_music'
-const MASTER_VOL = 0.055        // sleep-friendly: barely-there by default
+const MASTER_VOL = 0.07         // quiet by design
 const FADE_S = 1                // toggle fade in/out (no clicks/pops)
-const CHORD_S = 24              // seconds per chord
-const XFADE_S = 8               // attack/release overlap between chords
 
-// MIDI voicings, C major, no leading-tone tension:
-//   Cmaj9 → Am9 → Fmaj9 → G(add9)
-// Bass sits at C3+ — sub-100Hz sustained tones (old F2/G2 roots) read as a
-// headache-inducing hum, so everything below C3 was lifted an octave.
-const CHORDS = [
-  [48, 55, 64, 71, 74],         // C3 G3 E4 B4 D5 — Cmaj9
-  [57, 64, 60, 67, 71],         // A3 E4 C4 G4 B4 — Am9
-  [53, 60, 64, 67, 69],         // F3 C4 E4 G4 A4 — Fmaj9
-  [55, 62, 59, 69, 74],         // G3 D4 B3 A4 D5 — G(add9)
-]
-const NOTE_LEVELS = [0.14, 0.11, 0.09, 0.07, 0.06]  // quieter as we go up
-const PLUCK_NOTES = [60, 62, 64, 67, 69, 72]        // C major pentatonic C4–C5
-                                                    // (was C5–C6 — an octave too
-                                                    // eerie at night; keep it low)
+// C-major pentatonic, mid register only (C4–E5): no leading-tone tension,
+// nothing shrill up top, and no sustained lows — any interval in this set
+// sounds consonant, so a random walk can't hit a sour note.
+const SCALE = [60, 62, 64, 67, 69, 72, 74, 76]
+const NOTE_GAP_MS = [1700, 3200]  // pause between notes (min, max)
+const BREATH_MS = [3800, 6000]    // longer rest every few notes
+const DECAY_S = 5                 // natural ring-out per note
 
 const hz = (m) => 440 * Math.pow(2, (m - 69) / 12)
+const rand = (a, b) => a + Math.random() * (b - a)
 
 let musicOn = loadPref()
 let ctx = null                  // created lazily on first gesture
 let master = null               // master gain — all fades happen here
-let pluckSend = null            // pluck → echo (feedback delay) input
-let voices = []                 // live pad chords: { gain, oscs }
-let chordIdx = 0
-let nextChordAt = 0             // ctx time of the next chord change
-let chordTimer = 0
-let pluckTimer = 0
+let echoSend = null             // note → damped feedback delay (a little air)
+let voices = []                 // notes still ringing: { gain, oscs }
+let noteTimer = 0
+let scaleIdx = 3                // start mid-scale (G4)
+let sinceBreath = 0
 let btn = null
 
 function loadPref() {
@@ -54,39 +44,32 @@ function ensureCtx() {
   if (ctx) return
   ctx = new (window.AudioContext || window.webkitAudioContext)()
 
-  // master gain → lowpass → out. The lowpass keeps everything mellow; a very
-  // slow LFO drifts its cutoff so the pad subtly breathes over ~50s.
+  // master gain → gentle lowpass → out (sines carry no harmonics; the filter
+  // just rounds off the echo tails and any note-attack edge)
   master = ctx.createGain()
   master.gain.value = 0
   const lowpass = ctx.createBiquadFilter()
   lowpass.type = 'lowpass'
-  lowpass.frequency.value = 1100
-  lowpass.Q.value = 0.4
+  lowpass.frequency.value = 1800
+  lowpass.Q.value = 0.3
   master.connect(lowpass)
   lowpass.connect(ctx.destination)
-  const lfo = ctx.createOscillator()
-  lfo.frequency.value = 0.02
-  const lfoAmt = ctx.createGain()
-  lfoAmt.gain.value = 350
-  lfo.connect(lfoAmt)
-  lfoAmt.connect(lowpass.frequency)
-  lfo.start()
 
-  // pluck echo: damped feedback delay, reverb-ish long tail
+  // soft echo: damped feedback delay so each note leaves a fading trace
   const delay = ctx.createDelay(2)
-  delay.delayTime.value = 0.5
+  delay.delayTime.value = 0.45
   const damp = ctx.createBiquadFilter()
   damp.type = 'lowpass'
-  damp.frequency.value = 1000
+  damp.frequency.value = 1200
   const fb = ctx.createGain()
-  fb.gain.value = 0.45
+  fb.gain.value = 0.3
   delay.connect(damp)
   damp.connect(fb)
   fb.connect(delay)
   damp.connect(master)
-  pluckSend = ctx.createGain()
-  pluckSend.gain.value = 0.7
-  pluckSend.connect(delay)
+  echoSend = ctx.createGain()
+  echoSend.gain.value = 0.35
+  echoSend.connect(delay)
 }
 
 function fadeTo(v) {
@@ -96,93 +79,74 @@ function fadeTo(v) {
   g.linearRampToValueAtTime(v, now + FADE_S)
 }
 
-// One pad chord: per note a detuned sine+triangle pair into a note gain, all
-// through a chord gain running a slow attack → sustain → release envelope.
-// Envelope times use ctx.currentTime (sample-accurate); only the composition
-// clock (which chord when) rides setTimeout.
-function playChord() {
-  const notes = CHORDS[chordIdx % CHORDS.length]
-  chordIdx++
+// One struck note: pure sine, soft 30ms attack, long natural decay. Every
+// few notes a quiet fifth-below shadow note adds warmth (also decaying —
+// nothing in this engine sustains). Envelope times are sample-accurate on
+// ctx.currentTime; only "when is the next note" rides setTimeout.
+function playNote(midi, level, withShadow) {
   const now = ctx.currentTime
-  const end = now + CHORD_S + XFADE_S
-  const chordGain = ctx.createGain()
-  chordGain.gain.setValueAtTime(0, now)
-  chordGain.gain.linearRampToValueAtTime(1, now + XFADE_S)
-  chordGain.gain.setValueAtTime(1, now + CHORD_S)
-  chordGain.gain.linearRampToValueAtTime(0, end)
-  chordGain.connect(master)
-
   const oscs = []
-  notes.forEach((m, i) => {
-    const ng = ctx.createGain()
-    ng.gain.value = NOTE_LEVELS[i] || 0.06
-    ng.connect(chordGain)
-    // One pure sine per note. The old sine+triangle pair hummed two ways:
-    // the triangle's odd harmonics buzz in the low register, and any pair
-    // of oscillators beats. Pure sines have no harmonics at all — nothing
-    // left to buzz.
+  const gains = []
+  const strike = (m, vol) => {
     const o = ctx.createOscillator()
     o.type = 'sine'
     o.frequency.value = hz(m)
-    o.connect(ng)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, now)
+    g.gain.exponentialRampToValueAtTime(vol, now + 0.03)
+    g.gain.exponentialRampToValueAtTime(0.0001, now + DECAY_S)
+    o.connect(g)
+    g.connect(master)
+    g.connect(echoSend)
     o.start(now)
-    o.stop(end + 0.1)
+    o.stop(now + DECAY_S + 0.1)
     oscs.push(o)
-  })
-  const voice = { gain: chordGain, oscs }
+    gains.push(g)
+  }
+  strike(midi, level)
+  if (withShadow) strike(midi - 12 < 48 ? midi - 5 : midi - 12, level * 0.4)
+
+  const voice = { gain: gains[0], oscs }
   voices.push(voice)
   oscs[0].onended = () => {
-    chordGain.disconnect()
+    for (const g of gains) g.disconnect()
     voices = voices.filter((v) => v !== voice)
   }
-
-  nextChordAt = now + CHORD_S
-  chordTimer = setTimeout(playChord, CHORD_S * 1000)
 }
 
-// Sparse texture: one soft pentatonic note every 9–23s, long echo tail.
-function playPluck() {
-  const now = ctx.currentTime
-  const o = ctx.createOscillator()
-  o.type = 'triangle'
-  o.frequency.value = hz(PLUCK_NOTES[Math.floor(Math.random() * PLUCK_NOTES.length)])
-  const g = ctx.createGain()
-  g.gain.setValueAtTime(0.0001, now)
-  g.gain.exponentialRampToValueAtTime(0.035, now + 0.08)
-  g.gain.exponentialRampToValueAtTime(0.0001, now + 4.5)
-  o.connect(g)
-  g.connect(master)
-  g.connect(pluckSend)
-  o.start(now)
-  o.stop(now + 4.6)
-  o.onended = () => g.disconnect()
-}
+// Melody: a lazy random walk over the pentatonic scale — mostly small steps,
+// soft velocity variation, a longer breath every 5–8 notes.
+function scheduleNote(delayMs) {
+  noteTimer = setTimeout(() => {
+    const step = [-2, -1, -1, 0, 1, 1, 2][Math.floor(Math.random() * 7)]
+    scaleIdx = Math.max(0, Math.min(SCALE.length - 1, scaleIdx + step))
+    sinceBreath++
+    playNote(SCALE[scaleIdx], rand(0.32, 0.5), Math.random() < 0.3)
 
-function schedulePluck() {
-  pluckTimer = setTimeout(() => { playPluck(); schedulePluck() }, 9000 + Math.random() * 14000)
+    let gap = rand(NOTE_GAP_MS[0], NOTE_GAP_MS[1])
+    if (sinceBreath >= 5 + Math.floor(Math.random() * 4)) {
+      gap = rand(BREATH_MS[0], BREATH_MS[1])
+      sinceBreath = 0
+    }
+    scheduleNote(gap)
+  }, delayMs)
 }
 
 // ── transport ──
 function start() {
   ensureCtx()
   if (ctx.state === 'suspended') ctx.resume()
-  clearTimeout(chordTimer)
-  clearTimeout(pluckTimer)
+  clearTimeout(noteTimer)
   fadeTo(MASTER_VOL)
-  // If re-toggled during the fade-out window, the old chord is still ringing
-  // on schedule — rejoin at its planned change instead of stacking a new one.
-  const delay = voices.length ? Math.max(0, nextChordAt - ctx.currentTime) * 1000 : 0
-  if (delay > 0) chordTimer = setTimeout(playChord, delay)
-  else playChord()
-  schedulePluck()
+  playNote(SCALE[scaleIdx], 0.4, false)   // open immediately, then wander
+  scheduleNote(rand(NOTE_GAP_MS[0], NOTE_GAP_MS[1]))
 }
 
 function stop() {
   if (!ctx) return
-  clearTimeout(chordTimer)
-  clearTimeout(pluckTimer)
+  clearTimeout(noteTimer)
   fadeTo(0)
-  // after the fade lands: silence the voices and suspend — zero CPU when off
+  // after the fade lands: silence ringing notes and suspend — zero CPU off
   setTimeout(() => {
     if (musicOn) return   // re-toggled on during the fade
     for (const v of voices) {
