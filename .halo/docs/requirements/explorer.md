@@ -55,6 +55,7 @@ VS Code-style highlight selection (no checkboxes):
 - Selected files/folders drag onto a target dir
 - Multi-file drag supported
 - Each file goes through `POST /api/files/rename` with `{oldPath, newPath}`
+- **Spring-loaded expand** (applies to both tree-internal drags and OS-file drops): a collapsed folder does **not** expand the moment a drag passes over it — it unfolds only after the drag hovers on it for ~600ms (VSCode/Finder behaviour; the timer cancels on drag-leave). Dropping into a collapsed folder expands it immediately to show the result
 
 ### Right-click menu
 
