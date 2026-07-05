@@ -6,14 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-05
+
 ### Added
 
+- Halo City: gentle procedural background music — a quiet music-box pentatonic line, pure Web Audio with zero assets, 🎵/🔇 HUD toggle with localStorage persistence.
+- Halo City: desk-slacking idle activities — citizens can play a falling-blocks mini-game on their own monitor or scroll their phone at their desk.
+- Web demo rebuilt on the agentcore-demo visual foundation: markdown rendering with streaming typewriter, collapsible thinking/tool blocks, mobile-first layout, and a direct-connect mode (server URL + web token straight from the browser, no proxy).
 - Vitest infrastructure for core, cli, and admin (previously only server had tests) — 106 new tests, 345 total across the four packages, CI now runs all four `test` scripts.
 - `start_session` tool gains an optional `title` parameter — sub-sessions can have a meaningful sidebar title from creation instead of waiting for auto-generation.
 - `halo setup` auto-bind: when a non-Bedrock provider has keys configured, setup offers to rebind built-in agents (default/executor/deep-executor) to that provider. Non-interactive: `HALO_DEFAULT_PROVIDER=<provider>`.
 
 ### Fixed
 
+- Halo City: stable desk assignment — `/api/show/state` orders sessions by `updated_at`, which reshuffled desks every poll; citizens now keep one desk for their whole stay and return to it after breaks.
+- Halo City: citizens roam within ±4 floors of their home floor instead of trekking the whole tower; deeply-nested sub-agents spawn on their session tree's root floor instead of the lobby; floor panel lists a citizen on their desk floor even while away on a break.
+- Web demo: `GET /file` proxy route was missing auth middleware.
 - `validatePath` sibling-directory escape: a bare `startsWith(projectRoot)` prefix check let a sibling like `/x/myapp-secret` pass `/x/myapp`'s guard; now matches on a path-segment boundary.
 - `validatePath` now resolves symlinks (realpath) — a symlink pointing outside the workspace is rejected instead of silently followed. Windows-compatible (junctions handled).
 - `/api/web/file` symlink traversal: the endpoint followed symlinks pointing outside the workspace; now rejects with 403 (dangling symlinks return 404).
@@ -213,7 +221,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/turmind/halo-agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/turmind/halo-agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/turmind/halo-agent/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/turmind/halo-agent/compare/v0.1.8...v0.1.9
