@@ -26,7 +26,9 @@ const CHORDS = [
   [43, 50, 59, 69, 74],         // G2 D3 B3 A4 D5 — G(add9)
 ]
 const NOTE_LEVELS = [0.16, 0.13, 0.09, 0.07, 0.06]  // quieter as we go up
-const PLUCK_NOTES = [72, 74, 76, 79, 81, 84]        // C major pentatonic C5–C6
+const PLUCK_NOTES = [60, 62, 64, 67, 69, 72]        // C major pentatonic C4–C5
+                                                    // (was C5–C6 — an octave too
+                                                    // eerie at night; keep it low)
 
 const hz = (m) => 440 * Math.pow(2, (m - 69) / 12)
 
@@ -56,7 +58,7 @@ function ensureCtx() {
   master.gain.value = 0
   const lowpass = ctx.createBiquadFilter()
   lowpass.type = 'lowpass'
-  lowpass.frequency.value = 1500
+  lowpass.frequency.value = 1100
   lowpass.Q.value = 0.4
   master.connect(lowpass)
   lowpass.connect(ctx.destination)
@@ -143,7 +145,7 @@ function playPluck() {
   o.frequency.value = hz(PLUCK_NOTES[Math.floor(Math.random() * PLUCK_NOTES.length)])
   const g = ctx.createGain()
   g.gain.setValueAtTime(0.0001, now)
-  g.gain.exponentialRampToValueAtTime(0.05, now + 0.04)
+  g.gain.exponentialRampToValueAtTime(0.035, now + 0.08)
   g.gain.exponentialRampToValueAtTime(0.0001, now + 4.5)
   o.connect(g)
   g.connect(master)
