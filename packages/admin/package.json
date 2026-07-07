@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "next build --no-lint && node scripts/copy-monaco.mjs && next start --port 3000",
+    "dev": "node scripts/copy-monaco.mjs --dev && next dev --port 3000",
     "build": "next build && node scripts/copy-monaco.mjs",
     "lint": "eslint src",
     "test": "vitest run",

@@ -7,6 +7,9 @@ out/
 .next/
 *.tsbuildinfo
 
+# Monaco staged into public/ by copy-monaco.mjs --dev (next dev serves it at /monaco/vs)
+packages/admin/public/monaco/
+
 # Runtime data
 data/
 *.db

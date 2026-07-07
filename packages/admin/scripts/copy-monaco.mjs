@@ -26,17 +26,23 @@ const ADMIN_ROOT = path.resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
 const monacoPkg = require.resolve('monaco-editor/package.json')
 const VS_SRC = path.join(path.dirname(monacoPkg), 'min', 'vs')
-const VS_DST = path.join(ADMIN_ROOT, 'out', 'monaco', 'vs')
+
+// `--dev`: stage into public/ (which `next dev` serves at the root) instead of
+// out/, which only exists after a build — so `/monaco/vs` resolves on :3000 too.
+const isDev = process.argv.includes('--dev')
+const VS_DST = isDev
+  ? path.join(ADMIN_ROOT, 'public', 'monaco', 'vs')
+  : path.join(ADMIN_ROOT, 'out', 'monaco', 'vs')
 
 if (!fs.existsSync(VS_SRC)) {
   console.error(`[copy-monaco] missing ${VS_SRC} — is monaco-editor installed?`)
   process.exit(1)
 }
-if (!fs.existsSync(path.join(ADMIN_ROOT, 'out'))) {
+if (!isDev && !fs.existsSync(path.join(ADMIN_ROOT, 'out'))) {
   console.error('[copy-monaco] out/ not found — run `next build` first')
   process.exit(1)
 }
 
 fs.rmSync(VS_DST, { recursive: true, force: true })
 fs.cpSync(VS_SRC, VS_DST, { recursive: true })
-console.log(`[copy-monaco] copied min/vs → out/monaco/vs`)
+console.log(`[copy-monaco] copied min/vs → ${path.relative(ADMIN_ROOT, VS_DST)}`)
