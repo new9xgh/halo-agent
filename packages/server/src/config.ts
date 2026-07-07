@@ -225,6 +225,20 @@ function expandEnv(raw: string | undefined): string {
   return raw.replace(ENV_PATTERN, (m, name: string) => process.env[name] ?? m)
 }
 
+/** Mtime-cached per-workspace settings (`<ws>/.halo/settings.yaml`) — same
+ *  pattern as the global getSettings() above, keyed by workspace root. */
+const _wsSettingsCache = new Map<string, { mtimeMs: number; data: Record<string, unknown> }>()
+function getWorkspaceSettings(workspaceRoot: string): Record<string, unknown> {
+  const p = path.join(workspaceRoot, '.halo', 'settings.yaml')
+  let mtimeMs = 0
+  try { mtimeMs = fs.statSync(p).mtimeMs } catch { /* missing → mtime 0 */ }
+  const hit = _wsSettingsCache.get(workspaceRoot)
+  if (hit && hit.mtimeMs === mtimeMs) return hit.data
+  const entry = { mtimeMs, data: loadYamlFile(p) }
+  _wsSettingsCache.set(workspaceRoot, entry)
+  return entry.data
+}
+
 /**
  * Read a server-side secret declared by a provider/skill.
  *
@@ -236,10 +250,19 @@ function expandEnv(raw: string | undefined): string {
  *   `aws-bedrock-claude-invoke.secrets.access_key_id`
  * — searchable by the same id used in agent.yaml `model.provider`.
  *
+ * When `workspaceRoot` is given, `<ws>/.halo/settings.yaml` overrides global —
+ * the read order the settings UI already promises (default <- global <-
+ * workspace). Runtime callers that know their workspace must pass it, or
+ * workspace-scoped provider keys silently never reach the model call.
+ *
  * `<<ENV_NAME>>` placeholders inside the stored value are expanded against
  * process.env at read time.
  */
-export function getServerSecret(namespaceId: string, key: string): string {
+export function getServerSecret(namespaceId: string, key: string, workspaceRoot?: string): string {
+  if (workspaceRoot) {
+    const ws = readYamlValue(getWorkspaceSettings(workspaceRoot), `${namespaceId}.secrets.${key}`)
+    if (ws != null && String(ws) !== '') return expandEnv(String(ws))
+  }
   return expandEnv(settingsValue(`${namespaceId}.secrets.${key}`))
 }
 
@@ -472,8 +495,8 @@ export function resolveMaxOutputTokens(modelId: string): number {
  * canonical env var and "succeed", instead of telling the user the
  * configured ref was wrong.
  */
-export function resolveApiKey(providerId: string): string | undefined {
-  return getServerSecret(providerId, 'api_key') || undefined
+export function resolveApiKey(providerId: string, workspaceRoot?: string): string | undefined {
+  return getServerSecret(providerId, 'api_key', workspaceRoot) || undefined
 }
 
 /**
@@ -483,10 +506,10 @@ export function resolveApiKey(providerId: string): string | undefined {
  * one (e.g. the legacy single-provider call sites). Returns undefined fields
  * when not set so callers can fall back to the AWS SDK credential chain.
  */
-export function resolveAwsCredentials(providerId = 'aws-bedrock-claude-invoke'): { accessKeyId: string; secretAccessKey: string } {
+export function resolveAwsCredentials(providerId = 'aws-bedrock-claude-invoke', workspaceRoot?: string): { accessKeyId: string; secretAccessKey: string } {
   return {
-    accessKeyId: getServerSecret(providerId, 'access_key_id'),
-    secretAccessKey: getServerSecret(providerId, 'secret_access_key'),
+    accessKeyId: getServerSecret(providerId, 'access_key_id', workspaceRoot),
+    secretAccessKey: getServerSecret(providerId, 'secret_access_key', workspaceRoot),
   }
 }
 

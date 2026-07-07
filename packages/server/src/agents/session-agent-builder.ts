@@ -473,9 +473,9 @@ do delegate, say so in one line and keep going.`
     } | undefined
     const thinkingMode = resolveThinkingMode(modelId)
 
-    const aws = resolveAwsCredentials(providerId)
+    const aws = resolveAwsCredentials(providerId, this.host.workspaceRoot)
     const awsCreds = aws.accessKeyId && aws.secretAccessKey ? aws : undefined
-    const apiKey = resolveApiKey(providerId)
+    const apiKey = resolveApiKey(providerId, this.host.workspaceRoot)
     const agent = createModelRuntime(providerId, {
       modelId,
       endpoint,
