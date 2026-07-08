@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-08
+
+### Added
+
+- `GET /api/health` now reports `gitSha` (short sha, `-dirty` suffix on a modified tree) on source builds, so "which commit is deployed?" is one curl away; published bundles keep carrying the sha inside `version` and report `gitSha: null`.
+
+### Fixed
+
+- Workspace-scoped provider secrets (API keys configured per-workspace in Settings) never reached the model call — only the global secrets file was read on the model-call path; workspace overrides now take effect.
+- `pnpm run dev` for admin was broken on a fresh clone — the dev script ran `next build && next start`, but `output: 'export'` makes `next start` refuse to serve; switched to `next dev` (Monaco now stages to `public/` via a `--dev` flag), and documented dev mode in `env.md`.
+- Server workspace file watcher hardened for Windows: Explorer live-refresh was silently dead (parcel emits realpath-based events while the workspace root was a symlinked path), and switching workspaces could crash the server child (a native subscribe/unsubscribe race plus an MSVC std::regex overflow on long ignore-glob lists). Native ops are now serialized with an epoch guard, and win32 uses exact-match ignore segments instead of regex.
+- Admin Explorer: a folder once observed empty was never refetched, so files added inside it later stayed invisible until a full tree refresh — now refetched on every collapsed→expanded transition.
+- Desktop (Windows): an orphaned server child survived every quit path except the normal one, keeping `node.exe` locking the install directory and forcing an uninstall prompt on every reinstall — all quit paths now route through a synchronous `taskkill` cleanup, plus an installer pass and crash-reporter minidumps.
+- Admin editor: switching between a rendered markdown preview and a text file blanked the pane for a few frames on every switch (forced remount); the editor now stays mounted and swaps Monaco models instead. Markdown outline entries could visually squash together in a short list.
+- Builtin agents' `context.maxTokens`/`compressAt` reset to template defaults after a reseed (e.g. every desktop launch) — the merge now preserves the whole context block instead of just the model block.
+- Admin Sessions sidebar: renaming a session title flickered the detail panel while typing, caused by a self-sustaining reload loop (bus-driven tree rebuild blurring the rename input, unchanged-value PATCH re-triggering the loop); reloads are now suspended during an open edit and no-op PATCHes are skipped.
+
 ## [0.2.4] - 2026-07-06
 
 ### Added
@@ -239,7 +256,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/turmind/halo-agent/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/turmind/halo-agent/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/turmind/halo-agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/turmind/halo-agent/compare/v0.2.1...v0.2.2

@@ -28,6 +28,8 @@ For Docker / CI use `halo setup --non-interactive` and supply credentials via `H
 
 ## Documentation
 
+> **Path note for agents**: all `docs/...` links below are relative to this file's directory — on disk they live under `<workspace>/.halo/docs/...`.
+
 When no existing category fits, create a new folder. File names match module names (e.g., `session.md`, `agent.md`) for easy per-module CRUD.
 
 - [guide/](docs/guide/) — User guide (end-user perspective, "how to use")
@@ -36,6 +38,8 @@ When no existing category fits, create a new folder. File names match module nam
 - [dev/](docs/dev/) — API, tools, deployment, environment ("how to run it")
 
 `docs/plans/` (WIP proposals, "what's next") and `docs/test/` (test cases) are **local-only** — gitignored and excluded from the published npm bundle, so they exist on a maintainer's checkout but not in the public repo or installed package.
+
+Machine-specific deployment notes (local dev/prod services, ports, credentials layout) belong in `docs/dev/dev-environment.local.md` — also local-only and gitignored. If it exists on your checkout, read it before touching local services; if not, create it when you first set up a local environment.
 
 ## Channels
 

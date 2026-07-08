@@ -151,6 +151,28 @@ function isProcessAlive(pid: number): boolean {
 const PROJECT_ROOT = findProjectRoot()
 const HALO_HOME = path.join(homedir(), '.halo')
 
+/** Runtime git sha, source builds only. Published bundles already carry the
+ *  sha inside HALO_VERSION (build-bundle.mjs stamps `x.y.z-<sha>`); a source
+ *  checkout runs plain tsc output where the version is just 'dev', so probe
+ *  .git once at boot to let /api/health answer "which commit is deployed?".
+ *  Guarded to the monorepo case — PROJECT_ROOT falls back to cwd for bundle
+ *  installs, and probing an unrelated user repo there would report a foreign
+ *  sha. */
+function readGitSha(): string | null {
+  if (!fs.existsSync(path.join(PROJECT_ROOT, 'pnpm-workspace.yaml')) || !fs.existsSync(path.join(PROJECT_ROOT, '.git'))) return null
+  try {
+    const rev = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: PROJECT_ROOT, encoding: 'utf-8' })
+    if (rev.status !== 0) return null
+    const sha = rev.stdout.trim()
+    if (!sha) return null
+    const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: PROJECT_ROOT, encoding: 'utf-8' }).stdout.trim().length > 0
+    return dirty ? `${sha}-dirty` : sha
+  } catch {
+    return null
+  }
+}
+const GIT_SHA = readGitSha()
+
 // ~/.halo/ must be initialized via `halo setup` before the server can run.
 // First-time seeding only happens through `halo setup` so users / ops have an
 // explicit moment when state gets created.
@@ -305,6 +327,7 @@ app.get('/api/health', (c) => {
     uptime: process.uptime(),
     engine: 'agent',
     version: HALO_VERSION,
+    gitSha: GIT_SHA,
   })
 })
 

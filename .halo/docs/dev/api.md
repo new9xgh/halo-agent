@@ -8,7 +8,7 @@ Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | Health check — returns `{status, timestamp, uptime, engine}` |
+| GET | `/api/health` | Health check — returns `{status, timestamp, uptime, engine, version, gitSha}` (`gitSha`: short sha on source builds, `-dirty` suffix if tree modified, `null` on published bundles) |
 
 ## Authentication
 
