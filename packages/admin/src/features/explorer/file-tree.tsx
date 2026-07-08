@@ -272,6 +272,9 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
   const isDir = node.type === 'directory'
   const needsLoad = isDir && node.hasChildren !== false && node.children === undefined
+  // Previous `expanded` value, to detect the collapsed→expanded transition in
+  // the load effect below without refetching on unrelated re-renders.
+  const prevExpandedRef = useRef(expanded)
 
   const setExpanded = useCallback((val: boolean) => {
     setExpandedRaw(val)
@@ -285,9 +288,19 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
     return subscribePathExpanded(node.path, (val) => setExpandedRaw(val))
   }, [node.path])
 
-  // Auto-load children when directory becomes expanded and is not yet loaded
+  // Auto-load children when a directory is expanded. Two triggers:
+  // - needsLoad: never fetched (children === undefined) — the original lazy load.
+  // - collapsed→expanded transition with cached children: refetch anyway. The
+  //   cache is only kept fresh by file:changed events, so a missed watcher
+  //   event (watcher failed to start, WS drop) used to freeze a stale
+  //   `children: []` / `hasChildren: false` FOREVER — the folder showed empty
+  //   no matter how often the user re-expanded it. Re-expanding is the natural
+  //   "look again" gesture; one level per click keeps the cost trivial.
   useEffect(() => {
-    if (!expanded || !needsLoad || loadingChildren || !node.path) return
+    const wasExpanded = prevExpandedRef.current
+    prevExpandedRef.current = expanded
+    if (!expanded || loadingChildren || !node.path) return
+    if (!needsLoad && wasExpanded) return
     setLoadingChildren(true)
     loadDirChildren(projectId, node.path, useEditorStore).finally(() => setLoadingChildren(false))
   }, [expanded, needsLoad, loadingChildren, node.path, projectId, useEditorStore])
