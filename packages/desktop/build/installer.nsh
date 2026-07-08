@@ -37,8 +37,20 @@
 ; node.exe children), `/F` forces it. Silent + idempotent: taskkill on a
 ; not-running process just no-ops, so this is safe to run unconditionally and
 ; avoids the stock check's modal-prompt-and-retry loop.
+;
+; Second pass: an ALREADY-orphaned node.exe (its Halo.exe parent died without
+; a clean quit — app.exit() paths in older builds, Task Manager "End process",
+; Windows shutdown races) is unreachable by `/im Halo.exe /T`: the tree walk
+; starts from Halo.exe pids and there are none. That orphan still holds an
+; executable-image lock on $INSTDIR\resources\node.exe, so extraction hits
+; "file in use" retry prompts — the exact "still running even after I closed
+; it" report. Kill node processes whose image lives under $INSTDIR (matches
+; the bundled runtime only — a user's own system node.exe has a different
+; path). PowerShell is already a dependency of this installer (PATH helper
+; above). `$$_` is NSIS-escaping for a literal PowerShell `$_`.
 !macro customCheckAppRunning
   nsExec::Exec '"$SYSDIR\taskkill.exe" /im "${APP_EXECUTABLE_FILENAME}" /T /F'
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
   Sleep 500   ; give the OS a moment to release the file locks before we overwrite
 !macroend
 

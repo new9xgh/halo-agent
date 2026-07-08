@@ -1,5 +1,5 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification } = require('electron')
-const { spawn, execFile, execSync } = require('node:child_process')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu, desktopCapturer, systemPreferences, Notification, crashReporter } = require('electron')
+const { spawn, spawnSync, execFile, execSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -10,6 +10,13 @@ const http = require('node:http')
 // app name from Info.plist (CFBundleName), populated from electron-builder's
 // productName — this only affects `electron .` runs.
 app.setName('Halo')
+
+// Local-only crash dumps: without this, native crashes (main/renderer/GPU)
+// vanish without a trace — the Crashpad dir stays empty and post-mortem
+// debugging of user reports is impossible. Minidumps land under
+// app.getPath('crashDumps') (%APPDATA%\Halo\Crashpad on Windows,
+// ~/Library/Application Support/Halo/Crashpad on macOS). Never uploaded.
+crashReporter.start({ uploadToServer: false })
 
 // Desktop is a single-user, self-contained launcher: we always pick a free
 // port at startup and pass it to the spawned server. The user-facing
@@ -78,6 +85,14 @@ function appendServerOutput(buf) {
     serverTail.push(line)
     if (serverTail.length > TAIL_MAX) serverTail.shift()
   }
+}
+
+// Desktop-side diagnostics into the same desktop.log the server writes to.
+// Timestamped because these are rare lifecycle events (server exit, process
+// crashes) where "when" matters for correlating with user reports.
+function logDesktop(msg) {
+  const line = `[desktop] ${new Date().toISOString()} ${msg}\n`
+  try { fs.mkdirSync(LOG_DIR, { recursive: true }); fs.appendFileSync(LOG_FILE, line) } catch {}
 }
 
 function resolveRuntimePaths() {
@@ -245,6 +260,10 @@ function startServer() {
   serverProcess.stderr.on('data', (d) => { process.stderr.write(`[server] ${d}`); appendServerOutput(d) })
   serverProcess.on('exit', (code, sig) => {
     console.log(`[desktop] server exited code=${code} sig=${sig}`)
+    // Persist the exit code — it's the single most diagnostic datum for a
+    // crash report, and the dialog below vanishes as soon as the user closes
+    // it. isQuitting distinguishes an expected shutdown kill from a crash.
+    logDesktop(`server exited code=${code} signal=${sig} expected=${!!app.isQuitting}`)
     serverProcess = null
     if (!app.isQuitting) {
       const tail = serverTail.slice(-30).join('\n')
@@ -255,6 +274,43 @@ function startServer() {
       app.exit(1)
     }
   })
+}
+
+// Kill the spawned server tree. Called from before-quit (normal quit) and, on
+// Windows, from process 'exit' as a catch-all (every app.exit(1) path — crash
+// dialog, setup failure, health timeout — skips before-quit entirely).
+// Guarded: after before-quit already killed the tree, the 'exit'-time re-run
+// would only add quit latency.
+let serverKillIssued = false
+function killServer() {
+  if (serverKillIssued || !serverProcess) return
+  serverKillIssued = true
+  const proc = serverProcess
+  if (process.platform === 'win32') {
+    // Windows has no signal semantics and no process groups: proc.kill()
+    // calls TerminateProcess on the server alone, orphaning everything it
+    // spawned (node-pty terminals + conhost, cli children) — they keep
+    // holding port 9527 / server.lock AND an executable-image lock on
+    // resources\node.exe in the install dir, which is exactly what makes the
+    // NSIS over-install keep prompting "app is running" after the app was
+    // closed (an orphan's parent is dead, so the installer's
+    // `taskkill /im Halo.exe /T` can't reach it either). taskkill /T walks
+    // the whole live tree, /F forces it. spawnSync, not spawn: this also
+    // runs from process 'exit' where the event loop is gone, and even on the
+    // normal quit path a fire-and-forget child races our own teardown.
+    try {
+      spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    } catch {}
+    return
+  }
+  try { proc.kill('SIGTERM') } catch {}
+  // Belt-and-suspenders: if the server is wedged (e.g. chokidar/FSEvents
+  // deadlock — see ws/file-watcher.ts), SIGTERM never delivers because
+  // its main thread is stuck in a syscall. Force-kill after 1.5s so we
+  // never leave a zombie holding port 9527 / server.lock.
+  setTimeout(() => {
+    try { if (!proc.killed) proc.kill('SIGKILL') } catch {}
+  }, 1500).unref?.()
 }
 
 function waitForHealth(timeoutMs = 30_000) {
@@ -703,7 +759,13 @@ app.on('ready', async () => {
   startServer()
   try { await waitForHealth() } catch (err) {
     closeSplash()
+    logDesktop(`server failed health check: ${String(err)}`)
     dialog.showErrorBox('Server failed to start', String(err))
+    // The child is alive but unhealthy here, and app.exit() skips before-quit
+    // — kill explicitly or this path guarantees an orphaned node.exe on
+    // Windows (the process 'exit' hook would also catch it; this is the
+    // deterministic first line).
+    killServer()
     app.exit(1)
     return
   }
@@ -735,22 +797,30 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   app.isQuitting = true
-  if (!serverProcess) return
-  const proc = serverProcess
-  if (process.platform === 'win32') {
-    // Windows has no signal semantics and no process groups: proc.kill()
-    // calls TerminateProcess on the server alone, orphaning everything it
-    // spawned (node-pty terminals, cli children) — they keep holding the
-    // port / server.lock. taskkill /T walks the whole tree, /F forces it.
-    try { spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F']) } catch {}
-    return
-  }
-  try { proc.kill('SIGTERM') } catch {}
-  // Belt-and-suspenders: if the server is wedged (e.g. chokidar/FSEvents
-  // deadlock — see ws/file-watcher.ts), SIGTERM never delivers because
-  // its main thread is stuck in a syscall. Force-kill after 1.5s so we
-  // never leave a zombie holding port 9527 / server.lock.
-  setTimeout(() => {
-    try { if (!proc.killed) proc.kill('SIGKILL') } catch {}
-  }, 1500).unref?.()
+  killServer()
+})
+
+// Last-resort child cleanup, Windows-only. `app.exit()` skips before-quit/
+// will-quit entirely, and on Windows an orphaned node.exe SURVIVES its parent
+// (no POSIX orphan reaping, no process group) — it keeps port 9527 +
+// server.lock and holds open-file locks on the install dir, which is exactly
+// what makes the NSIS over-install loop on "app is running". process 'exit'
+// fires on every normal Node/Electron exit path (including app.exit), and
+// killServer's win32 branch is fully synchronous, so it's safe here (async
+// work would be silently dropped). POSIX doesn't need this: children get
+// SIGTERM'd in before-quit and a stale server.lock is pid-probed away on the
+// next launch anyway.
+process.on('exit', () => {
+  if (process.platform === 'win32') killServer()
+})
+
+// Crash breadcrumbs for Electron's own processes. Without these a dead
+// renderer/GPU/utility process leaves no trace in desktop.log — the window
+// just goes blank. crashReporter (started at the top) writes the matching
+// minidump into app.getPath('crashDumps').
+app.on('render-process-gone', (_e, webContents, details) => {
+  logDesktop(`render-process-gone reason=${details.reason} exitCode=${details.exitCode} url=${webContents.getURL()}`)
+})
+app.on('child-process-gone', (_e, details) => {
+  logDesktop(`child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name || ''}`)
 })
