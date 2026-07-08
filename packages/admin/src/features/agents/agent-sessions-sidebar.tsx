@@ -262,6 +262,14 @@ export function AgentSessionsSidebar() {
   // is being edited; `editingTitle` holds the in-progress text.
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
+  // Title as it was when the rename started — commit skips the PATCH when
+  // nothing changed (a no-op PATCH still rewrites the log file, broadcasts
+  // session:changed and flashes the detail panel via file:changed).
+  const editingOriginalRef = useRef('')
+  // Mirror of editingId + deferred-reload flag, read by reloadFirstPage's
+  // mid-rename gate (refs so the callback doesn't re-create on edit toggles).
+  const editingIdRef = useRef<string | null>(null)
+  const pendingReloadRef = useRef(false)
 
   // Clear cross-project selection so we don't flash another project's session
   useEffect(() => {
@@ -284,6 +292,16 @@ export function AgentSessionsSidebar() {
       setLoadingGroups(false)
       return
     }
+    // Mid-rename: defer. Rebuilding the tree while the inline input is open
+    // can reorder rows (updated_at moved server-side), and React's DOM move
+    // blurs the input → onBlur commits a half-typed title → PATCH →
+    // session:changed → another reload — a self-sustaining flash loop.
+    // commitRename/cancelRename flush the deferred reload.
+    if (editingIdRef.current !== null) {
+      pendingReloadRef.current = true
+      return
+    }
+    pendingReloadRef.current = false
     if (showSpinner) setLoadingGroups(true)
 
     // Reload the same depth the user already scrolled to (capped), not just
@@ -507,21 +525,37 @@ export function AgentSessionsSidebar() {
   // Enter inline rename mode for a session, seeding the input with its title.
   const startRename = useCallback((e: React.MouseEvent, s: SessionItem) => {
     e.stopPropagation()
+    editingIdRef.current = s.id
+    editingOriginalRef.current = s.title || ''
     setEditingId(s.id)
     setEditingTitle(s.title || '')
   }, [])
 
   const cancelRename = useCallback(() => {
+    editingIdRef.current = null
     setEditingId(null)
     setEditingTitle('')
-  }, [])
+    // Flush any tree reload deferred while the input was open.
+    if (pendingReloadRef.current) void reloadFirstPage({ showSpinner: false })
+  }, [reloadFirstPage])
 
   // Commit the new title. Optimistically patches the local tree, then PATCHes
   // the server; the bus bump afterward syncs every list. No-op on empty/unchanged.
   const commitRename = useCallback(async (sid: string) => {
+    // Already committed/cancelled (Enter then the input's unmount blur, or a
+    // blur racing a bus reload) — one commit per edit.
+    if (editingIdRef.current !== sid) return
     const title = editingTitle.trim()
+    // Unchanged (or emptied) title → plain cancel. Skipping the PATCH matters:
+    // a no-op PATCH still rewrites the log file (→ file:changed refetch in the
+    // detail panel) and broadcasts session:changed, flashing every list for
+    // nothing — and blur commits fire on every focus loss.
+    if (!title || title === editingOriginalRef.current || !activeProject?.path) {
+      cancelRename()
+      return
+    }
+    editingIdRef.current = null
     setEditingId(null)
-    if (!title || !activeProject?.path) return
     setTree((prev) => patchNodeTitle(prev, sid, title))
     try {
       await api.sessionLogs.rename(sid, title, activeProject.path)
@@ -530,7 +564,7 @@ export function AgentSessionsSidebar() {
       console.error('[Sessions] Rename failed:', err)
       bumpSessionBus()
     }
-  }, [editingTitle, activeProject?.path])
+  }, [editingTitle, activeProject?.path, cancelRename])
 
   const totalSessions = tree.length
 

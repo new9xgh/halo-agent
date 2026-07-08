@@ -13,6 +13,28 @@ import { Bot, Bug, FileText, ListFilter, Loader2, X, Copy, Check } from 'lucide-
 import { cn } from '@/shared/utils'
 import { isMainConversationMessage, isDebugMessage, inferMessageType } from '@/shared/types'
 
+/**
+ * Reuse previous message object identities for entries whose content is
+ * unchanged, so MessageList's memoized exchange rows skip re-render. The
+ * refetch below fires on every write to the selected session's file —
+ * including rewrites that change no messages (e.g. a title PATCH) — and a
+ * wholesale array replace hands every row a brand-new object, re-running
+ * ReactMarkdown across the whole conversation: the detail-panel flash.
+ * Session logs are append-only, so a positional compare suffices; when
+ * nothing changed at all, return `prev` so the store set is a no-op.
+ */
+function reconcileMessages(prev: ChatMessage[] | null, next: ChatMessage[]): ChatMessage[] {
+  if (!prev || prev.length === 0) return next
+  let reusedAll = prev.length === next.length
+  const out = next.map((m, i) => {
+    const old = prev[i]
+    if (old && JSON.stringify(old) === JSON.stringify(m)) return old
+    reusedAll = false
+    return m
+  })
+  return reusedAll ? prev : out
+}
+
 export function SessionChatPanel() {
   const currentMessages = useChatStore((s) => s.messages)
   const currentSessionId = useChatStore((s) => s.sessionId)
@@ -66,7 +88,12 @@ export function SessionChatPanel() {
       if (!msg.path.startsWith('.halo/sessions/')) return
       if (!msg.path.endsWith(`/${fileBase}.json`)) return
       api.sessionLogs.get(selectedSessionId, activeProject.path)
-        .then((res) => setLoadedMessages((res.messages as unknown as ChatMessage[]) ?? []))
+        .then((res) => {
+          const fresh = (res.messages as unknown as ChatMessage[]) ?? []
+          const prev = useSessionViewStore.getState().loadedMessages
+          const next = reconcileMessages(prev, fresh)
+          if (next !== prev) setLoadedMessages(next)
+        })
         .catch(() => {})
     })
     return unsub
