@@ -68,6 +68,14 @@ export class GitDirWatcher {
       this.watcher = fs.watch(gitDir, { persistent: true, recursive: false }, (_eventType, filename) => {
         this.handleGitEvent(filename)
       })
+      // Runtime 'error' (e.g. Windows EPERM when the watched dir is deleted /
+      // relocated) is emitted async — without a listener it hits the global
+      // uncaughtException handler and the watcher goes silently stale.
+      this.watcher.on('error', (err) => {
+        console.warn(`[GitDirWatcher] watch error on ${gitDir}: ${err.message} — git auto-refresh disabled`)
+        this.closeWatcher()
+        this.mode = null
+      })
       this.mode = 'git'
     } catch (err) {
       // fs.watch can throw (permissions, unsupported FS). Don't take the
@@ -84,6 +92,13 @@ export class GitDirWatcher {
     try {
       this.watcher = fs.watch(workspaceRoot, { persistent: true, recursive: false }, (_eventType, filename) => {
         this.handleParentEvent(filename)
+      })
+      // Same as watchGitDir: unhandled 'error' (Windows EPERM on dir removal)
+      // would escape to the global uncaughtException handler.
+      this.watcher.on('error', (err) => {
+        console.warn(`[GitDirWatcher] watch error on ${workspaceRoot}: ${err.message} — git auto-refresh disabled`)
+        this.closeWatcher()
+        this.mode = null
       })
       this.mode = 'parent'
     } catch (err) {

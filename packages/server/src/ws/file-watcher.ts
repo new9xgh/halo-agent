@@ -48,9 +48,51 @@ const IGNORED_SEGMENTS = [
   '$RECYCLE.BIN', 'System Volume Information', 'AppData',
 ]
 
-/** @parcel/watcher `ignore` accepts directory names / globs. Passing the bare
- *  segment names excludes them at any depth. */
-const IGNORE_GLOBS = IGNORED_SEGMENTS.flatMap((seg) => [seg, `**/${seg}/**`])
+const IS_WIN32 = process.platform === 'win32'
+
+/** For the win32 JS-side event filter — see NATIVE_IGNORE below. */
+const IGNORED_SEGMENT_SET = new Set(IGNORED_SEGMENTS)
+
+/**
+ * @parcel/watcher's JS wrapper splits `ignore` entries in two: bare names
+ * become `ignorePaths` (exact-path string compare in native Watcher::isIgnored,
+ * resolved against the watch root so they only match at the TOP level), while
+ * glob-magic names compile to C++ std::regex run against EVERY event's
+ * relative path on the watcher thread.
+ *
+ * win32: no globs. MSVC std::regex recursion depth scales with input length —
+ * a ~300-byte relative path (~85-100 CJK chars) overflows the watcher thread's
+ * stack → 0xC0000409 (upstream parcel-bundler/watcher#250). Bare segments
+ * still prune top-level heavy dirs natively (node_modules, .git); NESTED
+ * occurrences are filtered in JS in handleEvent instead.
+ * Non-win32 keeps the globs — Linux inotify relies on native ignore to avoid
+ * registering watches on huge trees.
+ */
+const NATIVE_IGNORE = IS_WIN32
+  ? IGNORED_SEGMENTS
+  : IGNORED_SEGMENTS.flatMap((seg) => [seg, `**/${seg}/**`])
+
+/**
+ * Process-wide serialization of native subscribe/unsubscribe. Each WS
+ * connection owns its own WorkspaceWatcher, so on workspace switch the old
+ * connection's stop() races the new connection's start() ACROSS instances —
+ * an instance-level guard can't help. @parcel/watcher's native layer is not
+ * safe against that overlap on Windows: Backend.cc mutates the static
+ * shared-backends map from a threadpool thread with no lock while
+ * Backend::getShared reads it on the JS thread, and WindowsBackend's
+ * CancelIo/APC teardown can use-after-free → 0xC0000005. Every native op from
+ * every instance funnels through this one chain, so no subscribe ever starts
+ * while an unsubscribe is still settling.
+ */
+let nativeOpChain: Promise<unknown> = Promise.resolve()
+
+function enqueueNativeOp<T>(op: () => Promise<T>): Promise<T> {
+  const result = nativeOpChain.then(op)
+  // Keep the chain alive across failures — a rejected op must not poison
+  // every later op.
+  nativeOpChain = result.catch(() => {})
+  return result
+}
 
 /**
  * Directories we refuse to watch outright — only the true filesystem root and
@@ -83,40 +125,83 @@ export class WorkspaceWatcher {
   /** Debounce: batch rapid changes into a single notification per path */
   private pending = new Map<string, FileChangeEvent>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
+  /** Bumped by every start()/stop(). A start() whose subscribe resolves after
+   *  a newer start()/stop() has bumped the epoch is stale: assigning its
+   *  subscription would overwrite (and leak) the current one, so it tears its
+   *  own subscription down instead. */
+  private startEpoch = 0
 
   setCallback(cb: FileChangeCallback): void {
     this.callback = cb
   }
 
   async start(workspaceRoot: string): Promise<void> {
-    if (this.subscription && this.workspaceRoot === workspaceRoot) return
-    await this.stop()
-
+    // Checked on the ORIGINAL path (not the realpath below) so accept/refuse
+    // semantics stay exactly as before — e.g. a macOS /tmp/... workspace
+    // realpaths to /private/tmp/... which the ban list would refuse.
     const reject = isUnwatchablePath(workspaceRoot)
     if (reject) {
       console.warn(`[FileWatcher] refusing to watch ${workspaceRoot} (${reject}) — Explorer live-refresh disabled for this workspace`)
       return
     }
 
-    this.workspaceRoot = workspaceRoot
+    // Resolve symlinks before subscribing: some backends emit event paths
+    // under the REAL directory (macOS FSEvents always realpaths — /tmp →
+    // /private/tmp), so keying workspaceRoot to a symlinked root made
+    // handleEvent's path.relative() return '..'-prefixed paths for every
+    // event — all silently dropped, live-refresh dead even though subscribe
+    // succeeded. Watch the real path and compute relatives against it.
+    // (Windows junctions / mapped drives resolve the same way, keeping the
+    // event prefix and our root consistent.)
+    let root = workspaceRoot
+    try { root = fs.realpathSync(workspaceRoot) } catch { /* vanished dir — let subscribe() report it */ }
+
+    if (this.subscription && this.workspaceRoot === root) return
+    await this.stop()
+
+    // stop() bumped the epoch; claim the next one. Any later start()/stop()
+    // bumps it again, marking this start stale (see startEpoch).
+    const epoch = ++this.startEpoch
+    this.workspaceRoot = root
     try {
       // Dynamic import so the native @parcel/watcher binary loads only when a
       // watch actually starts — keeps lightweight cli paths (halo acp / setup)
       // from pulling it in just by being bundled alongside server code.
       const { default: watcher } = await import('@parcel/watcher')
-      this.subscription = await watcher.subscribe(workspaceRoot, (err, events) => {
+      // Through the process-wide chain so this subscribe can never overlap a
+      // pending native unsubscribe from ANY instance (see enqueueNativeOp).
+      const sub = await enqueueNativeOp(() => watcher.subscribe(root, (err, events) => {
         if (err) {
-          console.warn(`[FileWatcher] watcher error on ${workspaceRoot}: ${err.message}`)
+          console.warn(`[FileWatcher] watcher error on ${root}: ${err.message}`)
           return
         }
         for (const e of events) this.handleEvent(e.type, e.path)
-      }, { ignore: IGNORE_GLOBS })
+      }, { ignore: NATIVE_IGNORE }))
+      if (this.startEpoch !== epoch) {
+        // Superseded by a newer start()/stop() while subscribing. Assigning
+        // now would overwrite this.subscription and leak a live native
+        // subscription — tear ours down instead, again via the chain.
+        void enqueueNativeOp(() => sub.unsubscribe()).catch((err) => {
+          console.warn(`[FileWatcher] failed to unsubscribe superseded watch on ${root}: ${err instanceof Error ? err.message : String(err)}`)
+        })
+        return
+      }
+      this.subscription = sub
+      console.debug(`[FileWatcher] watching ${root}`)
     } catch (err) {
-      // Native subscribe can throw (permissions, vanished dir, unsupported FS).
-      // Don't take the connection down — just lose live-refresh for this dir.
-      console.warn(`[FileWatcher] failed to watch ${workspaceRoot}: ${err instanceof Error ? err.message : String(err)}`)
-      this.subscription = null
-      this.workspaceRoot = null
+      // Two distinct failure classes land here, both fatal to live-refresh:
+      // the dynamic import failing (per-platform native binary missing from
+      // the install — the packaged-build regression class) and the native
+      // subscribe throwing (permissions, vanished dir, unsupported FS).
+      // Don't take the connection down — just lose live-refresh for this
+      // dir. Log the stack so the two are tellable apart from the log alone.
+      const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+      console.warn(`[FileWatcher] failed to watch ${root} — Explorer live-refresh disabled: ${detail}`)
+      if (this.startEpoch === epoch) {
+        // Only reset if still current — a superseding start() owns the state now.
+        this.subscription = null
+        this.workspaceRoot = null
+      }
     }
   }
 
@@ -132,6 +217,10 @@ export class WorkspaceWatcher {
     if (!raw || raw.startsWith('..')) return
     // POSIX-style path — the browser file tree keys/navigates by '/'.
     const rel = raw.split(path.sep).join('/')
+    // win32: nested ignored dirs aren't pruned natively (NATIVE_IGNORE drops
+    // the globs to dodge the std::regex overflow — #250); drop their events
+    // here instead. Cheap: split + Set lookups per event.
+    if (IS_WIN32 && rel.split('/').some((seg) => IGNORED_SEGMENT_SET.has(seg))) return
 
     let action: FileChangeEvent['action']
     if (type === 'delete') {
@@ -173,6 +262,9 @@ export class WorkspaceWatcher {
   }
 
   async stop(): Promise<void> {
+    // Invalidate any in-flight start() so its late-resolving subscribe can't
+    // resurrect a subscription after we cleared state (see startEpoch).
+    this.startEpoch++
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = null
     const sub = this.subscription
@@ -180,12 +272,24 @@ export class WorkspaceWatcher {
     this.workspaceRoot = null
     this.pending.clear()
     if (!sub) return
-    // unsubscribe is async + native; race a timeout so a wedged watcher can't
-    // block shutdown / workspace switch.
-    await Promise.race([
-      sub.unsubscribe().catch(() => {}),
-      new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+    // The unsubscribe rides the process-wide chain, so no later subscribe
+    // (this or any other instance) starts until it TRULY settles — the native
+    // teardown/subscribe overlap is what crashed Windows (0xC0000005). The
+    // 2s timeout only unblocks OUR caller (WS close handlers / shutdown must
+    // not hang on a wedged watcher); it no longer lets the next subscribe
+    // proceed early.
+    const settled = enqueueNativeOp(() => sub.unsubscribe()).then(
+      () => true,
+      (err) => {
+        console.warn(`[FileWatcher] unsubscribe failed: ${err instanceof Error ? err.message : String(err)}`)
+        return true
+      },
+    )
+    const done = await Promise.race([
+      settled,
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 2000)),
     ])
+    if (!done) console.warn('[FileWatcher] unsubscribe still pending after 2s — continuing; next subscribe will wait for it')
   }
 
   private scheduleFlush(): void {
