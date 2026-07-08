@@ -195,7 +195,7 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
           and the user hasn't collapsed it. */}
       {headings.length > 1 && !outlineHidden && (
         <nav className="hidden w-56 shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] py-4 md:flex">
-          <div className="flex items-center justify-between px-3 pb-2">
+          <div className="flex shrink-0 items-center justify-between px-3 pb-2">
             <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Outline</span>
             <button onClick={toggleOutline} title="Hide outline" className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
               <PanelLeftClose className="h-3.5 w-3.5" />
@@ -206,7 +206,7 @@ export function MarkdownPreview({ content, filePath, projectId }: MarkdownPrevie
               key={`${h.slug}-${i}`}
               onClick={() => scrollToHeading(h.slug)}
               title={h.text}
-              className="block w-full truncate px-3 py-1 text-left text-xs text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+              className="block w-full shrink-0 truncate px-3 py-1 text-left text-xs text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
               style={{ paddingLeft: `${0.75 + (h.level - 1) * 0.75}rem` }}
             >
               {h.text}

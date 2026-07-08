@@ -980,22 +980,33 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             </div>
                           </div>
                         )
-                        if (paneFile && paneRender && paneFile.language === 'markdown') {
-                          return <MarkdownPreview content={paneFile.content} filePath={paneFile.path} projectId={projectId} />
-                        }
-                        if (paneFile && paneRender && paneFile.language === 'html' && projectId) {
-                          return <HtmlPreview url={api.files.viewUrl(paneFile.path, projectId)} name={paneFile.path.split('/').pop() ?? ''} />
-                        }
                         if (paneFile) {
+                          // Rendered md/html previews overlay the editor rather than
+                          // replace it: CodeEditor stays mounted (hidden) so switching
+                          // preview → text file is a Monaco model swap on the live
+                          // editor instead of a full remount — no "Loading editor..."
+                          // blank-pane flash, no layout jump.
+                          const mdPreview = paneRender && paneFile.language === 'markdown'
+                          const htmlPreview = paneRender && paneFile.language === 'html' && !!projectId
                           return (
-                            <CodeEditor
-                              path={paneFile.path}
-                              content={paneFile.content}
-                              language={paneFile.language}
-                              onChange={(value) => handleContentChange(paneFile.path, value)}
-                              onSave={() => handleSave(paneFile.path)}
-                              onClose={() => handleCloseTabInGroup(gi, paneFile.path)}
-                            />
+                            <>
+                              {mdPreview && (
+                                <MarkdownPreview content={paneFile.content} filePath={paneFile.path} projectId={projectId} />
+                              )}
+                              {htmlPreview && (
+                                <HtmlPreview url={api.files.viewUrl(paneFile.path, projectId!)} name={paneFile.path.split('/').pop() ?? ''} />
+                              )}
+                              <div className={cn('h-full', (mdPreview || htmlPreview) && 'hidden')}>
+                                <CodeEditor
+                                  path={`${projectId ?? ''}/${paneFile.path}`}
+                                  content={paneFile.content}
+                                  language={paneFile.language}
+                                  onChange={(value) => handleContentChange(paneFile.path, value)}
+                                  onSave={() => handleSave(paneFile.path)}
+                                  onClose={() => handleCloseTabInGroup(gi, paneFile.path)}
+                                />
+                              </div>
+                            </>
                           )
                         }
                         return (

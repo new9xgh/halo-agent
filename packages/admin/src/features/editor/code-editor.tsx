@@ -20,6 +20,19 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
   const { theme } = useTheme()
 
+  // The editor instance persists across tab switches (models swap via the
+  // `path` prop), but Monaco actions register once at mount — route them
+  // through refs so Cmd+S / Alt+W always hit the *current* tab's handlers
+  // instead of the closures captured on first mount.
+  const onSaveRef = useRef(onSave)
+  const onCloseRef = useRef(onClose)
+  const contentRef = useRef(content)
+  useEffect(() => {
+    onSaveRef.current = onSave
+    onCloseRef.current = onClose
+    contentRef.current = content
+  }, [onSave, onClose, content])
+
   // Clear selection tracking when editor unmounts or path changes
   useEffect(() => {
     return () => {
@@ -39,6 +52,17 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor
+
+      // With `keepCurrentModel`, a remounting editor can pick up a model kept
+      // from a previous mount whose content went stale while no editor was
+      // showing it (e.g. the agent rewrote the file and the ws `file:changed`
+      // refresh updated the buffer). @monaco-editor/react only syncs `value`
+      // on prop *changes*, never at mount — reconcile here. setValue (not
+      // executeEdits): the content came from disk, resetting undo is correct.
+      const model = editor.getModel()
+      if (model && model.getValue() !== contentRef.current) {
+        model.setValue(contentRef.current)
+      }
 
       // Track selection changes
       editor.onDidChangeCursorSelection((e) => {
@@ -62,7 +86,7 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
         label: 'Save File',
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
         run: () => {
-          onSave?.()
+          onSaveRef.current?.()
         },
       })
 
@@ -72,16 +96,26 @@ export function CodeEditor({ path, content, language, onChange, onSave, onClose 
         label: 'Close Tab',
         keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyW],
         run: () => {
-          onClose?.()
+          onCloseRef.current?.()
         },
       })
     },
-    [onSave, onClose],
+    [],
   )
 
   return (
     <Editor
-      key={path}
+      // Multi-model mode: `path` (not `key`) drives file switches, so tab
+      // changes swap Monaco models on ONE live editor instead of remounting
+      // the whole editor (a remount blanks the pane with the "Loading
+      // editor..." fallback for a few frames — visible jank on every
+      // markdown-preview → code switch). Model swap also preserves per-file
+      // undo history and cursor/scroll position (saveViewState default).
+      path={path}
+      // Models are shared by path across instances (split panes duplicate
+      // the active tab by default) — never dispose on unmount or the other
+      // pane's editor would be left holding a disposed model.
+      keepCurrentModel
       height="100%"
       language={language}
       value={content}
