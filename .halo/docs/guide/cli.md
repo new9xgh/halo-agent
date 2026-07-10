@@ -97,7 +97,7 @@ halo cli -w /path/to/review-ws "review the diff" --format json | jq '.text'
 # Pipe content in
 git diff HEAD~1 | halo cli -w /path/to/review-ws "review this diff"
 
-# Exit code: 0 = success, 1 = error, 130 = SIGINT
+# Exit code: 0 = success, 1 = error, 130 = SIGINT, 143 = SIGTERM (graceful: session repaired + flushed before exit)
 halo cli "check for issues" && echo "OK" || echo "FAILED"
 ```
 
@@ -192,7 +192,7 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 ```
 packages/cli/
   src/
-    index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/acp), SIGINT handling
+    index.ts        — Entry: subcommand dispatch (tui/cli/agents/sessions/server/setup/acp), SIGINT/SIGTERM handling
     harness.ts      — Shared agent harness wrapping SessionManager
     cli.ts          — Non-interactive: stdin/args → agent → stdout → exit
     tui.tsx         — Interactive entry: mounts the ink app

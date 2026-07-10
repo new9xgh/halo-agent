@@ -40,17 +40,30 @@ REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cro
 
 Each fire:
 
-1. **Concurrency guard**: if the same `jobId` is already running in this process (in-memory `_inflight` set), insert a `cron_runs` row with `status='skipped'`, `failureReason='previous run still in progress'`, broadcast, and bail without spawning. Applies to both scheduled fires and manual run-now clicks. Two overlapping cli children would double-write the same `cron-<jobId>` on-disk session state; SessionManager's per-session lock is in-process and can't see across cli children, so this set is the cheapest place to enforce serialization. Lost on server restart by design — no stale-entry cleanup needed.
+1. **Concurrency guard**: if the same `jobId` is already running in this process (in-memory `_inflight` set), insert a `cron_runs` row with `status='skipped'`, `failureReason='previous run still in progress'`, broadcast, and bail without spawning. Applies to both scheduled fires and manual run-now clicks. Two overlapping cli children would double-write the same `cron-<jobId>` on-disk session state; SessionManager's per-session lock is in-process and can't see across cli children, so this set is the cheapest place to enforce serialization. The set itself is in-memory, but its restart blind spot is covered: the boot-time orphan sweep (below) re-enters stale jobIds before croner re-arms.
 2. Insert a `cron_runs` row with `status='running'` up front (UI sees it mid-flight); broadcast `cron:run_changed`.
 3. Check `job.workspacePath` exists — fail loudly if the workspace was moved/deleted.
-4. Spawn `halo cli -a <agent> -s cron-<jobId> -w <workspace>`, prompt on **stdin** (avoids Windows argv length limits). The stable `cron-<jobId>` session id means each fire *resumes the same session*, so the conversation accumulates and is reviewable in the admin Sessions tab.
+4. Spawn `halo cli -a <agent> -s cron-<jobId> -w <workspace>`, prompt on **stdin** (avoids Windows argv length limits). The stable `cron-<jobId>` session id means each fire *resumes the same session*, so the conversation accumulates and is reviewable in the admin Sessions tab. The child's pid is written back onto the `running` row (`cron_runs.pid`, nullable) — this is what makes the orphan sweep possible after a server crash.
 5. Tee stdout + stderr live to `~/.halo/global/logs/cron/<runId>.log`; capture stdout to memory for dispatch.
-6. Enforce a **3600s timeout** via a Node timer (kills child, reports exit code 124 — cross-platform, not the Linux-only `timeout(1)`). Generous because overlap-of-the-same-job is already blocked up-front in step 1; this is just the long-stop reaper for a truly stuck child.
+6. Enforce a **3600s timeout** via a Node timer (cross-platform, not the Linux-only `timeout(1)`), with a **two-phase kill**: SIGTERM the direct child first — the cli has a SIGTERM handler that stops the harness, repairs + flushes the session, kills its own shell_exec process groups, and exits 143 — then, if it's still alive after a 30s grace, SIGKILL the entire descendant tree (POSIX ppid-walk over one `ps` snapshot; `taskkill /T /F` on Windows) so no grandchild survives to double-write the workspace on the next fire. A ppid walk, not a process-group kill: the cli sandbox spawns shell_exec workers `detached` into their own groups, so `kill(-pid)` would miss them. Timed-out runs still report exit code 124. Generous because overlap-of-the-same-job is already blocked up-front in step 1; this is just the long-stop reaper for a truly stuck child.
 7. Classify: exit 124 → `timeout`; non-zero → `failed`; zero but empty stdout → `failed` ("nothing to dispatch"); else `succeeded`.
 8. On success only, `dispatchToTargets(stdout, targets)`. If every target fails, downgrade to `failed`.
 9. `finalize`: write the terminal `cron_runs` row, update `cron_jobs.lastRun*`, disable one-shot jobs, broadcast. The `_inflight` entry is released in `finally`, regardless of outcome.
 
 The cli executable is resolved via `resolveHaloCli()` (`$HALO_CLI` override; `halo.cmd` on Windows to dodge the GUI `Halo.exe` on PATH).
+
+### Orphan sweep on boot (`sweepOrphanRuns`)
+
+The step-1 guard is per-process, so it has one blind spot: the server dies (SIGKILL, crash) while a cli child is mid-run. On POSIX the child is re-parented and survives; the restarted server has an empty `_inflight` and croner re-arms the schedule — the next fire would double-write the orphan's `cron-<jobId>` session. Per the "persistent operations must not depend on in-memory state" rule, recovery is driven from the db: any `cron_runs` row still at `status='running'` at boot can only be a previous incarnation's leftover (this process hasn't run anything yet).
+
+`startCronDaemon` calls `sweepOrphanRuns` **before** `reloadAll`. For each stale row:
+
+1. Re-enter its jobId into `_inflight` first — the core invariant: while the orphan may be alive, no new cli for that job is spawned (a fire in that window is recorded as `skipped`, same as normal overlap).
+2. If the row has a pid (POSIX): **identity-check before killing** — `ps -p <pid> -o args=` must contain the `cron-<jobId>` fingerprint, so a recycled pid never kills an innocent process. Verified → SIGTERM (graceful path, same as timeout phase 1); still alive after a 30s async grace (`unref`ed timer, identity re-checked — pid reuse again) → SIGKILL the descendant tree.
+3. No pid / already dead / fingerprint mismatch / Windows: no kill, log only. Windows deliberately marks-only — there's no cheap command-line identity check (WMI is slow and sometimes policy-blocked), and a full-tree `taskkill /T /F` on a reused pid is irreversible while a double-written session is fixable; the orphan-survives-server-death window is also naturally smaller there.
+4. Either way the row is finalized as `failed` (`failureReason` notes the orphan disposition, `completedAt` stamped) so the UI stops showing a ghost `running`, and the jobId is released from `_inflight` once the orphan is confirmed dead (or immediately when nothing was killable).
+
+Only the kill grace is asynchronous; the boot-blocking part is one small select + row updates.
 
 ## Dispatch model
 
