@@ -248,6 +248,14 @@ fetchTargetArchNatives()
 //     runtime on the target arch.
 trimNativeBloat()
 
+// 2d. Prune jimp's published test snapshots (src/__image_snapshots__/*.png,
+//     ~150-char file names → ~200-char INSTDIR-relative paths). During a
+//     Windows upgrade the OLD uninstaller's atomicRMDir renames every file
+//     into %TEMP%\ns*.tmp\old-install\<relpath>, which crosses MAX_PATH (260)
+//     and aborts the whole uninstall — the "halo cannot be closed" installer
+//     loop. Never loaded at runtime; drop them from both runtimes.
+pruneImageSnapshots()
+
 // Resolve the real directories of an installed package. We deploy with
 // node-linker=hoisted (flat node_modules/<pkg>) on every target; the isolated
 // (.pnpm/<pkg>@<ver>/node_modules/<pkg>) branch is kept as a fallback so this
@@ -299,6 +307,32 @@ function trimNativeBloat() {
       console.log(`[stage] removed server-runtime/${sub}`)
     }
   }
+}
+
+// jimp publishes its jest test snapshots to npm — PNGs with ~150-char file
+// names under src/__image_snapshots__/. See call site (2d) for why they must
+// not ship on Windows. Covers both layouts: flat node_modules/@jimp/<pkg>
+// (hoisted server-runtime + npm cli-runtime) and .pnpm/@jimp+<pkg>@<ver>/…
+// (kept as a fallback, same rationale as resolvePkgDirs).
+function pruneImageSnapshots() {
+  let pruned = 0
+  const rmSnap = (pkgDir) => {
+    const snap = path.join(pkgDir, 'src', '__image_snapshots__')
+    if (fs.existsSync(snap)) { fs.rmSync(snap, { recursive: true, force: true }); pruned++ }
+  }
+  for (const rt of [SERVER_RT, CLI_RT]) {
+    const flat = path.join(rt, 'node_modules', '@jimp')
+    if (fs.existsSync(flat)) for (const pkg of fs.readdirSync(flat)) rmSnap(path.join(flat, pkg))
+    const pnpmRoot = path.join(rt, 'node_modules', '.pnpm')
+    if (fs.existsSync(pnpmRoot)) {
+      for (const entry of fs.readdirSync(pnpmRoot)) {
+        if (!entry.startsWith('@jimp+')) continue
+        const scope = path.join(pnpmRoot, entry, 'node_modules', '@jimp')
+        if (fs.existsSync(scope)) for (const pkg of fs.readdirSync(scope)) rmSnap(path.join(scope, pkg))
+      }
+    }
+  }
+  console.log(`[stage] pruned ${pruned} @jimp src/__image_snapshots__ dirs (MAX_PATH hazard on Windows upgrade)`)
 }
 
 // Cross-arch / cross-platform fixup: when staging for an arch or OS that
@@ -735,6 +769,11 @@ async function fastResync() {
   // 3. resources/admin-out (served by the desktop server).
   syncDir(path.join(REPO_ROOT, 'packages', 'admin', 'out'), ADMIN_OUT_DST, 'admin-out')
   assertMonacoStaged(ADMIN_OUT_DST)
+
+  // Fast path reuses the prior stage's node_modules untouched — a tree staged
+  // before pruneImageSnapshots existed would still carry the MAX_PATH-hazard
+  // PNGs (deps fingerprint doesn't cover this script). Idempotent, so re-run.
+  pruneImageSnapshots()
 
   // Fast path reuses the prior stage's node_modules untouched — if that tree
   // carried a wrong-ABI better-sqlite3, fast would silently ship it. Smoke-test

@@ -393,6 +393,26 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   The real per-target artifacts are `Halo-0.1.5.dmg` (x64) and `Halo Setup
   0.1.5.exe` (win); only trust the arm64 dmg from an actual `dist:arm64` run.
 
+- **npm packages can hide ~200-char relative paths that break every Windows
+  upgrade (MAX_PATH) — jimp ships its jest snapshots.** `@jimp/*` publishes
+  `src/__image_snapshots__/*.png` with ~150-char *file names*; staged under
+  `resources/{server,cli}-runtime/node_modules/`, the longest INSTDIR-relative
+  path hit 200 chars. Install works (`C:\Users\<u>\AppData\Local\Programs\Halo\`
+  + 200 stays under 260), but **upgrade doesn't**: the old uninstaller's
+  `atomicRMDir` renames every file into `%TEMP%\ns<x>.tmp\old-install\<relpath>`
+  (a *longer* prefix, ≈253 + username), crosses MAX_PATH, aborts → non-zero exit
+  → the installer shows the misleading "Halo cannot be closed. Please close it
+  manually" prompt (`appCannotBeClosed` is its catch-all for *any* uninstaller
+  failure — no process check involved, which is why it fires on a fresh boot)
+  then "Failed to uninstall old application files". Users "fixed" it by deleting
+  the install dir — that removes `uninstall.exe`, so the installer silently
+  skips the uninstall step. Fixed in `stage-runtime.mjs pruneImageSnapshots()`
+  (full + fast paths — fast reuses old trees the deps fingerprint doesn't
+  re-check): drops all `@jimp/*/src/__image_snapshots__` from both runtimes.
+  Rule of thumb: after adding any dependency, check the staged tree with
+  `find resources/{server,cli}-runtime -type f | awk '{print length($0)}' |
+  sort -rn | head -1` — keep the longest relative path well under ~200.
+
 ## Verifying a build
 
 ```bash
