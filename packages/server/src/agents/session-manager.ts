@@ -65,6 +65,33 @@ function estimateMessageTokens(messages: AnthropicMessage[]): number {
   return Math.ceil(chars / 3.5)
 }
 
+/** Concatenate a raw message's text-block content. Used to match a UI user turn
+ *  against its raw (LLM-facing) counterpart when deleting an exchange. */
+function rawMessageText(msg: AnthropicMessage): string {
+  if (typeof msg.content === 'string') return msg.content
+  return msg.content
+    .filter((b): b is { type: 'text'; text: string } => (b as { type?: string }).type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+}
+
+/** A raw user message starts a new conversation turn when it carries user text.
+ *  Pure tool_result user messages are protocol continuations of the preceding
+ *  assistant turn, not turn boundaries — so deleting a turn must not split them. */
+function isRawTurnStart(msg: AnthropicMessage): boolean {
+  if (msg.role !== 'user') return false
+  if (typeof msg.content === 'string') return msg.content.length > 0
+  return msg.content.some((b) => (b as { type?: string }).type === 'text')
+}
+
+/** Strip the server-added `[图片已保存: /path]` marker lines so a UI user-message
+ *  content compares equal to its raw text block: on image sends the UI log
+ *  prepends the marker while the raw side stores the image as a separate block
+ *  (see handler.ts handleChat). */
+function stripImageMarkers(s: string): string {
+  return s.replace(/\[图片已保存: [^\]]*\]\n?/g, '').trim()
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 interface QueuedMessage {
@@ -2324,6 +2351,126 @@ export class SessionManager implements SessionManagerInternals {
   /** Get raw agent messages (for compact). */
   getAgentMessages(sessionId: string): AnthropicMessage[] | null {
     return this.sessions.get(sessionId)?.agent.messages ?? null
+  }
+
+  // ── Delete a single exchange (one user turn + its responses) ────────
+
+  /**
+   * Delete one exchange from a root session, identified by `userOrdinal` — the
+   * 0-based index of the target user turn among all `role === 'user'` messages
+   * in the UI log (the admin computes the same ordinal from the rendered list,
+   * so client/server message-id divergence never matters).
+   *
+   * Two layers, matching the two message streams:
+   *  - UI log (`messages`): SOFT delete — the target user message and every
+   *    following message up to (not including) the next user message get
+   *    `deleted: true`. Array length is unchanged (messageCount semantics hold),
+   *    so the turn stays visible, greyed out.
+   *  - Raw log (`rawMessages`, LLM-facing): PHYSICAL delete of the whole turn —
+   *    located by matching the UI user text against a raw user turn, removed
+   *    from that turn's start to the next user turn start (so tool_use/tool_result
+   *    pairs never split), then `repairConversationMessages` cleans the seam.
+   *    If no raw turn matches (e.g. the turn was already compacted away) the raw
+   *    log is left untouched — the UI soft-delete still lands (silent degrade).
+   *
+   * Rejects while the session is running or compacting (raw mutation mid-turn
+   * would corrupt the in-flight conversation). Memory + disk stay in sync: a
+   * live session's `agent.messages` / UI log are updated in place then persisted;
+   * a cold session is edited on disk directly.
+   */
+  async deleteExchange(
+    sessionId: string,
+    userOrdinal: number,
+  ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange'> {
+    const rootId = this.findRootSessionId(sessionId)
+    if (this.isSessionRunning(rootId)) return 'running'
+    if (this.isSessionCompacting(rootId)) return 'compacting'
+
+    const info = this.getSessionById(rootId)
+    if (!info) return 'not_found'
+
+    const uiState = this.getUIState(rootId)
+    if (!uiState) return 'not_found'
+    const messageLog = uiState.messageLog
+
+    // Locate the target user turn + its response span in the UI log.
+    let start = -1
+    let seen = -1
+    for (let i = 0; i < messageLog.length; i++) {
+      if (messageLog[i].role !== 'user') continue
+      // Align with the admin's isMainConversationMessage taskId filter (types.ts):
+      // it counts ordinals on the subset excluding sub-agent (taskId) messages, so
+      // skip them here too or the ordinal drifts and we'd delete the wrong turn.
+      if (messageLog[i].taskId) continue
+      seen++
+      if (seen === userOrdinal) { start = i; break }
+    }
+    if (start === -1) return 'no_exchange'
+
+    const target = stripImageMarkers(messageLog[start].content)
+    // Occurrence rank of this content among identical user turns up to the
+    // target — lets duplicate prompts ("hi" sent twice) map to the right raw turn.
+    // Same taskId skip as the ordinal loop, so rank counts on the same subset.
+    let rank = 0
+    for (let i = 0; i <= start; i++) {
+      const m = messageLog[i]
+      if (m.role === 'user' && !m.taskId && stripImageMarkers(m.content) === target) rank++
+    }
+
+    // Soft-delete the UI span (new objects so the admin's memoized rows re-render).
+    const newLog = messageLog.slice()
+    for (let i = start; i < newLog.length; i++) {
+      if (i > start && newLog[i].role === 'user') break
+      newLog[i] = { ...newLog[i], deleted: true }
+    }
+
+    // Physical raw delete (best-effort match).
+    const live = this.sessions.get(rootId)
+    const rawSource = live
+      ? (live.agent.messages as AnthropicMessage[])
+      : (this.loadAgentState(rootId, info.agentId) as AnthropicMessage[])
+    const newRaw = this.deleteRawTurn(rawSource, target, rank)
+
+    // Persist raw first, then UI — both do read-merge-write on the same file, so
+    // whichever runs second preserves the other's just-written field.
+    if (newRaw) {
+      const repaired = repairConversationMessages(newRaw, `[Session:${rootId}]`)
+      if (live) {
+        live.agent.messages = repaired
+        this.saveAgentState(live)
+      } else {
+        const filePath = path.join(this.sessionDir(info.agentId), `${fileSegment(rootId)}.json`)
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) } catch { /* new file */ }
+        data.rawMessages = repaired
+        atomicWriteSessionFile(filePath, JSON.stringify(data, null, 2))
+      }
+    }
+
+    this.replaceMessageLog(rootId, newLog)
+    console.debug(`[SessionManager] deleteExchange ${rootId}: soft-deleted UI turn #${userOrdinal}, raw ${newRaw ? `${rawSource.length}→${newRaw.length}` : 'unmatched (UI-only)'}`)
+    return 'deleted'
+  }
+
+  /** Locate the `rank`-th raw user turn whose text matches `target` and remove it
+   *  through to the next user turn start (keeps tool_use/tool_result pairs intact).
+   *  Returns the new array, or null when no matching turn exists. */
+  private deleteRawTurn(raw: AnthropicMessage[], target: string, rank: number): AnthropicMessage[] | null {
+    let seen = 0
+    let start = -1
+    for (let i = 0; i < raw.length; i++) {
+      if (!isRawTurnStart(raw[i])) continue
+      if (stripImageMarkers(rawMessageText(raw[i])) === target) {
+        seen++
+        if (seen === rank) { start = i; break }
+      }
+    }
+    if (start === -1) return null
+    let end = raw.length
+    for (let i = start + 1; i < raw.length; i++) {
+      if (isRawTurnStart(raw[i])) { end = i; break }
+    }
+    return [...raw.slice(0, start), ...raw.slice(end)]
   }
 
   // ── Phase 2: deleteSession (SQLite only) ──────────────────────────

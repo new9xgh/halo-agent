@@ -27,10 +27,13 @@ export interface WsHandlerDeps {
 }
 
 interface ClientMessage {
-  type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'agent:update_config' | `command:${string}` | 'session:clear' | 'session:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
+  type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'agent:update_config' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
   sessionId?: string
   projectId?: string
   message?: string
+  /** exchange:delete — 0-based index of the target user turn among all
+   *  role==='user' messages in the session's UI log. */
+  userOrdinal?: number
   images?: Array<{ data: string; mimeType: string }>
   agentName?: string
   agentId?: string
@@ -160,6 +163,33 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     }
     client.backgroundSaves.delete(delSessionId)
     sendJson(ws, { type: 'session:deleted', sessionId: delSessionId })
+  }
+
+  async function handleExchangeDelete(client: ConnectedClient, ws: WebSocket, msg: ClientMessage): Promise<void> {
+    const targetSessionId = msg.sessionId
+    if (!targetSessionId || typeof msg.userOrdinal !== 'number') {
+      sendJson(ws, { type: 'error', error: 'exchange:delete requires sessionId and userOrdinal' })
+      return
+    }
+    const requestedProjectId = msg.projectId ?? client.projectId
+    const projectPath = requestedProjectId ? resolveProjectPath(requestedProjectId) : null
+    const sm = projectPath ? getSessionManager(projectPath) : client.sessionManager
+    if (!sm) { sendJson(ws, { type: 'error', error: 'No workspace context for exchange:delete' }); return }
+
+    const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal)
+    if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running' }); return }
+    if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting' }); return }
+    if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found' }); return }
+
+    // Push the refreshed log to the subscribed client (this connection) when it's
+    // viewing the very session that changed (the live Chat session). A different
+    // session open in the Sessions tab picks the change up via the existing
+    // `.halo/sessions/` file watcher instead — no extra message needed.
+    if (client.sessionId && client.sessionId === targetSessionId) {
+      const state = getState(client)
+      const messages = state ? [...createSaveSnapshot(state)] : []
+      sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: client.sessionId } })
+    }
   }
 
   function createEventListener(client: ConnectedClient): (event: AgentSessionEvent, state: UIState, turnId: string) => void {
@@ -293,6 +323,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
               break
             case 'session:delete':
               await handleSessionDelete(client, ws, msg)
+              break
+            case 'exchange:delete':
+              await handleExchangeDelete(client, ws, msg)
               break
             default: {
               if (!msg.type.startsWith('command:')) {

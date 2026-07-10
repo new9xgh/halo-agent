@@ -17,6 +17,12 @@ The primary surface for talking to an agent.
 - Sub-agent messages carry the agent-name label (e.g. "Coder", "Researcher")
 - Streaming text has a cursor animation
 
+### User-message actions (Copy / Delete / Show)
+Hover actions on the blue sticky user bubble — real user prompts only (sub-agent report / compact-summary callouts, though user-role, get no buttons):
+- **Copy** — copies the prompt text to the clipboard
+- **Show more/less** — the existing clamp toggle, shown when the text overflows
+- **Delete** (confirm dialog) — removes the whole exchange (the user turn + all responses up to the next user turn) with **two-layer semantics**: the LLM context (`rawMessages`) drops the turn physically — the model never sees it again, freeing context; the UI keeps the messages, rendered greyed-out with a "deleted" tag, as an audit trail. No undo; a deleted exchange loses its Delete button. Rejected with an error toast while the agent is running or compacting. Root sessions only (sub-session logs don't offer Delete). If the turn was already compacted out of raw context, only the UI marking happens (silent degrade). Design details in [design/session.md](../design/session.md#exchange-deletion-soft-ui--hard-raw), protocol in [design/ws.md](../design/ws.md).
+
 ### Slash commands
 
 The full command list is fetched from `GET /api/commands` per session and includes built-ins + skill commands. The following are always-present highlights for the chat surface:

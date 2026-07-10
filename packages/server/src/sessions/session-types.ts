@@ -67,6 +67,13 @@ export interface SessionMessage {
 
   // ── Transient (not persisted) ──
   streaming?: boolean
+
+  // ── Soft delete ──
+  // Marks a user turn (and its responses) removed from the LLM's raw context
+  // while kept visible in the UI log, greyed out. Set by deleteExchange; the
+  // paired raw AnthropicMessage(s) are physically removed. Persisted so the
+  // "deleted" marker survives reload.
+  deleted?: boolean
 }
 
 /** Infer MessageType from legacy messages that lack the type field */

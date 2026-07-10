@@ -149,6 +149,10 @@ export interface ChatMessage {
   }
   modelId?: string
   turnId?: string
+  /** Soft-deleted exchange — the user turn + responses are kept in the log but
+   *  removed from the LLM's raw context (see server deleteExchange). Rendered
+   *  greyed out with a "deleted" badge; no Delete button. */
+  deleted?: boolean
   /** Inline image data URLs shown locally on this bubble (e.g. a desktop
    *  screen-capture sent to the model). Client-only, not persisted — gives
    *  immediate visual confirmation of what was sent, before the server-saved

@@ -34,6 +34,7 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
 | `session:clear` | Non-destructive /session new: save the current, detach, create fresh (handled inline) |
 | `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
+| `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting. See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
 | `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
 | `terminal:input` | Send keystrokes |

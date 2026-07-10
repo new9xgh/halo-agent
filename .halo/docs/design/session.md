@@ -43,6 +43,19 @@ These sessions also do **not** get an `agent_sessions` row in the workspace's `h
 
 Full field list in [storage.md](storage.md).
 
+### Exchange deletion (soft UI + hard raw)
+
+`deleteExchange(sessionId, userOrdinal)` lets the user drop a single exchange (one user turn + all its responses) from the admin chat. It treats the two streams **asymmetrically** — the point is to free LLM context while keeping a visible audit trail:
+
+- **`messages` (UI log): soft delete.** The target user message and every following message up to (not including) the next user message get `deleted: true`. The array length is unchanged, so `messageCount` semantics hold and the turn stays rendered — greyed out in the admin. There is no undo; a deleted exchange hides its own Delete button.
+- **`rawMessages` (LLM-facing): physical delete of the whole turn.** Removed from the matched user-turn start through to the next user-turn start, so `tool_use` / `tool_result` pairs are never split (an orphaned `tool_result` would make every subsequent API call error out). `repairConversationMessages` then cleans the seam.
+
+**Turn matching.** The raw turn is located by comparing the UI user text (after stripping the server-added `[图片已保存: …]` marker lines) against each raw user turn's text blocks, with an occurrence-rank tiebreak so duplicate prompts map to the right turn. **If no raw turn matches** (e.g. the turn was already compacted away) the raw log is left untouched — the UI soft-delete still lands (silent degrade).
+
+**Ordinal alignment (the sharp edge).** `userOrdinal` is the 0-based index of the target user turn, counted **excluding `taskId` (sub-agent) messages** — matching the admin's `isMainConversationMessage` filter, which is what the frontend counts on. Both the ordinal-locate loop and the duplicate-rank loop skip `taskId` messages; if they didn't, a sub-agent's injected user turn in the root log would drift the count and delete the wrong exchange.
+
+**Memory/disk sync.** A live session mutates `agent.messages` in place then `saveAgentState`; a cold session is edited directly on the `.json` file (read-merge-write). Rejected with `running` / `compacting` while a turn is in flight (mutating raw mid-turn would corrupt the in-flight conversation). Refresh is push-based: the active session gets a `state:snapshot`, other open sessions pick it up via the existing `.halo/sessions/` file watcher — no new WS message. Entry point: WS `exchange:delete` → `handler.ts:handleExchangeDelete` (see [ws.md](ws.md)).
+
 ## SessionManager
 
 File: `packages/server/src/agents/session-manager.ts`
@@ -59,6 +72,7 @@ Manages every agent session's lifecycle (root + sub-agent). Each session is 1:1 
 | `interruptSession(sessionId)` | Abort the in-flight turn now (fire-and-forget); `interruptRequested` is set so the unwind repairs rather than errors, then the queued message drains. Shared by esc and the `interrupt_session` tool |
 | `stopSession(sessionId)` | Fold the whole `messageQueue` into `agent.messages` (preserve, don't drop), abort + repair, no re-run, sets `stoppedAt`. Cascades to descendants |
 | `deleteSession(sessionId)` | Cascade-delete a session and all descendants (SQLite) |
+| `deleteExchange(sessionId, userOrdinal)` | Delete one exchange — soft-mark it in the UI log, physically remove the whole turn from `rawMessages`. See [Exchange deletion](#exchange-deletion-soft-ui--hard-raw). Rejects while running/compacting |
 | `ensureSession(sessionId)` | Restore agent from disk if not in memory (calls `loadAgentState` internally) |
 | `registerEventListener(rootSessionId, handler)` | Event routing per session tree |
 | `unregisterEventListener(rootSessionId)` | Cancel listener |

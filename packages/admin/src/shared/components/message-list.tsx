@@ -7,8 +7,39 @@ import type { ChatMessage, ToolCallInfo, ContentBlock } from '@/shared/types'
 import { inferMessageType } from '@/shared/types'
 import { TaskPlanCard } from '@/features/chat/task-plan-card'
 import { MediaAttachments, parseMediaMarkers } from '@/shared/components/media-attachments'
-import { cn } from '@/shared/utils'
-import { Loader2, Copy, Check, ChevronDown, ChevronRight } from 'lucide-react'
+import { cn, confirmAction } from '@/shared/utils'
+import { useChatStore } from '@/features/chat/chat-store'
+import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
+import { useProjectStore } from '@/shared/stores/project-store'
+import { wsClient } from '@/shared/ws-client'
+import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+
+/**
+ * Resolve which (sessionId, projectId) a rendered message belongs to. MessageList
+ * is mounted by two panels (Chat / Sessions) that can both be alive at once and
+ * whose call sites we don't edit, so the instance can't be told its session via
+ * props. Instead we look the clicked message's id up in the live chat store; if
+ * present the target is the live session, otherwise it's the session the Sessions
+ * tab has selected (historical view loaded via API). Ids are unique within each
+ * source array, so this can't cross wires.
+ *
+ * Only root sessions are returned: a hierarchical id (contains `>`) is a
+ * sub-session whose "user" turns are agent-injected task prompts, not real user
+ * messages, and whose ordinal is counted over a separate log — deleting there
+ * would target the wrong turn in the root. Returns null for those (and when
+ * nothing resolves), which hides the Delete button.
+ */
+function resolveTargetSession(messageId: string): { sessionId: string; projectId: string } | null {
+  const projectId = useProjectStore.getState().activeProject?.id
+  if (!projectId) return null
+  const chat = useChatStore.getState()
+  if (chat.sessionId && chat.messages.some((m) => m.id === messageId)) {
+    return chat.sessionId.includes('>') ? null : { sessionId: chat.sessionId, projectId }
+  }
+  const selectedSessionId = useSessionViewStore.getState().selectedSessionId
+  if (selectedSessionId && !selectedSessionId.includes('>')) return { sessionId: selectedSessionId, projectId }
+  return null
+}
 
 interface MessageListProps {
   messages: ChatMessage[]
@@ -53,11 +84,26 @@ function buildExchanges(messages: ChatMessage[]): Exchange[] {
 function ExchangeView({ messages, debugMode }: { messages: ChatMessage[]; debugMode?: boolean }) {
   const exchanges = useMemo(() => buildExchanges(messages), [messages])
 
+  // Every message in one MessageList belongs to one session, so resolve
+  // deletability once (probe with any user message id) instead of per row.
+  // False for sub-sessions / unresolvable sessions → no Delete button anywhere.
+  const deletable = useMemo(() => {
+    const probe = messages.find((m) => m.role === 'user')
+    return probe ? resolveTargetSession(probe.id) !== null : false
+  }, [messages])
+
+  // Assign each user-role exchange its 0-based ordinal among user turns — the
+  // same count the server derives over the root UI log, so a Delete click maps
+  // to the right turn regardless of id/content divergence. Non-user leading
+  // exchanges get -1 (no Delete button).
+  let userCount = 0
+
   return (
     <div className="flex flex-col">
-      {exchanges.map((ex) => (
-        <ExchangeRow key={ex.user.id} user={ex.user} responses={ex.responses} debugMode={debugMode} />
-      ))}
+      {exchanges.map((ex) => {
+        const ordinal = ex.user.role === 'user' ? userCount++ : -1
+        return <ExchangeRow key={ex.user.id} user={ex.user} responses={ex.responses} debugMode={debugMode} userOrdinal={ordinal} deletable={deletable} />
+      })}
     </div>
   )
 }
@@ -72,17 +118,18 @@ function ExchangeView({ messages, debugMode }: { messages: ChatMessage[]; debugM
  * element-wise compare instead of trusting the array identity.
  */
 const ExchangeRow = memo(function ExchangeRow({
-  user, responses, debugMode,
-}: { user: ChatMessage; responses: ChatMessage[]; debugMode?: boolean }) {
+  user, responses, debugMode, userOrdinal, deletable,
+}: { user: ChatMessage; responses: ChatMessage[]; debugMode?: boolean; userOrdinal: number; deletable: boolean }) {
+  const deleted = !!user.deleted
   return (
-    <div className="border-b border-[var(--border)]/50 last:border-b-0">
+    <div className={cn('border-b border-[var(--border)]/50 last:border-b-0', deleted && 'opacity-50')}>
       {user.role === 'user' ? (
         parseSubAgentReport(user.content) ? (
           <SubAgentReport content={user.content} />
         ) : parseCompactSummary(user.content) ? (
           <CompactSummary content={user.content} />
         ) : (
-          <UserExchangeHeader content={user.content} localImages={user.localImages} />
+          <UserExchangeHeader content={user.content} localImages={user.localImages} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
         )
       ) : (
         <div className="px-3 py-2">
@@ -98,6 +145,8 @@ const ExchangeRow = memo(function ExchangeRow({
 }, (prev, next) =>
   prev.user === next.user &&
   prev.debugMode === next.debugMode &&
+  prev.userOrdinal === next.userOrdinal &&
+  prev.deletable === next.deletable &&
   prev.responses.length === next.responses.length &&
   prev.responses.every((m, i) => m === next.responses[i]),
 )
@@ -400,16 +449,41 @@ function ThinkingBlock({ text }: { text: string }) {
  *  The chips are rendered outside the sticky block so that the next exchange's sticky header
  *  doesn't cover them when scrolled.
  */
-function UserExchangeHeader({ content, localImages }: { content: string; localImages?: string[] }) {
+function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable }: { content: string; localImages?: string[]; userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean }) {
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const canDelete = deletable && !deleted && userOrdinal >= 0
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) }).catch(() => {})
+  }
+
+  const handleDelete = async () => {
+    const target = resolveTargetSession(messageId)
+    if (!target) return
+    if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
+    wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal })
+  }
+
   return (
     <>
       {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
           near-identical slate fg; on other themes they follow the palette */}
-      <div className="sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 border-l-blue-500 px-4 py-2.5 shadow-sm">
-        <CollapsibleContent maxLines={2}>
-          <div className="text-xs text-[var(--accent-foreground)] leading-relaxed whitespace-pre-wrap">
+      <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted ? 'border-l-red-500/60' : 'border-l-blue-500')}>
+        <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
+          {deleted && <span className="mr-1 rounded bg-red-900/30 px-1 py-px text-[9px] font-medium text-red-400">deleted</span>}
+          <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
+            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+          </button>
+          {canDelete && (
+            <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        <CollapsibleContent maxLines={2} toggleClassName="top-auto bottom-0">
+          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
             {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
           </div>
         </CollapsibleContent>
@@ -709,7 +783,7 @@ function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isS
 
 // ─── Utility components ───
 
-function CollapsibleContent({ children, maxLines = 2, className }: { children: React.ReactNode; maxLines?: number; className?: string }) {
+function CollapsibleContent({ children, maxLines = 2, className, toggleClassName }: { children: React.ReactNode; maxLines?: number; className?: string; toggleClassName?: string }) {
   const contentRef = useRef<HTMLDivElement>(null)
   const [clamped, setClamped] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -747,7 +821,7 @@ function CollapsibleContent({ children, maxLines = 2, className }: { children: R
   return (
     <div className={cn('relative', className)}>
       {clamped && (
-        <button onClick={() => setExpanded(!expanded)} className="absolute top-0 right-0 text-[11px] text-[var(--primary)] hover:underline z-10">
+        <button onClick={() => setExpanded(!expanded)} className={cn('absolute top-0 right-0 text-[11px] text-[var(--primary)] hover:underline z-10', toggleClassName)}>
           {expanded ? 'Show less' : 'Show more'}
         </button>
       )}
