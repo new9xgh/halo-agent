@@ -20,6 +20,7 @@ import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { TerminalManager } from './terminal-manager.js'
 import { dispatchCommand as sharedDispatchCommand, type CommandContext as SharedCommandContext } from '../channels/shared/commands.js'
+import { resolveGoalRoute } from '../agents/goal-mode.js'
 
 export interface WsHandlerDeps {
   wss: WebSocketServer
@@ -566,12 +567,25 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         return
       }
       const projectPath = resolveProjectPath(msg.projectId)
-      const sid = await bindOrCreateSession(client, msg)
+      let sid = await bindOrCreateSession(client, msg)
       if (!sid || !client.sessionManager) {
         sendJson(ws, { type: 'error', error: 'Cannot resolve project path' })
         return
       }
       const sm = client.sessionManager
+
+      // Goal-mode routing overlay (docs/plans/loop-mode.md): chat aimed at a
+      // goal-bound worker diverts to its goal session — stray chat can never
+      // contaminate a round. Rebind this client's event stream to the goal
+      // session and tell the frontend (same mechanics as a command switchTo).
+      const goalRouted = resolveGoalRoute(sm.getDb(), sid)
+      if (goalRouted !== sid) {
+        sid = goalRouted
+        client.unsubscribeEvents?.()
+        client.sessionId = sid
+        client.unsubscribeEvents = sm.registerEventListener(sid, createEventListener(client))
+        sendJson(ws, { type: 'session:switched', sessionId: sid })
+      }
 
       // Persist pasted/uploaded images to disk so a [图片已保存: /path] marker
       // survives session reload and renders as a thumbnail on the same code
