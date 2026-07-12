@@ -411,7 +411,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
                 // text would land in the system tray but the chat panel
                 // would still be wired to the old session.
                 if (result.switchTo) {
+                  // Rebind this client's event stream to the new session (same
+                  // mechanics as the goal-divert path in handleChat). Without
+                  // the rebind, streaming events from the switched-to session
+                  // (e.g. G's intake greeting after /goal create) never reach
+                  // this connection — the listener still points at the old id.
+                  client.unsubscribeEvents?.()
                   client.sessionId = result.switchTo
+                  client.unsubscribeEvents = sm.registerEventListener(result.switchTo, createEventListener(client))
                   sendJson(ws, { type: 'session:switched', sessionId: result.switchTo })
                 }
               } else {
