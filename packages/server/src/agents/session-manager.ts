@@ -181,6 +181,10 @@ export interface SessionInfo {
   /** Persisted access level for this session — used by skill-command's
    *  permission gate. `null` means "no gate" (CLI / pre-channel sessions). */
   accessLevel: 'readonly' | 'workspace' | 'full' | null
+  /** Goal-mode back-pointer: non-null while this session is the bound worker
+   *  of an active goal (see goal-mode.ts). Surfaced so session lists can
+   *  badge goal-bound sessions. */
+  goalSessionId: string | null
   createdAt: number
   updatedAt: number
   stoppedAt: number | null

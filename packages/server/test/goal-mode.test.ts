@@ -117,6 +117,14 @@ describe('goal state + routing overlay', () => {
     expect(findLatestGoal(sm.getDb())?.goalSessionId).toBe('goal_c')
   })
 
+  it('exposes the worker back-pointer on SessionInfo (admin 🎯 badge)', () => {
+    seedGoal('goal_a', 'w1')
+    expect(sm.getSessionById('w1')?.goalSessionId).toBe('goal_a')
+    expect(sm.getSessionById('goal_a')?.goalSessionId).toBeNull()
+    const page = sm.listSessions({ rootOnly: true, limit: 10 })
+    expect(page.sessions.find((s) => s.id === 'w1')?.goalSessionId).toBe('goal_a')
+  })
+
   it('diverts W → G while intake/running, lifts on paused, no-op unbound', () => {
     seedGoal('goal_a', 'w1')
     expect(resolveGoalRoute(sm.getDb(), 'w1')).toBe('goal_a') // intake
@@ -427,5 +435,38 @@ describe('/goal verbs', () => {
     const ro = await dispatchCommand(ctxFor('readonly'), '/goal', '')
     expect(ro?.text).toContain('/goal status')
     expect(ro?.text).not.toContain('/goal create')
+  })
+})
+
+// ── Admin seed endpoint ──────────────────────────────────────────────
+
+describe('GET /sessions/goal (banner refresh seed)', () => {
+  const get = async () => {
+    const { createSessionRoutes } = await import('../src/routes/sessions.js')
+    const app = createSessionRoutes()
+    const res = await app.request(`/sessions/goal?projectId=${encodeURIComponent(ws)}`)
+    return res.json() as Promise<{ goal: { goalSessionId: string; status: string; round: number; maxRounds: number } | null }>
+  }
+
+  it('returns the latest goal with round caps; null for none or cleared', async () => {
+    expect((await get()).goal).toBeNull()
+
+    seedGoal('goal_a', 'w1', (s) => { s.status = 'running'; s.round = 7 })
+    const running = (await get()).goal!
+    expect(running.goalSessionId).toBe('goal_a')
+    expect(running.status).toBe('running')
+    expect(running.round).toBe(7)
+    expect(running.maxRounds).toBe(50)
+
+    // Terminal-but-displayable states still seed the banner…
+    const s = readGoalState(sm.getDb(), 'goal_a')!
+    s.status = 'halted'
+    writeGoalState(sm.getDb(), 'goal_a', s)
+    expect((await get()).goal!.status).toBe('halted')
+
+    // …cleared is a dismissed record: nothing to show.
+    s.status = 'cleared'
+    writeGoalState(sm.getDb(), 'goal_a', s)
+    expect((await get()).goal).toBeNull()
   })
 })

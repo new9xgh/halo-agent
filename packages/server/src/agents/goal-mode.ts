@@ -132,6 +132,7 @@ export function writeGoalState(db: HaloDb, goalSessionId: string, state: GoalSta
     workerSessionId: state.workerSessionId,
     status: state.status,
     round: state.round,
+    maxRounds: state.caps.maxRounds,
   })
 }
 
