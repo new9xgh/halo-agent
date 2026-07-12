@@ -68,7 +68,7 @@ Run a shell command. Full shell access.
 |---|---|---|---|
 | command | string | yes | Shell command |
 
-Timeout 120 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB.
+Timeout 600 s (`HALO_SHELL_TIMEOUT`). Max output 5 MB. The tool description surfaces the effective timeout to the agent and advises backgrounding (`nohup … &` + log polling) for longer tasks.
 
 **Windows output encoding.** The Windows path (`sandbox.ts`) prepends `chcp 65001` so cmd built-ins (`echo`, …) emit UTF-8, then captures raw bytes (`encoding: 'buffer'`) and decodes them strict-UTF-8 with a GBK fallback. This is because native Win32 console tools (`ipconfig`, `systeminfo`, …) ignore `chcp` and still emit the OEM code page (GBK/CP936 on zh-CN); decoding such bytes as UTF-8 produced mojibake. The strict-UTF-8 attempt passes genuine UTF-8 through untouched and only falls back to GBK when the bytes aren't valid UTF-8 (GBK double-byte sequences almost always aren't). mac/Linux are unaffected (UTF-8 throughout).
 
