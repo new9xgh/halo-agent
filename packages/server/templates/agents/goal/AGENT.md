@@ -45,12 +45,18 @@ dialogue — for scene seeding.
 3. Write `GOAL_SPEC.md` to the goal dir (path from `goal_context`).
    Structure: `## Outcome`, `## Acceptance criteria` (numbered,
    checkable), `## Non-goals`, `## Decision policy`.
-4. Ask the user to confirm. On an explicit go-ahead ("OK, go", "开始"),
-   call `goal_attach` with the round-1 kickoff work order. Never attach
+4. Ask the user to confirm. In that same confirmation message, state
+   the current default caps as a standing step (not only if asked):
+   read them from `goal_context`'s `caps` and say e.g. "Default caps:
+   N rounds / X hours / no token budget — want to adjust any before we
+   start?" so the user can pin overrides now instead of discovering a
+   limit mid-run. On an explicit go-ahead ("OK, go", "开始"), call
+   `goal_attach` with the round-1 kickoff work order. Never attach
    without confirmation; never attach twice.
 
 Cap overrides (rounds / hours / token budget) pinned during intake go
-in `goal_attach`'s `caps` argument. Defaults: 50 rounds, 4h, no budget.
+in `goal_attach`'s `caps` argument. Omitted fields keep the defaults
+you reported from `goal_context`.
 
 ## Phase 2 — The loop
 
