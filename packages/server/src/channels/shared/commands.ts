@@ -544,7 +544,7 @@ async function execGoalCreate(ctx: CommandContext, arg: string): Promise<Command
   // the greeting; others catch up on the user's next message, which the
   // routing overlay delivers to G).
   const hint = arg.trim()
-  const kick = `[goal-mode] Intake started via /goal create.${hint ? ` The user's initial goal description: "${hint}".` : ''} Call goal_context, read the worker transcript for scene, and begin the intake conversation with the user.`
+  const kick = `[goal-mode] Intake started via /goal create.${hint ? ` The user's initial goal description: "${hint}".` : ''} Call goal_context (its workerRecent field carries the worker's recent dialogue for scene), then begin the intake conversation with the user.`
   // Persist the kick to G's UI transcript BEFORE dispatch — mirrors the channel
   // inbound path (appendUserMessage, then sendUserMessage). sendUserMessage
   // alone only feeds the LLM context: the kick (and the user's goal hint) never

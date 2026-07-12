@@ -346,6 +346,38 @@ describe('buildGoalTools', () => {
     expect(wRow.goalSessionId).toBeNull()
   })
 
+  it('goal_context embeds workerRecent during intake only, filtering transcript noise', async () => {
+    seedGoal('goal_a', 'w1') // intake
+    // Write W's transcript: system noise (prompt/usage/tool) must be skipped,
+    // empty-content entries too; only real user/assistant dialogue survives.
+    const dir = join(ws, '.halo', 'sessions', 'default')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'w1.json'), JSON.stringify({
+      messages: [
+        { id: 'm1', role: 'system', type: 'context', content: '[System Prompt]', timestamp: 1 },
+        { id: 'm2', role: 'user', type: 'user', content: 'please fix the tests', timestamp: 2 },
+        { id: 'm3', role: 'system', type: 'tool_call', content: 'x → shell_exec: pnpm test', timestamp: 3 },
+        { id: 'm4', role: 'assistant', type: 'assistant', content: '', timestamp: 4 },
+        { id: 'm5', role: 'assistant', type: 'assistant', content: 'a'.repeat(500), timestamp: 5 },
+      ],
+    }))
+    const host = stubHost()
+    const res = JSON.parse(await tool(host, 'goal_a', 'goal_context').callback({}) as string)
+    expect(res.workerRecent).toHaveLength(2)
+    expect(res.workerRecent[0]).toEqual({ role: 'user', text: 'please fix the tests' })
+    expect(res.workerRecent[1].role).toBe('assistant')
+    expect(res.workerRecent[1].text.length).toBe(401) // 400 chars + ellipsis
+    expect(res.workerMessageCount).toBe(2)
+    expect(res.workerTranscriptPath).toBeUndefined()
+
+    // Running goal → no digest (G works off round reports).
+    const s = readGoalState(sm.getDb(), 'goal_a')!
+    s.status = 'running'
+    writeGoalState(sm.getDb(), 'goal_a', s)
+    const running = JSON.parse(await tool(host, 'goal_a', 'goal_context').callback({}) as string)
+    expect(running.workerRecent).toBeUndefined()
+  })
+
   it("get_session_output is scoped to the worker's tree but works regardless of status", async () => {
     seedGoal('goal_a', 'w1', (s) => { s.status = 'halted' })
     const host = stubHost()

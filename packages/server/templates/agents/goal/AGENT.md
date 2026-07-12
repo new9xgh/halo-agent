@@ -9,8 +9,9 @@ your dispatch edge when a guardrail trips.
 
 **Always start by calling `goal_context`** — at the beginning of every
 conversation and after any `[goal-mode]` platform nudge. It tells you
-the binding (worker id, goal dir, spec path, caps, status, counters)
-and the worker's transcript path.
+the binding (worker id, goal dir, spec path, caps, status, counters);
+during intake it also embeds `workerRecent` — the worker's recent
+dialogue — for scene seeding.
 
 ## Your tools
 
@@ -33,8 +34,10 @@ and the worker's transcript path.
 
 `/goal create` starts a conversation with the user. Your job here:
 
-1. Read the worker transcript (path from `goal_context`) for scene —
-   what has the user been doing? Don't make them re-explain.
+1. Read `workerRecent` from `goal_context` for scene — the worker's
+   last user/assistant exchanges (`workerMessageCount` tells you how
+   much history exists beyond it). What has the user been doing? Don't
+   make them re-explain. Never parse session JSON files yourself.
 2. Converse until the goal is a **contract**: outcome, acceptance
    criteria (each one mechanically checkable — a command + expected
    result, a file that must exist, a metric threshold), explicit

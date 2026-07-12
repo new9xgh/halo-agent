@@ -23,7 +23,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { and, eq, isNull, isNotNull } from 'drizzle-orm'
 import { agentSessions } from '../db/schema.js'
-import { readSessionFileMeta, fileSegment } from '../sessions/session-store.js'
+import { readSessionFileMeta, loadSessionMessages } from '../sessions/session-store.js'
 import { broadcast } from '../ws/broadcast.js'
 import { config } from '../config.js'
 import type { HaloDb } from '../db/index.js'
@@ -252,15 +252,38 @@ export function fmtElapsed(ms: number): string {
   return h > 0 ? `${h}h${m.toString().padStart(2, '0')}m` : `${m}m`
 }
 
-/** W's transcript file — handed to G (via goal_context) so intake can seed
- *  itself from the worker's recent conversation without the user re-explaining. */
-function workerTranscriptPath(db: HaloDb, workspaceRoot: string, workerSessionId: string): string | null {
+/** Per-message truncation + total budget for `workerRecent` (goal_context's
+ *  intake-phase digest of W's conversation). Keeps the tool result readable
+ *  in one gulp — the raw session JSON can be 150KB+ of tool noise. */
+const WORKER_RECENT_MAX_MESSAGES = 20
+const WORKER_RECENT_MSG_CHARS = 400
+const WORKER_RECENT_TOTAL_CHARS = 8_000
+
+/** Digest of W's recent conversation — embedded in goal_context during intake
+ *  so G can seed itself without the user re-explaining (and without file_read
+ *  on a 155KB session JSON). Only real dialogue survives: the transcript's
+ *  role=system entries are prompt/usage/tool noise, skipped wholesale. */
+export function workerRecentMessages(db: HaloDb, workspaceRoot: string, workerSessionId: string): { messages: Array<{ role: string; text: string }>; messageCount: number } {
   const row = db.select({ agentId: agentSessions.agentId })
     .from(agentSessions)
     .where(eq(agentSessions.id, workerSessionId))
     .get()
-  if (!row) return null
-  return path.join(workspaceRoot, '.halo', 'sessions', row.agentId, `${fileSegment(workerSessionId)}.json`)
+  if (!row) return { messages: [], messageCount: 0 }
+  const all = loadSessionMessages(workerSessionId, workspaceRoot, row.agentId)
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim().length > 0)
+  const recent = all.slice(-WORKER_RECENT_MAX_MESSAGES)
+  const messages: Array<{ role: string; text: string }> = []
+  let total = 0
+  // Walk newest → oldest so the budget keeps the most recent exchange.
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const text = recent[i].content.length > WORKER_RECENT_MSG_CHARS
+      ? recent[i].content.slice(0, WORKER_RECENT_MSG_CHARS) + '…'
+      : recent[i].content
+    if (total + text.length > WORKER_RECENT_TOTAL_CHARS) break
+    total += text.length
+    messages.unshift({ role: recent[i].role, text })
+  }
+  return { messages, messageCount: all.length }
 }
 
 // ── Routing overlay ──────────────────────────────────────────────────
@@ -421,11 +444,17 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
 
   const goalContext: ToolDef = {
     name: 'goal_context',
-    description: 'Load your goal binding: worker session id, goal dir, GOAL_SPEC path, caps, status, round, counters, and the worker transcript path (for intake seeding). Call this first at the start of every conversation and after any restart nudge.',
+    description: 'Load your goal binding: worker session id, goal dir, GOAL_SPEC path, caps, status, round, counters. During intake it also embeds workerRecent — the worker\'s recent user/assistant dialogue — so you can seed the intake conversation without reading transcript files. Call this first at the start of every conversation and after any restart nudge.',
     inputSchema: { type: 'object' as const, properties: {} },
     callback: async () => {
       const s = state()
       if (!s) return jsonErr('no goal binding on this session')
+      // workerRecent only during intake — that's the scene-seeding phase.
+      // While running, G works off delivered round reports; embedding the
+      // digest on every context call would just burn tokens.
+      const recent = s.status === 'intake'
+        ? workerRecentMessages(db(), host.workspaceRoot, s.workerSessionId)
+        : null
       return JSON.stringify({
         code: 0,
         goalId: s.goalId,
@@ -434,7 +463,7 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
         caps: s.caps,
         decisionPolicy: s.decisionPolicy,
         workerSessionId: s.workerSessionId,
-        workerTranscriptPath: workerTranscriptPath(db(), host.workspaceRoot, s.workerSessionId),
+        ...(recent ? { workerRecent: recent.messages, workerMessageCount: recent.messageCount } : {}),
         goalDir: goalDir(host.workspaceRoot, s.goalId),
         specPath: goalSpecPath(host.workspaceRoot, s.goalId),
         delegatedCount: s.delegatedCount,
