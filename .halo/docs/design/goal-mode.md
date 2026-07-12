@@ -76,14 +76,14 @@ Gates, in order:
 
 | Guardrail | Default | Trips when |
 |---|---|---|
-| Max rounds | 50 | `round >= caps.maxRounds` |
+| Max rounds | 10 | `round >= caps.maxRounds` |
 | Wall time | 4h | `now − startedAt > caps.maxWallMs` |
 | No-progress breaker | 3 | 3 consecutive byte-identical reports |
 | Token budget | off unless set at attach | W's `totalOutputTokens − tokenBaseline > caps.maxTokens` (G's own consumption is not metered) |
 
 Breach → `halted` + `haltReason`, back-pointer cleared (**revoking the lateral edge** — G's further `query_session` calls are rejected in code), and the report is delivered under a `[Goal HALTED: …]` header instructing G to produce a halt diagnosis instead of more work.
 
-7. Normal path: state persisted, report delivered to G via `querySession` under the deterministic header `[Goal round N/50 · elapsed 1h12m · no-progress 0/3]`. The body is capped at `limits.autoReportMax` (8,192 default) with a truncation marker pointing G at `get_session_output` — same convention as the sub-agent auto-report.
+7. Normal path: state persisted, report delivered to G via `querySession` under the deterministic header `[Goal round N/10 · elapsed 1h12m · no-progress 0/3]`. The body is capped at `limits.autoReportMax` (8,192 default) with a truncation marker pointing G at `get_session_output` — same convention as the sub-agent auto-report.
 
 A fifth cap is enforced inside the tools rather than the delivery point: **delegated decisions** (G-answered forks) are capped at 5 per goal by `goal_decide`.
 
@@ -124,7 +124,7 @@ Continuation over death-handling: in-flight promises die with the process, goal 
 
 - **`goal:changed`** is broadcast on every `writeGoalState` (and on the G-delete dissolve path) with `{goalSessionId, workerSessionId, status, round, maxRounds}`. The broadcast is **server-global with no workspace marker**; the admin re-fetches through the seed endpoint under its active project, which naturally filters cross-workspace events. See [ws.md](ws.md).
 - **Seed endpoint** `GET /api/sessions/goal?projectId=` restores banner/lock state after a page reload (`cleared` returns `null` — a dismissed record, not a displayable state). See [dev/api.md](../dev/api.md#get-apisessionsgoalprojectidabs).
-- **Banner** (`goal-banner.tsx`): workspace-level strip above the composer — intake / running (`round N/max`) / paused / halted / done states. Label click jumps to G, a `Worker →` button jumps to W (client-side navigation only); terminal states are dismissible (in-memory — refresh brings them back until the next goal replaces the record), active ones are not (the lock they explain is still in force).
+- **Banner** (`goal-banner.tsx`): workspace-level strip above the composer — intake / running (`round N/max`) / paused / halted / done states. Label click jumps to G, a `Worker →` button jumps to W (client-side navigation only); terminal states are dismissible, active ones are not (the lock they explain is still in force). Dismissal persists per-project in `localStorage` (`halo_goal_dismissed_<projectId>`) so it survives a page refresh; a new goal has a different `goalSessionId`, so the id-equality check naturally un-suppresses the banner for it.
 - **Input lock** (`message-input.tsx`): while the open session is the bound worker of an `intake`/`running` goal, plain chat is blocked (the overlay would divert it anyway — typing there is misleading); slash commands still dispatch (`/goal pause · status · clear` are exactly what you'd run from there). Paused lifts the lock.
 - **🎯 badge**: session lists render it off the `goalSessionId` field in `GET /api/sessions/logs` rows.
 - **`switchTo` rebind**: `/goal create` / `resume` return `switchTo: G`; the WS handler rebinds the client's event listener and emits `session:switched`; the frontend then re-subscribes to get a disk-seeded snapshot so G's existing transcript renders. Details in [ws.md](ws.md#switchto-rebind--sessionswitched).

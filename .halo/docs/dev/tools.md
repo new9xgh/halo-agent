@@ -303,7 +303,7 @@ The hinge from intake conversation to running loop. Preconditions: status `intak
 | Arg | Type | Required | Description |
 |---|---|---|---|
 | `kickoff` | string | yes | Round-1 work order, sent verbatim (header prepended by the platform) |
-| `caps` | object | no | Overrides pinned during intake: `max_rounds` / `max_hours` / `max_tokens`; omitted fields keep defaults (50 rounds / 4h / no token budget) |
+| `caps` | object | no | Overrides pinned during intake: `max_rounds` / `max_hours` / `max_tokens`; omitted fields keep defaults (10 rounds / 4h / no token budget) |
 | `decision_policy` | string | no | One-line record of what kinds of forks the user delegated |
 
 ### goal_decide
