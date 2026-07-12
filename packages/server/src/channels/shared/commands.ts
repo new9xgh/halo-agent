@@ -737,13 +737,14 @@ const SUBCOMMAND_ROUTES: Record<string, Record<string, BuiltinVerb>> = {
     delete: { handler: (ctx, subArg) => execSkillDelete(ctx, subArg), requiresAccess: 'full', descKey: 'verb.skill.delete' },
   },
   '/goal': {
-    // status is a pure read; the lifecycle verbs drive the workspace agent
-    // (dispatching work orders that write files), so they need workspace+.
-    create: { handler: (ctx, subArg) => execGoalCreate(ctx, subArg), requiresAccess: 'workspace', descKey: 'verb.goal.create' },
-    status: { handler: (ctx) => execGoalStatus(ctx), descKey: 'verb.goal.status' },
-    pause: { handler: (ctx) => execGoalPause(ctx), requiresAccess: 'workspace', descKey: 'verb.goal.pause' },
-    resume: { handler: (ctx) => execGoalResume(ctx), requiresAccess: 'workspace', descKey: 'verb.goal.resume' },
-    clear: { handler: (ctx) => execGoalClear(ctx), requiresAccess: 'workspace', descKey: 'verb.goal.clear' },
+    // Goal mode drives an autonomous multi-round loop (G dispatches work
+    // orders that write files, runs shell checks, consumes rounds of model
+    // budget) — user ruling: full-access only, all verbs including status.
+    create: { handler: (ctx, subArg) => execGoalCreate(ctx, subArg), requiresAccess: 'full', descKey: 'verb.goal.create' },
+    status: { handler: (ctx) => execGoalStatus(ctx), requiresAccess: 'full', descKey: 'verb.goal.status' },
+    pause: { handler: (ctx) => execGoalPause(ctx), requiresAccess: 'full', descKey: 'verb.goal.pause' },
+    resume: { handler: (ctx) => execGoalResume(ctx), requiresAccess: 'full', descKey: 'verb.goal.resume' },
+    clear: { handler: (ctx) => execGoalClear(ctx), requiresAccess: 'full', descKey: 'verb.goal.clear' },
   },
 }
 

@@ -366,9 +366,9 @@ describe('/goal verbs', () => {
     ;(sm as unknown as { sendUserMessage: () => Promise<string> }).sendUserMessage = async () => 'queued'
   })
 
-  it('create requires workspace access', async () => {
-    const res = await dispatchCommand(ctxFor('readonly'), '/goal', 'create')
-    expect(res?.text).toMatch(/requires workspace/)
+  it('create requires full access', async () => {
+    const res = await dispatchCommand(ctxFor('workspace'), '/goal', 'create')
+    expect(res?.text).toMatch(/requires full/)
   })
 
   it('create refuses without an active root session', async () => {
@@ -400,7 +400,7 @@ describe('/goal verbs', () => {
 
   it('status prints round / caps / state from the db', async () => {
     seedGoal('goal_x', 'web_w1', (s) => { s.status = 'running'; s.round = 7; s.startedAt = Date.now() })
-    const res = await dispatchCommand(ctxFor('readonly'), '/goal', 'status')
+    const res = await dispatchCommand(ctxFor('full'), '/goal', 'status')
     expect(res?.text).toContain('status: running · round 7/50')
     expect(res?.text).toContain('worker: web_w1')
   })
@@ -432,9 +432,9 @@ describe('/goal verbs', () => {
     for (const v of ['create', 'status', 'pause', 'resume', 'clear']) {
       expect(full?.text).toContain(`/goal ${v}`)
     }
-    const ro = await dispatchCommand(ctxFor('readonly'), '/goal', '')
-    expect(ro?.text).toContain('/goal status')
-    expect(ro?.text).not.toContain('/goal create')
+    // All verbs (status included) are full-only — workspace callers get nothing.
+    const ws = await dispatchCommand(ctxFor('workspace'), '/goal', '')
+    expect(ws?.text).toContain('No actions available')
   })
 })
 
