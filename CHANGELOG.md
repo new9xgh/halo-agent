@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-12
+
+### Added
+
+- Goal Mode: hand off the two roles a user unconsciously plays in long agent collaborations — the pusher ("continue") and the evaluator ("is it actually done?") — to a dedicated judge agent. `/goal create [description]` starts an intake conversation on the current session (which becomes the worker) and mints a peer judge session that dispatches work orders and re-dispatches until acceptance or a guardrail halts it; `/goal status` reports round/cap, elapsed time, no-progress counter, and delegated decisions; `/goal pause` hands control back to the user for manual takeover; `/goal resume` nudges the judge to re-read the spec and continue; `/goal clear` tears down the binding from any state. All five verbs require full access.
+- Admin: a goal banner above the chat composer shows live status (intake / running round N/max / paused / halted / done), a `Worker →` button to jump to the worker session, and a 🎯 badge on sessions bound to an active goal. Terminal states (done/halted) are dismissible.
+
+### Fixed
+
+- Goal Mode: the intake kick, resume nudge, and restart-sweep nudge only fed the LLM context and skipped the UI transcript append, leaving the judge's first turn with an empty assistant bubble and no visible record of the user's initial goal description after a reload.
+- Goal Mode: `/goal create` and `/goal resume` switch the chat panel to the judge session, but the admin never re-subscribed to the new session's event stream — its streaming replies kept flowing to the old session.
+- Goal Mode: deleting the judge session or the worker session left the other side's binding dangling (stale 🎯 badge, banner still showing a goal with no counterpart); both delete paths now dissolve the binding before the row is removed.
+- Admin: dismissing a goal banner no longer comes back after a page refresh.
+
+### Changed
+
+- Goal Mode: default round cap lowered from 50 to 10 — a goal that hasn't converged by round 10 is looping, not progressing.
+- `shell_exec` default timeout raised from 120s to 600s for long-running commands (builds, test suites, deploys); the tool description now states the effective timeout live from config.
+
 ## [0.2.5] - 2026-07-08
 
 ### Added
@@ -256,7 +275,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/turmind/halo-agent/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/turmind/halo-agent/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/turmind/halo-agent/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/turmind/halo-agent/compare/v0.2.2...v0.2.3
