@@ -25,10 +25,13 @@ export function FindBar({ onClose }: FindBarProps) {
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<{ activeMatchOrdinal: number; matches: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => () => clearTimeout(debounceRef.current), [])
 
   // found-in-page results (fires per keystroke and per next/prev jump).
   // Single-slot callback in preload — registering replaces, no stacking.
@@ -47,8 +50,18 @@ export function FindBar({ onClose }: FindBarProps) {
   // and the Cmd/Ctrl+F toggle in workspace-layout that unmounts directly).
   useEffect(() => () => { getHaloFind()?.stop('clearSelection') }, [])
 
+  // Debounced: findInPage steals focus from the page as a side effect
+  // (electron/electron#22880, unfixed), and firing one request per keystroke
+  // means a fast typist races a fresh steal against every character — the
+  // input loses focus before the next keystroke lands. Waiting for a pause
+  // keeps at most one request in flight while typing.
+  //
+  // findNext is named backwards from what it sounds like (Electron docs):
+  // true starts a NEW find session (this call, on a changed query), false
+  // steps through the EXISTING session (the next/prev calls in step below).
   const handleChange = useCallback((text: string) => {
     setQuery(text)
+    clearTimeout(debounceRef.current)
     const bridge = getHaloFind()
     if (!bridge) return
     if (!text) {
@@ -56,12 +69,14 @@ export function FindBar({ onClose }: FindBarProps) {
       setResult(null)
       return
     }
-    bridge.find(text, { forward: true, findNext: false })
+    debounceRef.current = setTimeout(() => {
+      bridge.find(text, { forward: true, findNext: true })
+    }, 300)
   }, [])
 
   const step = useCallback(
     (forward: boolean) => {
-      if (query) getHaloFind()?.find(query, { forward, findNext: true })
+      if (query) getHaloFind()?.find(query, { forward, findNext: false })
     },
     [query],
   )
