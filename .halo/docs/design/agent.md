@@ -118,7 +118,7 @@ The provider YAML is the single source of truth. Existing `agent.yaml` files are
 
 When the user sends a new message while the agent is working (the **soft** interrupt):
 1. The message is pushed onto the single `messageQueue` (no `sourceSessionId` — it's a user entry) and `interruptRequested` is set
-2. Inside `runAgentTurn`'s event loop, when `event.type === 'tool_result'` and `interruptRequested` is true → `abortController.abort('interrupt')` — the abort waits for the current tool, so a mid-flight `shell_exec` is **not** killed
+2. Inside `runAgentTurn`'s event loop, when `event.type === 'tool_result'` and `interruptRequested` is true → `abortController.abort(abortReason('interrupt'))` (a `DOMException` wrapper — see [session.md](session.md#resilient-execution-loop) for why the reason must not be a bare string) — the abort waits for the current tool, so a mid-flight `shell_exec` is **not** killed
 3. The loop terminates (AbortError or cancelled)
 4. **Conversation repair** (`repairConversationMessages`) fixes orphaned pairs — an orphan `toolUse` gets a synthesized `[interrupted]` error `tool_result` (so the model knows the call was cut short and doesn't re-issue it), an orphan `toolResult` is stripped (see [session.md](session.md#conversation-repair))
 5. Control returns to `runSession`, whose `drainQueue` folds the queued message into one merged follow-up turn
@@ -131,7 +131,7 @@ Source: `packages/server/src/config.ts`
 
 | Config | Default | Description |
 |---|---|---|
-| `model.maxContextTokens` | 200,000 | Max context window (env: `HALO_MAX_CONTEXT_TOKENS`) |
+| `model.maxContextTokens` | 200,000 | Global-default context window (env: `HALO_MAX_CONTEXT_TOKENS`) — the last tier of the resolution chain below |
 | `model.compressAt` | 0.8 | Auto-compact threshold (80%) |
 | `agent.maxRetries` | 5 | Max retry count (settings: `general.agent.max_retries`) |
 | `session.maxCachedSessions` | 50 | In-memory session cache (env: `HALO_MAX_CACHED_SESSIONS`) |
@@ -139,6 +139,16 @@ Source: `packages/server/src/config.ts`
 | `session.maxNestingDepth` | 16 | Max session nesting depth (settings: `general.session.max_nesting_depth`) |
 
 Note: there is no `model.defaultModelId` — model ID must be specified per-agent in `agent.yaml`.
+
+### Context window resolution
+
+A session's context budget (`contextConfig.maxTokens`, drives compaction thresholds and the token ring) resolves through three tiers:
+
+1. agent.yaml `context.maxTokens` — explicit per-agent override
+2. model registry `contextWindow` — the model entry's official window in `models/<provider>.yaml`, via `resolveContextWindow(modelId)` (config.ts)
+3. `config.model.maxContextTokens` — global default 200K
+
+Two consumers apply the same chain: `buildModelRuntime` (session-agent-builder.ts) when a session is built, and the cold-session `getContextConfig()` path (session-manager.ts) for sessions not in memory — so what the UI displays for a cold session matches what actually takes effect on resume.
 
 ## Error handling
 

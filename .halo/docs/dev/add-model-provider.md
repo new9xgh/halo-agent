@@ -19,15 +19,15 @@ Total effort: typically a few hours depending on how weird the upstream API is a
 | Provider ID | Class | File | Notes |
 |---|---|---|---|
 | `aws-bedrock-claude-invoke` | `BedrockAgent` | `bedrock-agent.ts` | Anthropic Messages API via AWS SDK |
-| `kimi` | `KimiAgent` | `kimi-agent.ts` | OpenAI-compatible, vision, thinking (reasoning_content) |
+| `kimi` | `KimiAgent` | `kimi-agent.ts` | OpenAI-compatible, thinking (reasoning_content). Two API generations, branched on modelId: **K3** — vision (base64 data URLs only, no public-URL input), thinking always-on server-side, sole knob is top-level `reasoning_effort` (enum currently just `"max"`); **K2.6** — no vision, no `reasoning_effort` field at all, only the `thinking:{type:'enabled'|'disabled'}` toggle. Never send the K2.x `thinking` parameter to K3 |
 | `deepseek` | `DeepSeekAgent` | `deepseek-agent.ts` | OpenAI-compatible, thinking, no vision |
-| `minimax` | `MiniMaxAgent` | `minimax-agent.ts` | Anthropic Messages API (x-api-key), thinking always-on (manual budget_tokens), prompt caching (5m, M2.7 doesn't report cache_creation_input_tokens), no vision |
+| `minimax` | `MiniMaxAgent` | `minimax-agent.ts` | Anthropic Messages API (x-api-key). Two thinking schemes, branched on registry `thinking.mode`: **M3** (default) — vision, thinking off by default and enabled via `thinking:{type:'adaptive'}` (no levels, no budget_tokens), no `promptCaching` in the manifest on purpose (official docs scope `cache_control` to M2.x only; M3 has passive automatic caching); **M2.7** — no vision, thinking always-on (manual budget_tokens), prompt caching (5m, M2.7 doesn't report cache_creation_input_tokens) |
 | `qwen` | `QwenAgent` | `qwen-agent.ts` | Aliyun Bailian Anthropic-compatible API, thinking enable/disable both honored, prompt caching (5m only), vision on Plus, max no vision |
 | `hunyuan` | `HunyuanAgent` | `hunyuan-agent.ts` | Tencent Hy3 preview via OpenAI-compatible (tokenhub.tencentmaas.com), reasoning_effort low/high (no_think = omit), automatic prompt caching (cached_tokens), no vision |
 | `doubao` | `DoubaoAgent` | `doubao-agent.ts` | ByteDance Doubao Seed-2.0 (pro/lite/mini/code) on Volcengine Ark, OpenAI-compatible + `thinking:{type:'enabled'/'disabled'}` (no `auto`), automatic prompt caching, no vision |
 | `openai` | `OpenAIAgent` | `openai-agent.ts` | **Generic OpenAI-compatible**. Use for native OpenAI or any third-party OpenAI gateway (incl. Ollama / llama.cpp). User fills endpoint + model id; capabilities openly editable in the form. Forgiving about cache field names (`prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`, `cache_read_tokens` all read) and reasoning field names (`reasoning_content` for OpenAI o-series/DeepSeek, `reasoning` for Ollama/llama.cpp). |
 | `anthropic` | `AnthropicAgent` | `anthropic-agent.ts` | **Generic Anthropic Messages**. Use for api.anthropic.com or any Anthropic-compatible gateway. User fills endpoint + model id. Standard `cache_control: ephemeral` with optional `ttl: '1h'`. |
-| `aws-bedrock-mantle` | `MantleAgent` | `mantle-agent.ts` | OpenAI GPT-5.x (5.5 / 5.4) on Amazon Bedrock via the **OpenAI Responses API** (not Completions/Converse/InvokeModel). Vision, reasoning via `reasoning.effort` (low/med/high, no budget_tokens), `text.verbosity`. With reasoning on, returns streaming snapshots as multiple completed items — see the "Bedrock-Mantle returns streaming snapshots as separate output items" gotcha below. |
+| `aws-bedrock-mantle` | `MantleAgent` | `mantle-agent.ts` | OpenAI GPT-5.6 (Sol / Terra / Luna) on Amazon Bedrock via the **OpenAI Responses API** (not Completions/Converse/InvokeModel). Vision, reasoning via `reasoning.effort` (low/med/high, no budget_tokens), `text.verbosity`. Never surfaces reasoning summaries — `output[].reasoning.summary` stays empty even with `reasoning.summary=detailed` while `reasoning_tokens` counts up (verified live), so no thinking text in the UI is upstream behavior, not a parsing gap. |
 
 ---
 
@@ -148,6 +148,7 @@ models:
   - id: my-model-v1
     displayName: My Model V1
     maxOutputTokens: 16384
+    contextWindow: 200000               # official context window in tokens (optional)
     capabilities:
       image: true                      # supports image input
       video: false                     # no video understanding
@@ -167,6 +168,8 @@ models:
 - `capabilities.promptCaching.ttlPresets` → renders the Prompt Caching dropdown with those options
 - `capabilities.thinking.effortPresets` → renders the Thinking effort dropdown
 - Omit either block → the UI hides that control for this model
+
+**`contextWindow` feeds the session context budget** (compaction threshold, token ring). Resolution priority: agent.yaml `context.maxTokens` > registry `contextWindow` > global default 200K (`config.model.maxContextTokens`). Resolved by `resolveContextWindow()` in [config.ts](../../../packages/server/src/config.ts), consumed at two points with the same priority chain: `buildModelRuntime` (session-agent-builder.ts, live sessions) and the cold-session `getContextConfig()` path (session-manager.ts, display for sessions not in memory). Declare the official number on every model entry — without it, small-window models (e.g. 128K) silently use the 200K default and 1M models compact far too early.
 
 Shape source: [packages/server/templates/models/aws-bedrock-claude-invoke.yaml](../../../packages/server/templates/models/aws-bedrock-claude-invoke.yaml) and [design/storage.md#model-registry-format](../design/storage.md#model-registry-format).
 
@@ -348,16 +351,20 @@ def png(w, h, rgb):
 print(base64.b64encode(png(64, 64, [255, 0, 0])).decode())
 ```
 
-### Bedrock-Mantle returns streaming snapshots as separate output items
+### Bedrock-Mantle returned streaming snapshots as separate output items (5.5-era, workarounds removed)
 
-`aws-bedrock-mantle` (GPT-5.x via Bedrock's OpenAI Responses surface) has a server-side quirk: with **reasoning enabled**, it returns the *streaming generation* of a single logical output as **multiple completed items**, each a growing superset of the last. Two faces of the same bug:
+**Historical** — this affected GPT-5.5 on Mantle; 7 live probes across 5.6-sol and 5.4 showed zero recurrence, so the two `MantleAgent` workarounds below were removed with the GPT-5.6 rollout. Kept here as diagnosis knowledge in case the quirk resurfaces on a future model.
 
-- **`message`**: emitted as `reasoning → message → reasoning → message …`, each later `message` repeating the prior as a growing superset → `MantleAgent` keeps only the **last** message item (see `mantle-agent.ts`, the `message` branch).
-- **`function_call`**: a **long-argument** tool call comes back as `reasoning,fc,reasoning,fc,…` — N items, each carrying a growing **prefix snapshot** of the arguments JSON. Only the last is complete, valid JSON; the earlier N-1 are truncated mid-string (verified: a `draft` call returned 11 truncated snapshots + 1 complete, arguments length 461→…→2214). `MantleAgent` filters on **JSON completeness** — `strictParseOrNull` returns null for a truncated fragment and the parse loop skips it. This is tool- and length-agnostic: a genuine parallel tool_use (each `function_call` its own complete JSON, e.g. 4 distinct `shell_exec` searches) is fully preserved; only truncated snapshots are dropped.
+`aws-bedrock-mantle` (GPT-5.x via Bedrock's OpenAI Responses surface) had a server-side quirk: with **reasoning enabled**, it returned the *streaming generation* of a single logical output as **multiple completed items**, each a growing superset of the last. Two faces of the same bug:
 
-Distinguishing snapshot-spam from real parallel calls: snapshots are same-`name` with `reasoning,fc` **interleaved** and arguments forming a growing prefix chain; parallel calls are one `reasoning` then `fc,fc,fc` **consecutive** with independent complete arguments. Root cause is in Bedrock-Mantle, not halo — first-party OpenAI returns a single final item. If Bedrock ever fixes this, the "last only" / completeness filters become no-ops, not regressions.
+- **`message`**: emitted as `reasoning → message → reasoning → message …`, each later `message` repeating the prior as a growing superset → `MantleAgent` kept only the **last** message item.
+- **`function_call`**: a **long-argument** tool call came back as `reasoning,fc,reasoning,fc,…` — N items, each carrying a growing **prefix snapshot** of the arguments JSON. Only the last was complete, valid JSON; the earlier N-1 were truncated mid-string (verified: a `draft` call returned 11 truncated snapshots + 1 complete, arguments length 461→…→2214). `MantleAgent` filtered on **JSON completeness** — a truncated fragment fails `JSON.parse` and got skipped, keeping genuine parallel tool_use (each `function_call` its own complete JSON) fully preserved.
 
-Diagnosis note: the session file's `rawMessages` stores arguments **after** `strictParseOrNull`, so truncated snapshots already show as `{}` — they look like "empty tool calls", not snapshots. To see the real shape you must capture Mantle's **raw response body** (temporary `console.warn` in the parse loop; `console.log` is dropped at the default `warn` log level).
+Distinguishing snapshot-spam from real parallel calls: snapshots are same-`name` with `reasoning,fc` **interleaved** and arguments forming a growing prefix chain; parallel calls are one `reasoning` then `fc,fc,fc` **consecutive** with independent complete arguments. Root cause was in Bedrock-Mantle, not halo — first-party OpenAI returns a single final item.
+
+Diagnosis note (still applies): the session file's `rawMessages` stores arguments **after** parsing, so a truncated snapshot shows as `{}` — it looks like an "empty tool call", not a snapshot. To see the real shape you must capture Mantle's **raw response body** (temporary `console.warn` in the parse loop; `console.log` is dropped at the default `warn` log level).
+
+The `MantleEmptyResponse` retry guard in session-manager is unrelated to this and stays — that's a separate transient fault (`status=completed` with an empty `output[]`).
 
 ---
 

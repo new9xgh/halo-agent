@@ -291,7 +291,16 @@ Frontend network issues don't affect the backend:
 | **Transient server-side error (5xx / timeout)** | Same exponential backoff as throttling — see [Transient server-error classification](#transient-server-error-classification) below |
 | Transient transport error (`fetch failed`, `ECONNRESET`, headers timeout, …) | Short backoff (`1s * 2^attempt` + jitter), retry |
 | Corrupted messages (`tool_use ids without tool_result`) | Repair + retry |
+| **4xx multimodal rejection** (`Multimodal data is corrupted` / `Could not process image`) | Replace all image blocks in history with text placeholders, persist, retry — see [Multimodal 4xx degrade](#multimodal-4xx-degrade) below |
 | Unrecoverable error | Report to user, stop |
+
+**Abort reasons are normalized through the `abortReason()` helper** — all three abort call sites (graceful interrupt after `tool_result`, `interruptSession`'s hard interrupt, `stopSession`'s stop) wrap the reason string in `new DOMException(reason, 'AbortError')` instead of passing it raw. Node 22 gotcha: `fetch` rejects with the abort reason **as-is**, so `controller.abort('interrupt')` surfaced the bare string `'interrupt'` (not an Error, `errName === ''`) in `runAgentTurn`'s catch — it missed the AbortError branch and logged a fake "Unrecoverable: interrupt" error. Contract pinned by a queue-semantics test.
+
+### Multimodal 4xx degrade
+
+A rejected image block doesn't just fail one turn: history is replayed wholesale with every request, so the same block re-fails **all** later requests and the session is permanently bricked. When a 4xx carries a known multimodal-rejection fingerprint (`Multimodal data is corrupted` / `Could not process image` — deliberately narrow: a miss keeps current behavior, a false positive would strip images on an unrelated 400), `replaceImageBlocks()` swaps **every** image block in history — top-level *and* nested inside `tool_result` content (e.g. `view_image`) — for a `[image removed: …]` text placeholder. The current turn's input blocks are degraded the same way (the retry re-coalesces them into the trailing user message, so a live rejected image would walk right back into history). State is persisted immediately via `saveAgentState` (a crash before turn-end must not resurrect the rejected blocks from disk), then the turn retries. Naturally once-only: after a degrade no image blocks remain, so a repeat error finds `replaced === 0` and falls through to Unrecoverable.
+
+Prevention at the entry boundary: `buildInput` whitelists inbound image media types against `VISION_IMAGE_MIME_TYPES` (jpeg/png/gif/webp — single source in `channels/shared/media-store.ts`, shared with the web channel's inbound filter), so a bmp/tiff/empty `file.type` from the admin WS paste fallback never reaches the model in the first place.
 
 ### Transient server-error classification
 
