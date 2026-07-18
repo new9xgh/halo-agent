@@ -54,6 +54,7 @@ models:
   - id: kimi-k2.6
     displayName: Kimi K2.6
     maxOutputTokens: 32768
+    contextWindow: 262144
     capabilities:
       # Verified 2026-05-27 via live probes: kimi-k2.6 returns "prepare
       # image failed" on image_url blocks despite past docs claiming
