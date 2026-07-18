@@ -1,6 +1,6 @@
 {
   "name": "@turmind/halo-server",
-  "version": "0.2.6",
+  "version": "1.0.0",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-18
+
+### Added
+
+- Model providers: Kimi K3 (1M context, always-on thinking via top-level `reasoning_effort`, base64-only vision), MiniMax M3 (1M context, Anthropic-compatible, adaptive thinking, new default for the minimax provider), GPT-5.6 Sol/Terra/Luna on Bedrock Mantle (272K context; new default `gpt-5.6-sol`).
+- Model registry: per-model `contextWindow` field across all 28 models / 11 providers; session context budget now resolves `agent.yaml`'s `context.maxTokens` > registry `contextWindow` > the global 200K default.
+
+### Fixed
+
+- Sessions permanently bricked after a provider 4xx on multimodal content (e.g. "Multimodal data is corrupted"): history images are degraded to text placeholders, state is persisted, and the turn retries once.
+- Session abort reasons normalized to `AbortError` — Node 22 let a bare-string abort reason escape as an unhandled rejection, producing spurious "Unrecoverable: interrupt" errors.
+- Non-vision image mime types are now filtered at input with a warning instead of reaching the provider.
+
+### Removed
+
+- GPT-5.5 and GPT-5.4 retired from the Mantle provider — the 5.6 family covers both, with Terra matching 5.5-level performance at half price.
+
 ## [0.2.6] - 2026-07-12
 
 ### Added
