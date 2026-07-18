@@ -11,6 +11,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 
+/** Image MIME types vision APIs accept as inline base64 blocks. Anything else
+ *  must not reach the model as an image block — the API rejects the whole
+ *  request. Single source for the web channel's inbound filter and
+ *  session-manager's buildInput (admin WS images arrive there unfiltered). */
+export const VISION_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+
 /**
  * Sniff an image MIME type from its magic bytes. Falls back to JPEG when no
  * signature matches — most channels deliver JPEG by default and downstream

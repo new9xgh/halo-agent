@@ -273,6 +273,29 @@ describe('interrupt marks pending UI tool calls as interrupted', () => {
   })
 })
 
+// ── abort reason must be a real AbortError ──
+// Node 22 gotcha: fetch rejects with the abort reason AS-IS, so a bare-string
+// `abort('interrupt')` surfaced `typeof err === 'string'` in runAgentTurn's
+// catch — errName '' and no 'aborted'/'cancelled' substring — missing the
+// AbortError branch and logging a fake "Unrecoverable: interrupt" error.
+// This pins the contract: whatever fetch rejects with must satisfy the
+// branch-1 check (`errName === 'AbortError'`).
+describe('interrupt abort reason is a recognizable AbortError', () => {
+  it('interruptSession aborts with an Error named AbortError, not a bare string', () => {
+    seedRow('web_ab1')
+    const session = fakeBusySession('web_ab1')
+    const signal = session.abortController.signal
+
+    sm.interruptSession('web_ab1')
+
+    expect(signal.aborted).toBe(true)
+    const reason = signal.reason as unknown
+    expect(reason).toBeInstanceOf(Error)
+    expect((reason as Error).name).toBe('AbortError')
+    expect((reason as Error).message).toBe('interrupt')
+  })
+})
+
 // ── query_session on a BUSY target soft-interrupts (merge-answer parity) ──
 // A plain query_session (interrupt=false) into a busy session must set
 // `interruptRequested` so the in-flight turn unwinds after its current tool and

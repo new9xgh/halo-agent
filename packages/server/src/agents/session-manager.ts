@@ -28,6 +28,7 @@ import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
 import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
+import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
   createSaveSnapshot,
@@ -52,6 +53,14 @@ function simpleHash(str: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Wrap an interrupt/stop reason in a real AbortError. Node 22 gotcha: fetch
+ *  rejects with the abort reason AS-IS, so `abort('interrupt')` surfaced the
+ *  bare STRING 'interrupt' (not an Error, errName '') in runAgentTurn's catch,
+ *  which missed the AbortError branch and logged a fake "Unrecoverable" error. */
+function abortReason(reason: string): DOMException {
+  return new DOMException(reason, 'AbortError')
 }
 
 /** Rough token estimate from message content — ~3.5 chars per token for mixed CJK/English. */
@@ -91,6 +100,34 @@ function isRawTurnStart(msg: AnthropicMessage): boolean {
  *  (see handler.ts handleChat). */
 function stripImageMarkers(s: string): string {
   return s.replace(/\[图片已保存: [^\]]*\]\n?/g, '').trim()
+}
+
+/** Replace every image block in the history with a text placeholder (top-level
+ *  image blocks AND images nested in tool_result content, e.g. view_image).
+ *  Used by runAgentTurn's 4xx-multimodal degrade path: once a provider rejects
+ *  an image, the block re-fails EVERY subsequent request (history is replayed
+ *  wholesale), so removal is the only way to unbrick the session. Mutates in
+ *  place; returns the number of blocks replaced. */
+function replaceImageBlocks(messages: AnthropicMessage[], reason: string): number {
+  let replaced = 0
+  const placeholder = (): ContentBlock => ({ type: 'text', text: `[image removed: ${reason}]` })
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue
+    m.content = m.content.map((b) => {
+      if (b.type === 'image') { replaced++; return placeholder() }
+      if (b.type === 'tool_result' && Array.isArray(b.content)) {
+        return {
+          ...b,
+          content: b.content.map((ib) => {
+            if (ib.type === 'image') { replaced++; return { type: 'text' as const, text: `[image removed: ${reason}]` } }
+            return ib
+          }),
+        }
+      }
+      return b
+    })
+  }
+  return replaced
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -1156,7 +1193,7 @@ export class SessionManager implements SessionManagerInternals {
           // message arrived, cancel this turn's remaining cycles.
           if (session.interruptRequested && event.type === 'tool_result') {
             console.debug(`[SessionManager] Graceful interrupt after tool result in ${session.id}`)
-            session.abortController?.abort('interrupt')
+            session.abortController?.abort(abortReason('interrupt'))
             // In a parallel-tool turn, tool_calls after the current one were
             // already announced (agent-loop yields all upfront) but will never
             // execute — close their UI blocks so they don't dangle. UI-only.
@@ -1309,6 +1346,38 @@ export class SessionManager implements SessionManagerInternals {
             continue
           }
           this.emitEvent(session.id, { type: 'system', text: 'Conversation repair failed. Use /new to start a fresh session.' })
+        }
+
+        // 4b. 4xx multimodal rejection → degrade and retry once. A rejected
+        // image block doesn't just fail this turn: history is replayed with
+        // every request, so the same block re-fails ALL later requests and the
+        // session is permanently bricked. Replace every image block with a
+        // text placeholder and retry. Keyword set is deliberately narrow
+        // (known provider messages only) — a miss means no degrade (current
+        // behavior), a false positive would strip images on an unrelated 400.
+        // Naturally once-only: after a degrade no image blocks remain, so a
+        // repeat error finds replaced === 0 and falls through to Unrecoverable.
+        if (
+          httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500
+          && (msg.includes('Multimodal data is corrupted') || msg.includes('Could not process image'))
+        ) {
+          const replaced = replaceImageBlocks(session.agent.messages, 'rejected by model provider')
+          if (replaced > 0) {
+            // The retry's agent.run(message) re-coalesces the input blocks into
+            // the trailing user message — degrade the local input too, or the
+            // rejected image walks right back into history.
+            if (Array.isArray(message)) {
+              message = message.map((b): ContentBlock => b.type === 'image' ? { type: 'text', text: '[image removed: rejected by model provider]' } : b)
+            }
+            // Persist immediately: releaseSession saves on turn end, but a
+            // crash in between must not resurrect the rejected blocks from disk.
+            this.saveAgentState(session)
+            console.warn(`[SessionManager] Session ${session.id} multimodal 4xx — replaced ${replaced} image block(s) with placeholders (attempt ${attempt + 1}/${maxRetries})`)
+            if (attempt + 1 < maxRetries) {
+              this.emitEvent(session.id, { type: 'system', text: `Model rejected image data — removed ${replaced} image(s) from history, retrying...` })
+              continue
+            }
+          }
         }
 
         // 5. Unrecoverable
@@ -1644,7 +1713,7 @@ export class SessionManager implements SessionManagerInternals {
     // than treating the abort as an error. drainQueue resets this to false
     // before the merged follow-up turn runs.
     session.interruptRequested = true
-    session.abortController.abort('interrupt')
+    session.abortController.abort(abortReason('interrupt'))
     session.abortController = null
     // UI-only: close out pending tool blocks now — the aborted tool will never
     // emit its real tool_result (runAgentTurn's loop breaks on signal.aborted).
@@ -1716,7 +1785,7 @@ export class SessionManager implements SessionManagerInternals {
         // would fire a redundant second abort on the next tool_result.
         session.interruptRequested = false
         if (session.abortController) {
-          session.abortController.abort('stop')
+          session.abortController.abort(abortReason('stop'))
           session.abortController = null
           // UI-only, and BEFORE awaiting the promise: runSession's finally
           // emits `complete`, which flushes + clears the pending tool buffers
@@ -1966,8 +2035,20 @@ export class SessionManager implements SessionManagerInternals {
     if (!supportsImage) {
       return text + '\n\n[注意：用户发送了图片，但当前模型不支持视觉输入，图片已被忽略]'
     }
+    // Whitelist media_type at the model boundary (same set the web channel
+    // filters on). The admin WS path arrives here unfiltered, and the admin's
+    // fileToBase64 fallback can pass through an arbitrary `file.type` (bmp/
+    // tiff/empty) — an unaccepted media_type 400s the request and, once in
+    // history, every later request too.
+    const accepted = images.filter((img) => VISION_IMAGE_MIME_TYPES.includes(img.mimeType))
+    const dropped = images.length - accepted.length
+    if (dropped > 0) {
+      console.warn(`[SessionManager] buildInput: dropped ${dropped} image(s) with unsupported media_type (${images.filter((i) => !VISION_IMAGE_MIME_TYPES.includes(i.mimeType)).map((i) => i.mimeType || '(empty)').join(', ')})`)
+      text += `\n\n[注意：${dropped} 张图片格式不受支持（仅支持 jpeg/png/gif/webp），已被忽略]`
+    }
+    if (accepted.length === 0) return text
     const contentBlocks: ContentBlock[] = []
-    for (const img of images) {
+    for (const img of accepted) {
       contentBlocks.push({
         type: 'image',
         source: { type: 'base64', media_type: img.mimeType, data: img.data },

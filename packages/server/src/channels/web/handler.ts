@@ -6,7 +6,7 @@ import type { SessionMessage } from '../../sessions/session-types.js'
 import { createSaveSnapshot } from '../../sessions/ui-log-builder.js'
 import { getAccountByToken } from './accounts.js'
 import { updateAccount } from './accounts.js'
-import { saveInboundMedia } from '../shared/media-store.js'
+import { saveInboundMedia, VISION_IMAGE_MIME_TYPES } from '../shared/media-store.js'
 import { resolveAccountWorkspace } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
@@ -247,7 +247,7 @@ export function createWebChannel(deps: {
     })
 
     // Separate real images from other media (audio, etc.)
-    const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+    const imageTypes = VISION_IMAGE_MIME_TYPES
     const realImages: Array<{ data: string; mimeType: string }> = []
     const savedPaths: string[] = []
 
