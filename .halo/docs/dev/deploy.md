@@ -151,7 +151,7 @@ This installs the `halo` binary on `$PATH`. Subcommands available:
 ### Release checklist (before `npm publish`)
 
 1. **Bump version** in the five workspace `package.json` files (`packages/{cli,server,core,admin,desktop}/package.json`) — the root `package.json` has no version field.
-2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it.
+2. **Update `CHANGELOG.md`**: rename `[Unreleased]` → `[x.y.z] - YYYY-MM-DD`, add a fresh empty `[Unreleased]` section above it, and roll the link references at the bottom (add `[x.y.z]: compare/v<prev>...vx.y.z`, repoint `[Unreleased]` to `compare/vx.y.z...HEAD`).
 3. **Bump `TEMPLATE_VERSION`** in `packages/server/src/init.ts` if any file under `templates/` was touched.
 4. **Build admin**: `pnpm --filter @turmind/halo-admin build` — verify `admin/out/monaco/vs/loader.js` exists.
 5. Commit, tag `vx.y.z`, push, then publish.

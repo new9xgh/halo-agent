@@ -292,7 +292,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/turmind/halo-agent/compare/v0.2.6...v1.0.0
 [0.2.6]: https://github.com/turmind/halo-agent/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/turmind/halo-agent/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/turmind/halo-agent/compare/v0.2.3...v0.2.4
