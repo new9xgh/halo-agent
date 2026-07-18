@@ -40,6 +40,7 @@ models:
   - id: doubao-seed-2-0-pro-260215
     displayName: Doubao Seed 2.0 Pro
     maxOutputTokens: 16384
+    contextWindow: 256000
     capabilities:
       image: false
       video: false
@@ -67,6 +68,7 @@ models:
   - id: doubao-seed-2-0-lite-260428
     displayName: Doubao Seed 2.0 Lite
     maxOutputTokens: 16384
+    contextWindow: 256000
     capabilities:
       image: false
       video: false
@@ -91,6 +93,7 @@ models:
   - id: doubao-seed-2-0-mini-260428
     displayName: Doubao Seed 2.0 Mini
     maxOutputTokens: 16384
+    contextWindow: 256000
     capabilities:
       image: false
       video: false
@@ -115,6 +118,7 @@ models:
   - id: doubao-seed-2-0-code-preview-260215
     displayName: Doubao Seed 2.0 Code Preview
     maxOutputTokens: 16384
+    contextWindow: 256000
     capabilities:
       image: false
       video: false

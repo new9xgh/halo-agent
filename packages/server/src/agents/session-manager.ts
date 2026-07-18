@@ -12,7 +12,7 @@ import path from 'node:path'
 import type { AgentEvent, AnthropicMessage, ContentBlock, ToolDef } from './bedrock-agent.js'
 import type { ModelRuntime } from './model-runtime.js'
 import { loadScopeInstructions } from '../prompts/md-loader.js'
-import { config, modelSupportsImage } from '../config.js'
+import { config, modelSupportsImage, resolveContextWindow } from '../config.js'
 import { repairConversationMessages } from './conversation-repair.js'
 import { localCompactMessages } from './compact.js'
 import { microCompactMessages } from './micro-compact.js'
@@ -2097,7 +2097,12 @@ export class SessionManager implements SessionManagerInternals {
     if (!row) return { maxTokens: config.model.maxContextTokens, compressAt: config.model.compressAt as number }
     const yamlConfig = await loadAgentYaml(row.agentId, this.workspaceRoot)
     return {
-      maxTokens: yamlConfig?.context?.maxTokens ?? config.model.maxContextTokens,
+      // Same priority as buildModelRuntime: agent.yaml > model registry
+      // contextWindow > global default — keeps the cold-session display in
+      // sync with what actually takes effect on resume.
+      maxTokens: yamlConfig?.context?.maxTokens
+        ?? (yamlConfig?.model?.id ? resolveContextWindow(yamlConfig.model.id) : undefined)
+        ?? config.model.maxContextTokens,
       compressAt: yamlConfig?.context?.compressAt ?? (config.model.compressAt as number),
     }
   }

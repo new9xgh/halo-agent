@@ -1,5 +1,5 @@
 /**
- * MantleAgent — OpenAI models (GPT-5.5 / 5.4) on Amazon Bedrock via the
+ * MantleAgent — OpenAI models (GPT-5.6 / 5.4) on Amazon Bedrock via the
  * `bedrock-mantle` endpoint, which speaks the **OpenAI Responses API only**.
  *
  *   POST <endpoint>/responses
@@ -109,26 +109,12 @@ export class MantleAgent extends AgentLoop {
     for (const item of output) {
       const itemType = item.type as string
       if (itemType === 'message') {
-        // WORKAROUND for a Bedrock-Mantle server-side quirk (root cause is in
-        // Bedrock, not here): with reasoning enabled, Mantle returns the output
-        // as `reasoning → message → reasoning → message …`, where each later
-        // `message` REPEATS the previous one's text as a growing superset
-        // (verified by curl: two completed message items, the 2nd a superset of
-        // the 1st). First-party OpenAI returns a single final message, so the
-        // SDK's `output_text` helper just `"".join`s every message item — which
-        // on Mantle yields duplicated ("复读") text. We instead keep only the
-        // LAST message item (the most complete superset). Parts WITHIN one
-        // message item are still concatenated (they form one message).
-        // If Bedrock ever fixes this to emit complementary (non-overlapping)
-        // messages, revisit — "last only" would then drop content.
-        let itemText = ''
         const content = (item.content as Array<Record<string, unknown>> | undefined) ?? []
         for (const part of content) {
           if (part.type === 'output_text' && typeof part.text === 'string') {
-            itemText += part.text
+            text += part.text
           }
         }
-        if (itemText) text = itemText
       } else if (itemType === 'reasoning') {
         // Reasoning summary (when the model surfaces one). Often empty unless
         // a summary was requested; capture whatever text is present.
@@ -137,28 +123,12 @@ export class MantleAgent extends AgentLoop {
           if (typeof part.text === 'string') thinking += part.text
         }
       } else if (itemType === 'function_call') {
-        // WORKAROUND for the same Bedrock-Mantle quirk as the `message` case
-        // above (root cause in Bedrock, not here): with reasoning enabled and
-        // a tool call whose arguments are long, Mantle emits the SINGLE logical
-        // call as N `function_call` items — `reasoning,fc,reasoning,fc,…` — each
-        // carrying a growing PREFIX SNAPSHOT of the arguments JSON. Only the
-        // last item's `arguments` is complete, valid JSON; the earlier N-1 are
-        // truncated mid-string (verified against raw responses: a draft call
-        // came back as 11 truncated snapshots + 1 complete).
-        //
-        // Filter on JSON completeness: a snapshot fragment fails JSON.parse, a
-        // finished call parses. This is tool- and length-agnostic — it keeps
-        // ALL items of a genuine parallel tool_use (each arguments is its own
-        // complete JSON, e.g. 4 distinct shell_exec searches) and drops only
-        // truncated snapshots. Skipping a fragment here means it never reaches
-        // the loop as an empty `{}` call (which would otherwise spam tool errors).
         const callId = (item.call_id as string) ?? (item.id as string) ?? ''
         const name = (item.name as string) ?? ''
         const args = (item.arguments as string) ?? '{}'
-        const parsed = strictParseOrNull(args)
-        if (parsed === null) continue
-        toolCalls.push({ id: callId, name, input: parsed })
-        assistantBlocks.push({ type: 'tool_use', id: callId, name, input: parsed })
+        const input = safeParse(args)
+        toolCalls.push({ id: callId, name, input })
+        assistantBlocks.push({ type: 'tool_use', id: callId, name, input })
       }
     }
 
@@ -342,17 +312,13 @@ export class MantleAgent extends AgentLoop {
 
 /** Extract the AWS region from a bedrock-mantle hostname
  *  (bedrock-mantle.<region>.api.aws). Falls back to us-east-2 (the only region
- *  that serves both GPT-5.5 and 5.4). */
+ *  that serves every GPT-5.6 variant plus 5.4). */
 function extractRegionFromHost(hostname: string): string {
   const m = hostname.match(/bedrock-mantle\.([a-z0-9-]+)\.api\.aws/)
   return m?.[1] ?? 'us-east-2'
 }
 
-/** Parse tool-call arguments, returning null (not `{}`) on failure so the
- *  caller can distinguish a finished call from a truncated Mantle streaming
- *  snapshot. Empty/whitespace arguments parse as `{}` (a valid no-arg call). */
-function strictParseOrNull(json: string): unknown {
-  const trimmed = (json ?? '').trim()
-  if (trimmed === '') return {}
-  try { return JSON.parse(trimmed) } catch { return null }
+/** Parse tool-call arguments, falling back to `{}` on malformed JSON. */
+function safeParse(json: string): unknown {
+  try { return JSON.parse(json || '{}') } catch { return {} }
 }

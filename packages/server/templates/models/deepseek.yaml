@@ -22,6 +22,7 @@ models:
   - id: deepseek-v4-pro
     displayName: DeepSeek V4 Pro
     maxOutputTokens: 65536
+    contextWindow: 1000000
     capabilities:
       image: false
       video: false
@@ -43,6 +44,7 @@ models:
   - id: deepseek-v4-flash
     displayName: DeepSeek V4 Flash
     maxOutputTokens: 65536
+    contextWindow: 1000000
     capabilities:
       image: false
       video: false

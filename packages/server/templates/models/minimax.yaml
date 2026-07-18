@@ -1,10 +1,10 @@
 id: minimax
 displayName: MiniMax
 displayName_zh: MiniMax
-description: MiniMax M2.7 family via the Anthropic-compatible Messages API
-description_zh: MiniMax M2.7 系列，通过 Anthropic 兼容的 Messages API 调用
+description: MiniMax M3 / M2.7 family via the Anthropic-compatible Messages API
+description_zh: MiniMax M3 / M2.7 系列，通过 Anthropic 兼容的 Messages API 调用
 defaultEndpoint: https://api.minimaxi.com/anthropic
-defaultModelId: MiniMax-M2.7
+defaultModelId: MiniMax-M3
 
 secrets:
   - key: api_key
@@ -16,11 +16,12 @@ secrets:
 # Capability notes for MiniMax M2.7 family — verified against
 # platform.minimaxi.com/docs/api-reference/text-anthropic-api on 2026-05-26
 # plus live probes against MiniMax-M2.7:
-#   - image / video / audio: documented as not supported
+#   - image / video / audio: documented as not supported (M2.x; M3 differs —
+#     see its entry)
 #   - thinking: forced on — `thinking:{type:'disabled'}` and omitting the
 #     field both still produce thinking blocks; only budget_tokens influences
 #     output. So we don't expose an off toggle.
-#   - cache_control: both models support caching. Doc says TTL is 5min,
+#   - cache_control: both M2.7 models support caching. Doc says TTL is 5min,
 #     refreshing automatically on each hit. cache_control:{type:'ephemeral'}
 #     is the only shape — no longer-TTL knob exposed by MiniMax.
 #       - MiniMax-M2.7-highspeed: turn 1 reports cache_creation_input_tokens=N,
@@ -35,9 +36,39 @@ secrets:
 #     observed to truncate the run with stop=max_tokens before any thinking
 #     completes — leaving it out of the preset list. medium/high are safe.
 models:
+  - id: MiniMax-M3
+    displayName: MiniMax M3
+    # Official recommended value; hard cap is 524288 but we don't max out.
+    maxOutputTokens: 131072
+    contextWindow: 1000000
+    capabilities:
+      # M3 also supports video input, but Halo has no video upload path yet —
+      # keep video:false until one exists. Image rides the Anthropic-compatible
+      # API's standard image blocks; minimax-agent passes this.messages
+      # straight through, so no agent code change is needed.
+      image: true
+      video: false
+      audio: false
+      # No promptCaching key on purpose: both official caching docs agree
+      # that explicit caching (cache_control) is only supported on the
+      # M2.7/M2.5/M2.1/M2 families — NOT M3. M3 only has passive automatic
+      # caching (no parameter; usage reports cache_read, which the agent
+      # already reads). Omitting the key keeps the UI toggle away so users
+      # can't configure the unsupported M3+cache_control combination.
+      thinking:
+        # M3 thinking is off by default; enabling sends
+        # thinking:{type:'adaptive'} — no low/medium/high grading and no
+        # budget_tokens. This is the opposite of M2.x's manual+budget scheme.
+        mode: adaptive
+        defaultEnabled: true
+        default: adaptive
+        effortPresets:
+          - { value: adaptive, label: Adaptive }
+
   - id: MiniMax-M2.7
     displayName: MiniMax M2.7
     maxOutputTokens: 16384
+    contextWindow: 204800
     capabilities:
       image: false
       video: false
@@ -62,6 +93,7 @@ models:
   - id: MiniMax-M2.7-highspeed
     displayName: MiniMax M2.7 Highspeed
     maxOutputTokens: 16384
+    contextWindow: 204800
     capabilities:
       image: false
       video: false

@@ -14,14 +14,17 @@
  * Differences from BedrockAgent:
  *   - HTTP fetch (no AWS SDK), `x-api-key` instead of SigV4
  *   - No `anthropic_version` field in the body — the header carries it
- *   - Thinking uses the legacy/manual shape only
- *     (`thinking: { type: 'enabled', budget_tokens: N }`); MiniMax
- *     doesn't expose `adaptive`. We always translate the effort label
- *     through `effortToBudget`, ignoring `thinkingMode`.
- *   - No image input (the API silently treats image blocks as missing
- *     attachments). We don't filter inbound images here — the session
- *     manager already drops them when the model registry says
- *     `capabilities.image=false`.
+ *   - Thinking is two shapes depending on model generation, selected via
+ *     `thinkingMode` (from the registry): M3 uses adaptive
+ *     (`thinking: { type: 'adaptive' }` — no budget_tokens, no effort);
+ *     M2.x uses the legacy/manual shape
+ *     (`thinking: { type: 'enabled', budget_tokens: N }`) with the effort
+ *     label translated through `effortToBudget`.
+ *   - Image input is per-model: M3 supports it (standard Anthropic image
+ *     blocks pass straight through via `this.messages`); M2.x does not
+ *     (the API silently treats image blocks as missing attachments). We
+ *     don't filter inbound images here — the session manager already drops
+ *     them when the model registry says `capabilities.image=false`.
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
@@ -37,6 +40,10 @@ export interface MiniMaxAgentConfig {
   maxTokens?: number
   promptCaching?: boolean | '5m' | '1h'
   thinking?: { enabled: boolean; effort?: string }
+  /** Which thinking API shape the model wants (from the registry):
+   *  'adaptive' (M3) vs 'manual' (M2.x). Undefined falls back to manual
+   *  for backward compatibility with custom model ids. */
+  thinkingMode?: 'adaptive' | 'manual'
   /** Explicit budget_tokens override; when omitted we translate from
    *  `thinking.effort` via the same table BedrockAgent uses. */
   thinkingBudgetTokens?: number
@@ -194,13 +201,20 @@ export class MiniMaxAgent extends AgentLoop {
       body.messages = msgs
     }
 
+    // Thinking — two API shapes depending on the model's thinkingMode.
     if (this.config.thinking?.enabled && this.config.thinking.effort) {
-      const budget = this.config.thinkingBudgetTokens
-        ?? effortToBudget(this.config.thinking.effort, this.config.maxTokens)
-      const cappedBudget = (typeof this.config.maxTokens === 'number' && this.config.maxTokens > 0)
-        ? Math.min(budget, Math.max(1024, Math.floor(this.config.maxTokens / 2)))
-        : budget
-      body.thinking = { type: 'enabled', budget_tokens: cappedBudget }
+      if (this.config.thinkingMode === 'adaptive') {
+        // M3: adaptive only — no budget_tokens, no effort grading.
+        body.thinking = { type: 'adaptive' }
+      } else {
+        // M2.x (or custom model id with no registry mode): manual budget.
+        const budget = this.config.thinkingBudgetTokens
+          ?? effortToBudget(this.config.thinking.effort, this.config.maxTokens)
+        const cappedBudget = (typeof this.config.maxTokens === 'number' && this.config.maxTokens > 0)
+          ? Math.min(budget, Math.max(1024, Math.floor(this.config.maxTokens / 2)))
+          : budget
+        body.thinking = { type: 'enabled', budget_tokens: cappedBudget }
+      }
     }
 
     return body

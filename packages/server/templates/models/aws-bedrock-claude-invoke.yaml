@@ -38,6 +38,7 @@ models:
   - id: global.anthropic.claude-fable-5
     displayName: Claude Fable 5
     maxOutputTokens: 128000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -65,6 +66,7 @@ models:
   - id: global.anthropic.claude-sonnet-4-6
     displayName: Claude Sonnet 4.6
     maxOutputTokens: 64000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -91,6 +93,7 @@ models:
   - id: global.anthropic.claude-sonnet-5
     displayName: Claude Sonnet 5
     maxOutputTokens: 64000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -117,6 +120,7 @@ models:
   - id: global.anthropic.claude-opus-4-6-v1
     displayName: Claude Opus 4.6
     maxOutputTokens: 128000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -139,6 +143,7 @@ models:
   - id: global.anthropic.claude-opus-4-7
     displayName: Claude Opus 4.7
     maxOutputTokens: 128000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -162,6 +167,7 @@ models:
   - id: global.anthropic.claude-opus-4-8
     displayName: Claude Opus 4.8
     maxOutputTokens: 128000
+    contextWindow: 1000000
     capabilities:
       image: true
       video: false
@@ -187,6 +193,7 @@ models:
   - id: global.anthropic.claude-haiku-4-5-20251001-v1:0
     displayName: Claude Haiku 4.5
     maxOutputTokens: 64000
+    contextWindow: 200000
     capabilities:
       image: true
       video: false

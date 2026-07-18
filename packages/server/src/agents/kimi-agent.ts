@@ -2,8 +2,15 @@
  * KimiAgent — Moonshot AI Kimi API (OpenAI-compatible chat completions, non-streaming).
  *
  * Endpoint: https://api.moonshot.cn/v1/chat/completions
- * Supports: tool calling, vision (image_url), thinking (reasoning_content).
- * Caching is automatic (no explicit parameter needed).
+ * Supports: tool calling, vision (image_url, base64 data URLs), thinking
+ * (reasoning_content). Caching is automatic (no explicit parameter needed).
+ *
+ * Thinking control is TWO separate mechanisms depending on model generation:
+ *   - K3: top-level `reasoning_effort` field (enum currently only "max");
+ *     thinking is always on server-side, no off switch. Never send the K2.x
+ *     `thinking` parameter to K3.
+ *   - K2.x: top-level `thinking:{type:'enabled'|'disabled'}` toggle; has no
+ *     reasoning_effort field at all.
  */
 import { resolveMaxOutputTokens } from '../config.js'
 import { AgentLoop } from './agent-loop.js'
@@ -16,7 +23,8 @@ export interface KimiAgentConfig {
   systemPrompt: string
   tools: ToolDef[]
   maxTokens?: number
-  /** Thinking/reasoning. K2.6 defaults to enabled; pass { enabled: true, effort: 'disabled' } to explicitly turn off. */
+  /** Thinking/reasoning. K3: enabled → reasoning_effort:'max' (effort clamped; no off switch).
+   *  K2.x: defaults to enabled; pass { enabled: true, effort: 'disabled' } to explicitly turn off. */
   thinking?: { enabled: boolean; effort?: string }
   /** Optional cache key hint to improve Kimi's automatic context caching hit rate. */
   cacheKey?: string
@@ -48,9 +56,20 @@ export class KimiAgent extends AgentLoop {
       prompt_cache_key: this.config.cacheKey ?? undefined,
     }
 
-    // Thinking: K2.6 enables by default. Disable only when explicitly set to 'disabled'.
-    if (this.config.thinking?.effort === 'disabled') {
-      body.thinking = { type: 'disabled' }
+    if (this.config.modelId.startsWith('kimi-k3')) {
+      // K3: never send `thinking:{type:...}` (official docs: don't use the
+      // K2.x thinking parameter on K3). The only knob is reasoning_effort,
+      // whose enum currently contains just "max" — clamp whatever effort the
+      // config carries. When thinking isn't enabled we send neither field;
+      // the server still thinks (there is no off switch).
+      if (this.config.thinking?.enabled) {
+        body.reasoning_effort = 'max'
+      }
+    } else {
+      // K2.x: thinking enables by default. Disable only when explicitly set to 'disabled'.
+      if (this.config.thinking?.effort === 'disabled') {
+        body.thinking = { type: 'disabled' }
+      }
     }
 
     const response = await fetch(url, {

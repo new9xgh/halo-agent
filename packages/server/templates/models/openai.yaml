@@ -30,6 +30,7 @@ models:
   - id: gpt-4o
     displayName: GPT-4o (placeholder)
     maxOutputTokens: 16384
+    contextWindow: 128000
     capabilities:
       image: true
       video: true

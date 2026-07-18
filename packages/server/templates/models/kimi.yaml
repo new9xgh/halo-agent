@@ -1,8 +1,8 @@
 id: kimi
 displayName: Kimi (Moonshot AI)
 displayName_zh: Kimi（月之暗面）
-description: Kimi K2.6 via OpenAI-compatible chat completions API
-description_zh: Kimi K2.6，通过 OpenAI 兼容的 chat completions API 调用
+description: Kimi K3 / K2.6 via OpenAI-compatible chat completions API
+description_zh: Kimi K3 / K2.6，通过 OpenAI 兼容的 chat completions API 调用
 defaultEndpoint: https://api.moonshot.cn/v1
 
 secrets:
@@ -12,18 +12,52 @@ secrets:
     default: <<KIMI_API_KEY>>
     secret: true
 
-# Capabilities verified 2026-05-27 via live probes. Kimi-k2.6 returns
-# "prepare image failed" on image_url blocks despite past docs claiming
-# vision — set image:false until/unless a vision-specific model id is
-# tested here. reasoning_effort accepts { minimal, low, medium, high };
-# `max` errors with explicit message listing the four valid values.
-# Caching is automatic; cached_tokens shows up reliably from turn 2 once
-# the prompt is long enough (~2K+).
+# Capability notes (per-model specifics live on each entry):
+#   - Caching is automatic on both models; cached_tokens shows up reliably
+#     from turn 2 once the prompt is long enough (~2K+).
+#   - Thinking control is TWO separate mechanisms depending on generation:
+#     K3 uses the top-level `reasoning_effort` field (enum currently only
+#     "max" per the official OpenAPI schema); K2.x uses the
+#     `thinking:{type:'enabled'|'disabled'}` toggle and has NO
+#     reasoning_effort field at all (OpenAPI marks it unsupported for
+#     k2.6). An earlier comment here claiming K2.6 accepts
+#     reasoning_effort { minimal, low, medium, high } was wrong.
 models:
+  - id: kimi-k3
+    displayName: Kimi K3
+    # Official default output cap; the model can go up to 1M but we don't max out.
+    maxOutputTokens: 131072
+    contextWindow: 1048576
+    capabilities:
+      # K3 itself also supports video input, but Halo has no video upload
+      # path yet — keep video:false until one exists. Image input is
+      # base64-only (public URLs are not supported); kimi-agent happens to
+      # send only base64 data URLs, so it's naturally compatible.
+      image: true
+      video: false
+      audio: false
+      promptCaching:
+        # Automatic caching, hint-only (prompt_cache_key) — same as K2.6.
+        default: 5m
+        ttlPresets:
+          - { value: 5m, label: 5min }
+      thinking:
+        # K3 thinking is ALWAYS ON server-side — there is no off switch.
+        # The only knob is the top-level `reasoning_effort` field, whose
+        # enum currently contains just "max" (confirmed in the official
+        # OpenAPI schema). Do NOT send the K2.x `thinking` parameter to K3.
+        defaultEnabled: true
+        default: max
+        effortPresets:
+          - { value: max, label: Max }
+
   - id: kimi-k2.6
     displayName: Kimi K2.6
     maxOutputTokens: 32768
     capabilities:
+      # Verified 2026-05-27 via live probes: kimi-k2.6 returns "prepare
+      # image failed" on image_url blocks despite past docs claiming
+      # vision — keep image:false.
       image: false
       video: false
       audio: false
@@ -32,10 +66,11 @@ models:
         ttlPresets:
           - { value: 5m, label: 5min }
       thinking:
+        # K2.6 has NO reasoning_effort field — its only reasoning control is
+        # the top-level `thinking:{type:'enabled'|'disabled'}` on/off toggle.
+        # The effort label below is Halo-side only (doubao precedent):
+        # kimi-agent just maps enabled → omit / disabled → thinking:disabled.
         defaultEnabled: true
         default: medium
         effortPresets:
-          - { value: minimal, label: Minimal }
-          - { value: low, label: Low }
-          - { value: medium, label: Medium }
-          - { value: high, label: High }
+          - { value: medium, label: On }

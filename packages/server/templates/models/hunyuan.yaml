@@ -33,6 +33,7 @@ models:
   - id: hy3-preview
     displayName: Hunyuan Hy3 Preview
     maxOutputTokens: 16384
+    contextWindow: 256000
     capabilities:
       image: false
       video: false

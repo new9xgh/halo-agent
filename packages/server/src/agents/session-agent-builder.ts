@@ -5,7 +5,7 @@ import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { createDraftTool } from '../tools/draft-tool.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
-import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveThinkingMode, resolveVerbosity } from '../config.js'
+import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
   scanAvailableAgents, isTeamMember, canDelegate,
@@ -465,7 +465,8 @@ do delegate, say so in one line and keep going.`
     const { yamlConfig, modelId, endpoint, providerId, sessionId, systemPrompt, tools } = args
 
     const contextConfig = {
-      maxTokens: yamlConfig?.context?.maxTokens ?? config.model.maxContextTokens,
+      // Priority: explicit agent.yaml config > model registry contextWindow > global default (200K).
+      maxTokens: yamlConfig?.context?.maxTokens ?? resolveContextWindow(modelId) ?? config.model.maxContextTokens,
       compressAt: yamlConfig?.context?.compressAt ?? (config.model.compressAt as number),
     }
     const rawCaching = yamlConfig?.model?.promptCaching

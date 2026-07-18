@@ -459,7 +459,7 @@ export function reloadSandboxConfig(): { hiddenDirs: string[]; hiddenFiles: stri
 }
 
 /** Look up a model entry from the registry by ID */
-function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number; capabilities?: Record<string, unknown> } | undefined {
+function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number; contextWindow?: number; capabilities?: Record<string, unknown> } | undefined {
   try {
     const providers = (modelsRegistry() as { providers?: Array<{ models?: Array<Record<string, unknown>> }> }).providers
     if (providers) {
@@ -480,6 +480,16 @@ function findModelEntry(modelId: string): { id: string; maxOutputTokens?: number
 export function resolveMaxOutputTokens(modelId: string): number {
   const entry = findModelEntry(modelId)
   return (entry?.maxOutputTokens as number) ?? 16384
+}
+
+/**
+ * Resolve a model's context window from models.yaml.
+ * Returns undefined when the entry doesn't declare one — the caller picks
+ * its own fallback (e.g. config.model.maxContextTokens).
+ */
+export function resolveContextWindow(modelId: string): number | undefined {
+  const entry = findModelEntry(modelId)
+  return entry?.contextWindow
 }
 
 /**
