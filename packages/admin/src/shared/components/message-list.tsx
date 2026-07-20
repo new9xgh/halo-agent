@@ -126,9 +126,9 @@ const ExchangeRow = memo(function ExchangeRow({
     <div className={cn('border-b border-[var(--border)]/50 last:border-b-0', deleted && 'opacity-50')}>
       {user.role === 'user' ? (
         parseSubAgentReport(user.content) ? (
-          <SubAgentReport content={user.content} />
+          <SubAgentReport content={user.content} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
         ) : parseCompactSummary(user.content) ? (
-          <CompactSummary content={user.content} />
+          <CompactSummary content={user.content} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
         ) : (
           <UserExchangeHeader content={user.content} localImages={user.localImages} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} sendFailed={user.sendFailed} />
         )
@@ -152,6 +152,49 @@ const ExchangeRow = memo(function ExchangeRow({
   prev.responses.every((m, i) => m === next.responses[i]),
 )
 
+/** Props shared by the three user-turn renderers (bubble + the two callouts)
+ *  for the Copy / Delete affordance. */
+interface ExchangeActionProps { userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean }
+
+/**
+ * Copy + Delete button pair, shared by the user bubble and the report/summary
+ * callouts. `copyText` is the semantic body (marker / `(from: session X)`
+ * prefix already stripped for the callouts). Delete sends the same
+ * `exchange:delete` ordinal protocol for all three — report/summary are
+ * user-role turns without taskId, so they're counted by both the UI ordinal
+ * and the server's deleteExchange loop on the same subset.
+ */
+function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable }: ExchangeActionProps & { copyText: string }) {
+  const [copied, setCopied] = useState(false)
+  const canDelete = deletable && !deleted && userOrdinal >= 0
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(copyText).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) }).catch(() => {})
+  }
+
+  const handleDelete = async () => {
+    const target = resolveTargetSession(messageId)
+    if (!target) return
+    if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
+    wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal })
+  }
+
+  return (
+    <>
+      <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
+        {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+      </button>
+      {canDelete && (
+        <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
+          <Trash2 className="h-3 w-3" />
+        </button>
+      )}
+    </>
+  )
+}
+
+const DELETED_BADGE_CLS = 'rounded bg-red-900/30 px-1 py-px text-[9px] font-medium text-red-400'
+
 /**
  * Sub-agent report detection — messages forwarded from a child session by the
  * `tryReportToParent` path arrive as `user` messages whose content starts with
@@ -165,14 +208,18 @@ function parseSubAgentReport(content: string): { sessionId: string; body: string
   return { sessionId: m[1], body: m[2] }
 }
 
-function SubAgentReport({ content }: { content: string }) {
+function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { content: string }) {
   const parsed = parseSubAgentReport(content)!
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
   return (
-    <div className="sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
-      <div className="mb-1 flex items-center gap-2 text-[10px] font-medium text-emerald-400">
+    <div className="group sticky top-0 z-10 px-3 py-2 border-b border-[var(--border)] border-l-2 border-l-emerald-500/70 bg-emerald-950/40 backdrop-blur-sm shadow-sm">
+      <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
+        <ExchangeActions copyText={parsed.body} {...actionProps} />
+      </div>
+      <div className="mb-1 flex items-center gap-2 pr-14 text-[10px] font-medium text-emerald-400">
         <span>Report from sub-session</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
+        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
       </div>
       <CollapsibleContent maxLines={4}>
         <div className="text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed">
@@ -197,22 +244,31 @@ function parseCompactSummary(content: string): { olderCount: number; body: strin
   return { olderCount: parseInt(m[1], 10), body: m[2] }
 }
 
-function CompactSummary({ content }: { content: string }) {
+function CompactSummary({ content, ...actionProps }: ExchangeActionProps & { content: string }) {
   const parsed = parseCompactSummary(content)!
   const [open, setOpen] = useState(false)
   // Default collapsed: only the small purple header is visible. The summary
   // text is the same content the LLM now sees, but it's long (often 1-2 KB
   // of markdown) and noisy in the chat flow — keep it tucked away unless
   // the user explicitly opens it.
+  //
+  // The actions overlay the header row as absolutely-positioned DOM siblings
+  // of the toggle <button> (nesting them inside would be button-in-button,
+  // invalid HTML) — sibling overlay also means their clicks never reach the
+  // expand/collapse handler.
   return (
-    <div className="sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
+    <div className="group sticky top-0 z-10 border-l-2 border-l-purple-500/70 bg-purple-950/40 backdrop-blur-sm shadow-sm">
+      <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
+        <ExchangeActions copyText={parsed.body} {...actionProps} />
+      </div>
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-[10px] font-medium text-purple-400 hover:bg-purple-900/30 transition-colors"
+        className="flex w-full items-center gap-2 px-3 py-2 pr-14 text-[10px] font-medium text-purple-400 hover:bg-purple-900/30 transition-colors"
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <span>Conversation summary sent to LLM</span>
         <span className="rounded bg-purple-900/40 px-1 py-0.5 font-mono text-purple-300/80">{parsed.olderCount} messages compacted</span>
+        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
       </button>
       {open && (
         <div className="px-3 pb-2 text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed max-h-[40vh] overflow-y-auto">
@@ -464,23 +520,10 @@ function ThinkingBlock({ text }: { text: string }) {
  *  The chips are rendered outside the sticky block so that the next exchange's sticky header
  *  doesn't cover them when scrolled.
  */
-function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable, sendFailed }: { content: string; localImages?: string[]; userOrdinal: number; deleted: boolean; messageId: string; deletable: boolean; sendFailed?: boolean }) {
+function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable, sendFailed }: ExchangeActionProps & { content: string; localImages?: string[]; sendFailed?: boolean }) {
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
   const [zoom, setZoom] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-  const canDelete = deletable && !deleted && userOrdinal >= 0
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) }).catch(() => {})
-  }
-
-  const handleDelete = async () => {
-    const target = resolveTargetSession(messageId)
-    if (!target) return
-    if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
-    wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal })
-  }
 
   return (
     <>
@@ -488,7 +531,7 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
           near-identical slate fg; on other themes they follow the palette */}
       <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
         <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
-          {deleted && <span className="mr-1 rounded bg-red-900/30 px-1 py-px text-[9px] font-medium text-red-400">deleted</span>}
+          {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
           {/* Ack/resend gave up — the server never confirmed this message
               (zombie-socket loss). Make the failure visible on the bubble
               instead of losing it silently. */}
@@ -497,14 +540,7 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
               <AlertTriangle className="h-2.5 w-2.5" />{tr('chat.sendFailedBadge')}
             </span>
           )}
-          <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
-            {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-          </button>
-          {canDelete && (
-            <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
-              <Trash2 className="h-3 w-3" />
-            </button>
-          )}
+          <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
         </div>
         <CollapsibleContent maxLines={2} toggleClassName="top-auto bottom-0">
           <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
