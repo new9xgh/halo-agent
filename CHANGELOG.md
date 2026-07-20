@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-20
+
+### Added
+
+- Admin chat panel: session list moved from a popup dropdown to a fixed, collapsible right sidebar (terminal-list style) — toggled by the History button or the empty-state link, open state persisted in `localStorage`; rows support inline rename (Enter/blur commits, Esc cancels).
+- Admin chat panel: sub-agent report and compact-summary callouts now have hover Copy/Delete actions like regular user bubbles — Copy strips the marker line and copies the body only; deleted callouts grey out with a "deleted" badge.
+
+### Changed
+
+- Session switching shows real loading driven by the server's `state:snapshot` (replacing a 2s fake timer), with a per-row spinner and a slow-network notice + Retry after 30s (slow is not treated as failure).
+
 ## [1.0.0] - 2026-07-18
 
 ### Added
