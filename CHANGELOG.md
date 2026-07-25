@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-25
+
+### Added
+
+- Claude Opus 5 on Bedrock Invoke (adaptive effort low/medium/high/xhigh/max, 128K output, 1M context); GPT-5.6 xhigh/max reasoning-effort tiers (live-verified: max is honored, not downgraded); chat media-preview download button; session-delete confirmation in both the chat sidebar and the Sessions page (the latter warns about the sub-session cascade).
+
+### Fixed
+
+- Chat media preview showing stale images after a file is overwritten in place (per-open cache-buster); parallel tool calls rendering with cross-matched/swapped outputs in the live view (results now pair by toolUseId, first-pending fallback); duplicated tool rows and streamed text after a mid-turn WS reconnect (reattach replay is now tagged and replaces the client's in-flight turn instead of appending; thinking blocks now survive reconnect; reconnect resubscribe single-owner).
+
 ## [1.0.1] - 2026-07-20
 
 ### Added
@@ -303,7 +313,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/turmind/halo-agent/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/turmind/halo-agent/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/turmind/halo-agent/compare/v0.2.6...v1.0.0
 [0.2.6]: https://github.com/turmind/halo-agent/compare/v0.2.5...v0.2.6
