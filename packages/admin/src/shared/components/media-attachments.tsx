@@ -21,7 +21,7 @@
 
 import { useState, useEffect } from 'react'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { X, FileText, Music, Video, Image as ImageIcon } from 'lucide-react'
+import { X, Download, FileText, Music, Video, Image as ImageIcon } from 'lucide-react'
 
 export interface MediaRef {
   path: string
@@ -161,6 +161,13 @@ function KindIcon({ kind }: { kind: MediaRef['kind'] }) {
 function MediaModal({ media, onClose }: { media: MediaRef; onClose: () => void }) {
   const projectPath = useProjectStore((s) => s.activeProject?.path ?? null)
   const url = buildMediaUrl(media.path, projectPath)
+  // Cache-buster captured once per modal open: workspace files can be
+  // overwritten in place (same path, new bytes), and the browser would keep
+  // serving the cached response for an identical URL. A fresh `t` per open
+  // guarantees the preview shows the file as it exists right now, without
+  // touching cache headers for other /api/files/download consumers.
+  const [bust] = useState(() => Date.now())
+  const fileName = media.path.split('/').pop() ?? 'file'
 
   // Close on Esc (matches the click-on-backdrop / X-button affordances).
   useEffect(() => {
@@ -171,11 +178,26 @@ function MediaModal({ media, onClose }: { media: MediaRef; onClose: () => void }
 
   if (!url) return null
 
+  const viewUrl = `${url}&t=${bust}`
+  const downloadUrl = `${url.replace('&inline=1', '')}&t=${bust}`
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
       onClick={onClose}
     >
+      {media.kind !== 'file' && (
+        <a
+          href={downloadUrl}
+          download={fileName}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute right-14 top-4 rounded p-2 text-white/80 hover:bg-white/10 hover:text-white"
+          aria-label="Download"
+          title="Download"
+        >
+          <Download className="h-5 w-5" />
+        </a>
+      )}
       <button
         onClick={onClose}
         className="absolute right-4 top-4 rounded p-2 text-white/80 hover:bg-white/10 hover:text-white"
@@ -185,21 +207,21 @@ function MediaModal({ media, onClose }: { media: MediaRef; onClose: () => void }
       </button>
       <div className="flex max-h-full max-w-full flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
         {media.kind === 'image' && (
-          <img src={url} alt={media.path} className="max-h-[85vh] max-w-[90vw] object-contain" />
+          <img src={viewUrl} alt={media.path} className="max-h-[85vh] max-w-[90vw] object-contain" />
         )}
         {media.kind === 'video' && (
-          <video src={url} controls autoPlay className="max-h-[85vh] max-w-[90vw]" />
+          <video src={viewUrl} controls autoPlay className="max-h-[85vh] max-w-[90vw]" />
         )}
         {media.kind === 'audio' && (
-          <audio src={url} controls autoPlay className="w-[min(80vw,480px)]" />
+          <audio src={viewUrl} controls autoPlay className="w-[min(80vw,480px)]" />
         )}
         {media.kind === 'file' && (
           <a
-            href={url.replace('&inline=1', '')}
-            download={media.path.split('/').pop() ?? 'file'}
+            href={downloadUrl}
+            download={fileName}
             className="rounded bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/20 no-underline"
           >
-            Download {media.path.split('/').pop()}
+            Download {fileName}
           </a>
         )}
         <div className="max-w-[90vw] truncate font-mono text-[11px] text-white/60">

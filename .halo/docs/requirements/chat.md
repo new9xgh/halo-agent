@@ -66,7 +66,7 @@ When `contextEnabled` is on (default), user messages are auto-prepended with:
 Images ride along as base64; multimodal supported. Pasted images are also persisted to `<workspace>/.halo/assets/web/inbound/web/<date>/` so a `[图片已保存: /abs/path]` marker survives page reload and renders as a click-to-preview chip (shared with the WeChat channel's inbound media flow).
 
 ### Inline media chips
-Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). Paths inside the active workspace or under `/tmp/` are previewable; everything else degrades to a non-clickable chip.
+Any message containing `[图片/视频/语音/文件 已保存: /path]` markers (WeChat + web) or a leading `MEDIA: /path` line (agent-emitted, e.g. from `wechat-send`) renders a compact chip with filename + icon. Clicking opens a full-size preview modal (image/video/audio inline, file → download link). The modal has a Download button (top-right, next to close) for image/video/audio; the media URL carries a per-open cache-buster (`&t=<timestamp>`) so overwritten files (same path, new bytes) always show current content. Paths inside the active workspace or under `/tmp/` are previewable; everything else degrades to a non-clickable chip.
 
 ### Live capture (desktop only)
 Lets the agent *see something live* on demand. Desktop client (Electron) only — the entry points never render in a plain browser. Borrows the meeting-app "share" model: the user binds one source, then the agent requests a frame when it actually needs to look.
