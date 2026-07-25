@@ -1,5 +1,5 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore, noteLinkDrop } from '@/features/chat/chat-store'
+import { useChatStore, noteLinkDrop, takeReplaySnapshot } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { generateId } from '@/shared/utils'
 import { postToFace } from '@/features/editor/face-bridge'
@@ -220,9 +220,27 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
 
   unsubs.push(
     wsClient.on('chat:followup', (data) => {
-      const msg = data as { agentName?: string }
+      const msg = data as { agentName?: string; replay?: boolean }
       const store = useChatStore.getState()
-      store.completeAgentStreaming(msg.agentName)
+      if (msg.replay) {
+        // Reattach replay (server ws/handler.ts): the server is about to
+        // re-send the ENTIRE in-flight turn as replay-flagged events. Our
+        // locally-held partial copy of that turn — possibly intact (the
+        // snapshot-replace was skipped while streaming) — would duplicate the
+        // streamed text if the replay appended onto it. Reset to the settled
+        // log stashed from the reattach snapshot and rebuild from the replay.
+        const settled = takeReplaySnapshot(store.sessionId)
+        if (settled) {
+          store.setMessages(settled)
+        } else {
+          // No matching snapshot stash (shouldn't happen — the reattach
+          // snapshot precedes the replay on the same socket): fall back to
+          // live behavior; toolUseId dedup still protects tool rows.
+          store.completeAgentStreaming(msg.agentName)
+        }
+      } else {
+        store.completeAgentStreaming(msg.agentName)
+      }
       store.addMessage({
         id: generateId(),
         role: 'assistant',

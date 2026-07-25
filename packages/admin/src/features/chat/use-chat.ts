@@ -52,9 +52,12 @@ export function useChat() {
   const pendingMessages = useChatStore((s) => s.pendingMessages)
   const activeProject = useProjectStore((s) => s.activeProject)
 
-  // When project changes, load the project-scoped session.
-  // Also listens for WS `_connected` so that initial load (where WS connects
-  // before activeProject is resolved, or vice-versa) still subscribes.
+  // When project changes, load the project-scoped session and subscribe if
+  // the WS is already up. Reconnects (and late initial connects) are owned
+  // exclusively by use-websocket's `_connected` handler — a second subscriber
+  // here double-subscribed on every reconnect: the first consumed the
+  // detached-session entry (reattach + replay), the second re-ran the normal
+  // path (second snapshot + listener re-registration).
   useEffect(() => {
     if (!activeProject) return
 
@@ -69,17 +72,10 @@ export function useChat() {
       useChatStore.getState().clear()
     }
 
-    const subscribeIfReady = () => {
-      const sid = useChatStore.getState().sessionId
-      if (sid && wsClient.connected) {
-        wsClient.send({ type: 'subscribe', sessionId: sid, projectId })
-      }
+    const sid = useChatStore.getState().sessionId
+    if (sid && wsClient.connected) {
+      wsClient.send({ type: 'subscribe', sessionId: sid, projectId })
     }
-    // Try immediately (covers case: WS already connected when project resolves)
-    subscribeIfReady()
-    // And again on future connects (covers case: WS reconnects or connects late)
-    const off = wsClient.on('_connected', () => subscribeIfReady())
-    return () => off()
   }, [activeProject?.id])
 
   /** Build editor context prefix from current selection and active file */

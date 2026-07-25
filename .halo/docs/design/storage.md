@@ -162,6 +162,7 @@ interface ToolCallEntry {
   input: string                  // formatted summary
   output?: string
   durationMs?: number
+  toolUseId?: string             // provider tool_use id — pairs result↔call, dedups reconnect replays (absent on old sessions)
 }
 ```
 

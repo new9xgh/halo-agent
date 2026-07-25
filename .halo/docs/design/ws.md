@@ -25,7 +25,7 @@ Two OS/browser signals supplement the timer:
 
 **Auth expiry**: when the WS handshake itself is rejected (close before `onopen` — `verifyClient` returns 401 on an expired JWT cookie, but the browser WS API hides the HTTP status), the client probes `/api/auth/check`. On 401 it stops reconnecting and emits `_auth_expired`; the admin page listens and swaps to the login screen. Any other probe outcome (server restarting, network blip) falls through to normal backoff.
 
-After a successful `_connected` event, all subscribers re-issue their session-resume messages: `subscribe` (chat / agent state) and `terminal:reattach` (PTY pool). Both are idempotent on the server.
+After a successful `_connected` event, session-resume messages are re-issued: `subscribe` (chat / agent state — sent by **use-websocket.ts only**; use-chat subscribes on project/session changes but deliberately not on reconnect, since a second subscribe would consume the detached-session reattach and then re-run the normal path over it) and `terminal:reattach` (PTY pool, terminal-panel.tsx).
 
 ### Chat delivery: ack / resend / dedup
 
@@ -74,8 +74,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `stream` | `chat:stream` | text, agentName, taskId, turnId |
 | `agent_start` | `agent:start` | agentName, task, taskId |
 | `agent_done` | `agent:done` | agentName, taskId |
-| `tool_call` | `agent:tool_call` | tool, input, agentName, taskId, turnId |
-| `tool_result` | `agent:tool_result` | result, agentName, taskId, durationMs |
+| `tool_call` | `agent:tool_call` | tool, toolUseId, input, agentName, taskId, turnId |
+| `tool_result` | `agent:tool_result` | result, toolUseId, agentName, taskId, durationMs |
 | `followup_start` / `queued_message` | `chat:followup` | agentName |
 | `usage` (no taskId) | `chat:usage` | contextTokens, outputTokens, turnId, modelId, usage |
 | `complete` | `chat:complete` | sessionId |
@@ -83,6 +83,8 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `system` | `chat:system` | text |
 | `error` | `error` | error, agentName, taskId |
 | `user` (report, no taskId) | `chat:user` | text |
+
+`chat:thinking` / `chat:stream` / `chat:followup` / `agent:tool_call` / `agent:tool_result` additionally carry `replay: true` when synthesized by the reattach path (never on live events) — see [Reconnect flow](#reconnect-flow) step 6.
 
 ### Other Server → Client messages
 
@@ -162,9 +164,12 @@ When the client drops while an agent is still working:
 Client reconnects and sends `subscribe`:
 1. Server detects the detached session
 2. Loads UIState from SessionManager (via `getUIState`) and builds a save snapshot
-3. Sends `state:snapshot` with messages from `createSaveSnapshot(state)`
+3. Sends `state:snapshot` — messages from `createSaveSnapshot(state)`, or the settled `messageLog` only when the session is still running (see step 6)
 4. Replays buffered `pendingEvents`
 5. Re-attach the event listener — live streaming continues seamlessly
+6. If the session is still running, synthesizes the in-progress turn as an **authoritative replay**: every synthesized message carries `replay: true` — a `chat:followup`, then the turn's `turnContentBlocks` in order (`chat:thinking` / `chat:stream` / `agent:tool_call` + `agent:tool_result` if completed), each with the session's real `agentName` and the block's real `turnId` so usage badges / turn grouping survive the reconnect. The running-session snapshot in step 3 sends the settled `messageLog` only (no `createSaveSnapshot` temp in-flight message — the replay carries that turn instead).
+
+**Client replace semantics** (`chat-handlers.ts` + `state-handlers.ts`): the client stashes every reattach snapshot (even when the in-flight guard skips the visible replace). On a replay-flagged `chat:followup` it **discards its locally-held in-flight turn** — resetting `messages` to the stashed settled log — and rebuilds the turn from the replayed events. Without the replace, a client that had kept its streamed text through the drop (the snapshot guard assumes it did) got the same text appended again by the replay; `toolUseId` dedup only covered tool rows. Live (non-replay) followups keep append behavior. Replayed tool entries still carry `toolUseId` (dedup + `tool_result` pairing by id, with a first-pending positional fallback for entries without one — old persisted sessions).
 
 ### Double-subscribe guard
 

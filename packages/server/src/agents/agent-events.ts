@@ -11,6 +11,10 @@ export interface AgentSessionEvent {
    *  preview for parent-side rendering (agent:start WS, in-flight panel). */
   fullText?: string
   toolName?: string
+  /** Provider tool_use id — pairs a tool_result to its tool_call. Carried
+   *  through to the WS layer so clients can dedup replayed tool rows after
+   *  a mid-turn reconnect. */
+  toolUseId?: string
   toolInput?: unknown
   toolResult?: string
   /** Full (un-truncated) tool result — for UI display. LLM-facing rawMessages

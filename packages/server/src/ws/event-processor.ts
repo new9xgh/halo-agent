@@ -58,10 +58,10 @@ export function sendWsNotification(
       sendJson(ctx.ws, { type: 'agent:done', agentName, taskId })
       break
     case 'tool_call':
-      sendJson(ctx.ws, { type: 'agent:tool_call', tool: event.toolName, input: event.toolInput, agentName, taskId, turnId })
+      sendJson(ctx.ws, { type: 'agent:tool_call', tool: event.toolName, toolUseId: event.toolUseId, input: event.toolInput, agentName, taskId, turnId })
       break
     case 'tool_result':
-      sendJson(ctx.ws, { type: 'agent:tool_result', result: event.toolResult, agentName, taskId, durationMs: event.durationMs })
+      sendJson(ctx.ws, { type: 'agent:tool_result', result: event.toolResult, toolUseId: event.toolUseId, agentName, taskId, durationMs: event.durationMs })
       break
     case 'followup_start':
     case 'queued_message':

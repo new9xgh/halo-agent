@@ -113,6 +113,9 @@ export interface ToolCallInfo {
   name: string
   input: string
   output?: string
+  /** Provider tool_use id — pairs a result to its call and dedups reconnect
+   *  replays. Optional: absent on old persisted sessions. */
+  toolUseId?: string
 }
 
 /** Ordered content block — preserves interleaving of text and tool calls */

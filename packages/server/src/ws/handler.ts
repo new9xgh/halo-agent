@@ -710,7 +710,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
         const state = getState(client)
         const ctxConfig = await client.sessionManager.getContextConfig(client.sessionId)
-        const messages = state ? [...createSaveSnapshot(state)] : []
+        const running = client.sessionManager.isSessionRunning(client.sessionId)
+        // While running, the in-flight turn rides the `replay: true` synthesis
+        // below — keep createSaveSnapshot's temp in-flight message OUT of the
+        // snapshot, or a client that applies it renders the turn twice.
+        const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
         const detachedSession = client.sessionManager.getSessionById(client.sessionId)
         sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId } })
         if (state && state.contextTokens > 0) {
@@ -723,16 +727,28 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         detached.unsubscribe()
         client.unsubscribeEvents = client.sessionManager.registerEventListener(client.sessionId, createEventListener(client))
 
-        if (state && client.sessionManager.isSessionRunning(client.sessionId)) {
+        if (state && running) {
           console.debug(`[WS] Session still running — synthesizing in-progress state`)
-          sendJson(ws, { type: 'chat:followup', agentName: state.streamingAgent || 'default' })
-          if (state.streamBuffer) {
-            sendJson(ws, { type: 'chat:stream', text: state.streamBuffer, agentName: state.streamingAgent || 'default' })
-          }
-          for (const tc of state.turnToolCalls) {
-            sendJson(ws, { type: 'agent:tool_call', tool: tc.name, input: tc.input, agentName: 'default' })
-            if (tc.output) {
-              sendJson(ws, { type: 'agent:tool_result', result: tc.output, agentName: 'default', durationMs: tc.durationMs })
+          // `replay: true` marks this as an AUTHORITATIVE re-send of the whole
+          // in-flight turn: on the flagged followup the client discards its
+          // locally-held partial version of the turn and rebuilds from the
+          // events below — appending instead duplicated the pre-drop streamed
+          // text. Replaying turnContentBlocks (not streamBuffer+turnToolCalls)
+          // keeps thinking blocks, interleaving, and each block's real turnId,
+          // so the rebuild is lossless and usage/turn grouping survives.
+          const agentName = detachedSession?.agentName ?? (state.streamingAgent || 'default')
+          sendJson(ws, { type: 'chat:followup', agentName, replay: true })
+          for (const block of state.turnContentBlocks) {
+            if (block.type === 'thinking') {
+              sendJson(ws, { type: 'chat:thinking', text: block.text, agentName, turnId: block.turnId, replay: true })
+            } else if (block.type === 'text') {
+              sendJson(ws, { type: 'chat:stream', text: block.text, agentName, turnId: block.turnId, replay: true })
+            } else {
+              const tc = block.toolCall
+              sendJson(ws, { type: 'agent:tool_call', tool: tc.name, toolUseId: tc.toolUseId, input: tc.input, agentName, turnId: block.turnId, replay: true })
+              if (tc.output) {
+                sendJson(ws, { type: 'agent:tool_result', result: tc.output, toolUseId: tc.toolUseId, agentName, durationMs: tc.durationMs, replay: true })
+              }
             }
           }
         }

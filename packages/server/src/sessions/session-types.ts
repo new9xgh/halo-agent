@@ -8,6 +8,10 @@ export interface ToolCallEntry {
   input: string
   output?: string
   durationMs?: number
+  /** Provider tool_use id — lets the reattach replay (ws/handler.ts) carry a
+   *  stable identity so clients can dedup duplicated tool rows. Optional:
+   *  sessions persisted before this field existed won't have it. */
+  toolUseId?: string
 }
 
 export type ContentBlockEntry =

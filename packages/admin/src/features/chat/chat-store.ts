@@ -32,6 +32,27 @@ export function noteLinkDrop(): void {
   lastLinkDropAt = Date.now()
 }
 
+/** Most recent `state:snapshot` payload, stashed by state-handlers on EVERY
+ *  snapshot — including the ones whose replace was skipped because a stream
+ *  was in flight. A reattach replay (`chat:followup` with `replay: true`, see
+ *  server ws/handler.ts) declares the server authoritative for the in-flight
+ *  turn: the client resets to this settled log and rebuilds the turn from the
+ *  replayed events, instead of appending onto its locally-held partial copy
+ *  (which duplicated the pre-drop streamed text). Module-level like
+ *  lastLinkDropAt — nothing renders from it. */
+let lastSnapshot: { sessionId: string; messages: ChatMessage[] } | null = null
+export function noteSnapshot(sessionId: string, messages: ChatMessage[]): void {
+  lastSnapshot = { sessionId, messages }
+}
+/** Settled log for a replay rebuild — only if the stash belongs to the
+ *  session the store is currently on (guards a late replay racing a session
+ *  switch). */
+export function takeReplaySnapshot(sessionId: string | null): ChatMessage[] | null {
+  return lastSnapshot && sessionId && lastSnapshot.sessionId === sessionId
+    ? lastSnapshot.messages
+    : null
+}
+
 /**
  * When a streaming event arrives with a turnId that doesn't match the current
  * streaming assistant's last block, it means a new server turn has begun
@@ -121,7 +142,7 @@ interface ChatStore {
   appendThinking(text: string, agentName?: string, taskId?: string, turnId?: string): void
   updateLastAssistant(text: string, agentName?: string, taskId?: string, turnId?: string): void
   addToolCallToLastAssistant(toolCall: ToolCallInfo, agentName?: string, taskId?: string, turnId?: string): void
-  updateLastToolCallResult(result: string, agentName?: string, taskId?: string): void
+  updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string): void
   completeStreaming(): void
   completeAgentStreaming(agentName?: string, taskId?: string): void
   setSessionId(id: string): void
@@ -251,6 +272,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   addToolCallToLastAssistant(toolCall: ToolCallInfo, agentName?: string, taskId?: string, turnId?: string) {
     set((state) => {
+      // Reattach replay dedup: after a mid-turn WS reconnect the server
+      // re-sends the in-flight turn's tool_calls (ws/handler.ts synthesis).
+      // If a row with the same toolUseId is already rendered — from the
+      // snapshot or the pre-drop stream — drop the duplicate.
+      if (toolCall.toolUseId && state.messages.some((m) =>
+        m.toolCalls?.some((tc) => tc.toolUseId === toolCall.toolUseId)
+        || m.contentBlocks?.some((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolCall.toolUseId),
+      )) {
+        return state
+      }
       const messages = [...ensureStreamingSlot(state.messages, agentName, taskId, turnId)]
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i]
@@ -272,18 +303,59 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
 
-  updateLastToolCallResult(result: string, agentName?: string, taskId?: string) {
+  updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string) {
     set((state) => {
       const messages = [...state.messages]
+
+      // Identity path: pair by toolUseId when the server sent one. The id is
+      // provider-unique, so scan every message — after a reattach the owning
+      // row may live in a non-streaming snapshot message. Never overwrite a
+      // completed entry: replayed results stay idempotent.
+      if (toolUseId) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i]
+          const callIdx = msg.toolCalls?.findIndex((tc) => tc.toolUseId === toolUseId) ?? -1
+          const blockIdx = msg.contentBlocks?.findIndex((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolUseId) ?? -1
+          if (callIdx === -1 && blockIdx === -1) continue
+
+          const alreadyDone = (callIdx !== -1 && msg.toolCalls![callIdx].output !== undefined)
+            || (blockIdx !== -1 && (msg.contentBlocks![blockIdx] as { toolCall: ToolCallInfo }).toolCall.output !== undefined)
+          if (alreadyDone) return state
+
+          const toolCalls = msg.toolCalls ? [...msg.toolCalls] : msg.toolCalls
+          if (toolCalls && callIdx !== -1) {
+            toolCalls[callIdx] = { ...toolCalls[callIdx], output: result }
+          }
+          const blocks = msg.contentBlocks ? [...msg.contentBlocks] : msg.contentBlocks
+          if (blocks && blockIdx !== -1) {
+            const block = blocks[blockIdx] as { type: 'tool_call'; toolCall: ToolCallInfo; turnId?: string }
+            blocks[blockIdx] = { type: 'tool_call', toolCall: { ...block.toolCall, output: result }, turnId: block.turnId }
+          }
+          messages[i] = { ...msg, toolCalls, contentBlocks: blocks }
+          return { messages }
+        }
+        // id present but its tool_call row never rendered (lost WS frame) —
+        // fall through to the first-pending scan below.
+      }
+
+      // Fallback (no toolUseId — e.g. old persisted sessions replayed through
+      // ui-log-builder): attach to the FIRST pending entry. Results arrive in
+      // call order (agent-loop executes tool_use blocks serially), so
+      // first-pending is the one this result belongs to; the old last-entry
+      // overwrite cross-matched outputs on parallel-tool-call turns (same bug
+      // the server fixed in ui-log-builder setToolResult). Never overwrite a
+      // completed entry.
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i]
         if (msg.role === 'assistant' && msg.streaming && msg.toolCalls?.length) {
           if (msg.taskId !== taskId) continue
 
-          // Update in toolCalls array
+          // Update first pending in toolCalls array
           const toolCalls = [...msg.toolCalls]
-          const last = toolCalls[toolCalls.length - 1]
-          toolCalls[toolCalls.length - 1] = { ...last, output: result }
+          const pendingIdx = toolCalls.findIndex((tc) => tc.output === undefined)
+          if (pendingIdx !== -1) {
+            toolCalls[pendingIdx] = { ...toolCalls[pendingIdx], output: result }
+          }
 
           // Also update in contentBlocks. Preserve `turnId` on the block —
           // dropping it caused ensureStreamingSlot to see a stale "lastBlock
@@ -291,9 +363,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           // belonging to subsequent turns, collapsing 12 separate turns into
           // one giant message bubble in the live UI.
           const blocks = [...(msg.contentBlocks ?? [])]
-          for (let j = blocks.length - 1; j >= 0; j--) {
+          for (let j = 0; j < blocks.length; j++) {
             const block = blocks[j]
-            if (block.type === 'tool_call' && !block.toolCall.output) {
+            if (block.type === 'tool_call' && block.toolCall.output === undefined) {
               blocks[j] = { type: 'tool_call', toolCall: { ...block.toolCall, output: result }, turnId: block.turnId }
               break
             }

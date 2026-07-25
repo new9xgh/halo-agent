@@ -69,6 +69,10 @@ export function useWebSocket() {
         const activeProject = useProjectStore.getState().activeProject
         // Always subscribe on connect — even without a sessionId the server
         // needs the projectId to start its file watcher for Explorer sync.
+        // SINGLE owner of the reconnect resubscribe: a second `subscribe` on
+        // the same `_connected` (use-chat used to send one too) consumes the
+        // server's detached-session entry with the first and re-runs the
+        // normal path with the second — double snapshot + re-registration.
         if (activeProject?.id) {
           wsClient.send({ type: 'subscribe', sessionId: sessionId ?? '', projectId: activeProject.id })
         }

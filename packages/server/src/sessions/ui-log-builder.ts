@@ -353,7 +353,7 @@ export function applyEvent(state: UIState, event: OrchestratorEvent): ApplyResul
 
     case 'tool_call': {
       const inputStr = formatToolInput(event.toolInput)
-      const entry: ToolCallEntry = { name: event.toolName ?? '', input: inputStr }
+      const entry: ToolCallEntry = { name: event.toolName ?? '', input: inputStr, toolUseId: event.toolUseId }
       const msg: SessionMessage = {
         id: genId(), type: 'tool_call', role: 'system',
         content: `${agentName} → ${event.toolName}: ${inputStr}`,

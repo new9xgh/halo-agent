@@ -1098,7 +1098,7 @@ export class SessionManager implements SessionManagerInternals {
         if (loopStatus === 'warn') {
           this.emitEvent(session.id, { type: 'system', text: `⚠️ Tool "${event.toolName}" called repeatedly with identical input. Consider a different approach.` })
         }
-        this.emitEvent(session.id, { type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'tool_call', toolName: event.toolName, toolUseId: event.toolUseId, toolInput: event.toolInput, agentName, agentId, taskId })
         break
       }
 
@@ -1107,7 +1107,7 @@ export class SessionManager implements SessionManagerInternals {
         // toolResult is LLM-facing only — already applied in agent-loop.ts
         // before the event was yielded. Don't re-truncate here.
         const resultStr = event.toolResultFull ?? event.toolResult ?? ''
-        this.emitEvent(session.id, { type: 'tool_result', toolName: event.toolName, toolResult: resultStr, durationMs: event.durationMs, agentName, agentId, taskId })
+        this.emitEvent(session.id, { type: 'tool_result', toolName: event.toolName, toolUseId: event.toolUseId, toolResult: resultStr, durationMs: event.durationMs, agentName, agentId, taskId })
         break
       }
 
@@ -1676,6 +1676,7 @@ export class SessionManager implements SessionManagerInternals {
       this.emitEvent(sessionId, {
         type: 'tool_result',
         toolName: tc.name,
+        toolUseId: tc.toolUseId,
         toolResult: '[interrupted by user]',
         agentName: session?.agentName,
         agentId: session?.agentId,

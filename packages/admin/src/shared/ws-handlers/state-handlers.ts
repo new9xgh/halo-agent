@@ -1,5 +1,5 @@
 import type { WsClient } from '../ws-client-types'
-import { useChatStore, isStaleStreamingPlaceholder } from '@/features/chat/chat-store'
+import { useChatStore, isStaleStreamingPlaceholder, noteSnapshot } from '@/features/chat/chat-store'
 import { refreshGoal } from '@/features/chat/goal-store'
 import { useTaskStore } from '@/shared/stores/task-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -43,11 +43,18 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
       const inFlight = useChatStore.getState().messages.some(
         (m) => m.streaming && !isStaleStreamingPlaceholder(m),
       )
+      // Stash the snapshot even when the replace below is skipped (and even
+      // when empty — the settled log of a running session's first turn IS
+      // empty): if this subscribe reattached a still-running session, the
+      // server follows with a replay-flagged followup (see ws/handler.ts)
+      // and chat-handlers resets to this stash + rebuilds from the replay.
+      const snapshotMessages = snapshot.recentMessages ?? snapshot.messages
+      if (snapshotMessages && snapshot.sessionId) {
+        noteSnapshot(snapshot.sessionId, snapshotMessages)
+      }
       if (!inFlight) {
-        if (snapshot.recentMessages && snapshot.recentMessages.length > 0) {
-          useChatStore.getState().setMessages(snapshot.recentMessages)
-        } else if (snapshot.messages && snapshot.messages.length > 0) {
-          useChatStore.getState().setMessages(snapshot.messages)
+        if (snapshotMessages && snapshotMessages.length > 0) {
+          useChatStore.getState().setMessages(snapshotMessages)
         }
       } else {
         console.debug('[state-handlers] skipping snapshot replace — streaming in flight')
