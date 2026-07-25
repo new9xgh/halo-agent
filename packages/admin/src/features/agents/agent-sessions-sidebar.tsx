@@ -6,7 +6,7 @@ import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
-import { cn } from '@/shared/utils'
+import { cn, confirmAction } from '@/shared/utils'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw, Pencil } from 'lucide-react'
 import type { ChatMessage } from '@/shared/types'
@@ -500,6 +500,7 @@ export function AgentSessionsSidebar() {
   const handleDeleteMain = useCallback(async (e: React.MouseEvent, sid: string) => {
     e.stopPropagation()
     if (!activeProject?.path) return
+    if (!(await confirmAction('Delete this session and all its sub-sessions? History cannot be recovered.'))) return
     try {
       // Optimistic local removal so the row + its descendants visibly
       // disappear immediately. Server delete cascades in db; bus refresh

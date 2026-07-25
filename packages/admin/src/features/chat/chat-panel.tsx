@@ -16,7 +16,7 @@ import { bumpSessionBus } from '@/shared/session-bus'
 import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
-import { cn } from '@/shared/utils'
+import { cn, confirmAction } from '@/shared/utils'
 
 interface AgentOption {
   id: string
@@ -197,6 +197,7 @@ export function ChatPanel() {
 
   const handleDeleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!(await confirmAction('Delete this session? Its history cannot be recovered.'))) return
     deleteSession(sid)
     await removeSession(sid)
   }, [deleteSession, removeSession])
