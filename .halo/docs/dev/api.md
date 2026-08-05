@@ -169,7 +169,7 @@ File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source C
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/git/status?projectId=` | Structured working-tree status. A folder that isn't a git work-tree **root** (no repo, or merely nested inside an ancestor's repo) returns `{isRepo: false}` (200, not 500) so the panel shows its initialize/empty state. Otherwise `{isRepo: true, branch, tracking, ahead, behind, files: [{path, index, workingDir, from?}]}` — `index`/`workingDir` are the two porcelain status chars (X staged / Y working) |
-| GET | `/api/git/ignored?projectId=` | `.gitignore`'d paths for graying out in the explorer; ignored directories are collapsed to a single entry (e.g. `node_modules`) rather than expanded. Returns `{ignored: string[]}`. Runs with `core.quotepath=false` so non-ASCII (e.g. Chinese) paths come back literal, not octal-escaped — the frontend prefix-matches them against tree node paths |
+| GET | `/api/git/ignored?projectId=` | `.gitignore`'d paths for graying out in the explorer; ignored directories are collapsed to a single entry (e.g. `node_modules`) rather than expanded. Returns `{ignored: string[]}` (`{isRepo:false, ignored:[]}` when the folder isn't a work-tree root — same guard as `status`, applied to all six read endpoints so a workspace nested inside an ancestor's repo never leaks its state). Runs with `core.quotepath=false` so non-ASCII (e.g. Chinese) paths come back literal, not octal-escaped — the frontend prefix-matches them against tree node paths |
 | GET | `/api/git/diff?projectId=&path=[&staged=0\|1][&from=][&commit=]` | Two sides for the Monaco diff editor. With `commit`, shows that commit's own change (parent vs commit); without it, the working-tree (or `staged=1`) diff. `from` carries the old path on a rename. Returns `{path, original, modified, ...}`. 400 if `path` missing, 403 on traversal |
 | GET | `/api/git/log?projectId=[&limit=50]` | Recent commits for the graph. `limit` default 50, capped at 2000. Returns `{commits: [{hash, shortHash, message, author, date, refs, pushed}]}` — `pushed: boolean` marks whether the commit is on a remote (graph dims pushed nodes gray, paints local-only ones blue). No-upstream branches compute it via `rev-list HEAD --not --remotes`, not `rev-list HEAD` |
 | GET | `/api/git/commit-files?projectId=&hash=` | Files changed by one commit. Returns `{files: [{path, status, from?}]}` (`status` = M/A/D/R/C; `from` set on rename/copy). 400 if `hash` missing |
@@ -683,6 +683,18 @@ Attach this connection to a session's event stream. Sent on initial connect and 
 }
 ```
 
+Idempotent per connection: re-subscribing to the same session releases this connection's previous listener and registers exactly one new one — safe to repeat. The client must also re-send it on receiving `listener:released` (see below).
+
+### `listener:released` (S→C)
+
+The server reclaimed this connection's event listener — sent when the connection was silent for >3 min (no inbound frames; e.g. a frozen tab whose network stack still answers protocol pings) or found CLOSED with a listener attached. The socket stays open; only the event stream is detached.
+
+```json
+{ "type": "listener:released", "sessionId": "sid_abc" }
+```
+
+On receipt the client re-sends `subscribe` to reattach — this frame is the only recovery signal a frozen-and-resumed tab gets, because the server's `__pong__` replies keep the client's own staleness detection from ever firing. Any WS consumer must send `__ping__` periodically (any inbound frame counts) or it will be reclaimed. See [design/ws.md](../design/ws.md#abandoned-listener-reclaim-and-the-__ping__-contract).
+
 ### `session:clear` (C→S)
 
 Detach from the current session (for `/session new`). Server unsubscribes the event listener without deleting the session.
@@ -712,5 +724,6 @@ Hard delete (JSON + SQLite rows, cascades to descendants) goes through the REST 
 | `complete` | `stopReason`, `taskId?` | Turn finished |
 | `error` | `error` | Error message |
 | `chat:queued` | `reason`, `message` | Message queued (compact/busy) |
+| `listener:released` | `sessionId` | Event listener reclaimed — re-send `subscribe` (see above) |
 
 Events with `taskId` set belong to sub-agent turns (nested sessions); events without are the root agent's. Full list in [design/ws.md](../design/ws.md).

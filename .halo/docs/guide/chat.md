@@ -74,7 +74,7 @@ If you're chatting from WeChat, the same shared commands are available (routed t
 | `/qr [level]` | Generate an invite QR for a new bot account (full 权限 bot 专用) |
 | `/help` | Show help |
 
-If the session is currently compacting or busy when your message arrives, you'll see a hint — ("⏳ integrating context…" / "🔄 queued…") — and the message is queued (while compacting it's dropped; while busy it's kept).
+If the session is currently compacting or busy when your message arrives, you'll see a hint — ("⏳ integrating context…" / "🔄 queued…") — and the message is queued either way, processed as soon as the compact / current turn finishes.
 
 ## Interrupt vs Stop
 

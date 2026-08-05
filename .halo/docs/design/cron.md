@@ -14,7 +14,7 @@ cron_jobs (global db)                      registered at boot:
       ▼                            │              │ registerCronDispatcher
   spawn `halo cli -n -s cron-<id>` │       dispatcher.ts (registry)
       │ stdout                     │              ▲
-      ▼                            └──────────────┘ dispatchToTargets(text, targets)
+      ▼                            └──────────────┘ dispatchToTargets(rawText, targets, workspacePath)
   cron_runs (audit row + log file) ───────────────┘
 ```
 
@@ -47,7 +47,7 @@ Each fire:
 5. Tee stdout + stderr live to `~/.halo/global/logs/cron/<runId>.log`; capture stdout to memory for dispatch.
 6. Enforce a **3600s timeout** via a Node timer (cross-platform, not the Linux-only `timeout(1)`), with a **two-phase kill**: SIGTERM the direct child first — the cli has a SIGTERM handler that stops the harness, repairs + flushes the session, kills its own shell_exec process groups, and exits 143 — then, if it's still alive after a 30s grace, SIGKILL the entire descendant tree (POSIX ppid-walk over one `ps` snapshot; `taskkill /T /F` on Windows) so no grandchild survives to double-write the workspace on the next fire. A ppid walk, not a process-group kill: the cli sandbox spawns shell_exec workers `detached` into their own groups, so `kill(-pid)` would miss them. Timed-out runs still report exit code 124. Generous because overlap-of-the-same-job is already blocked up-front in step 1; this is just the long-stop reaper for a truly stuck child.
 7. Classify: exit 124 → `timeout`; non-zero → `failed`; zero but empty stdout → `failed` ("nothing to dispatch"); else `succeeded`.
-8. On success only, `dispatchToTargets(stdout, targets)`. If every target fails, downgrade to `failed`.
+8. On success only, `dispatchToTargets(stdout, targets, job.workspacePath)` — the raw stdout goes down as-is; `MEDIA:` extraction happens per-target inside the dispatcher (see Dispatch model). If every target fails, downgrade to `failed`.
 9. `finalize`: write the terminal `cron_runs` row, update `cron_jobs.lastRun*`, disable one-shot jobs, broadcast. The `_inflight` entry is released in `finally`, regardless of outcome.
 
 The cli executable is resolved via `resolveHaloCli()` (`$HALO_CLI` override; `halo.cmd` on Windows to dodge the GUI `Halo.exe` on PATH).
@@ -72,12 +72,18 @@ Only the kill grace is asynchronous; the boot-blocking part is one small select 
 ```ts
 interface CronChannelDispatcher {
   channelType: string
-  dispatch: (accountId, text, chatId?) => Promise<DispatchResult[]>
+  supportsMedia?: boolean   // true = dispatch actually delivers `media` attachments
+  dispatch: (accountId, text, chatId?, media?: CronMedia) => Promise<DispatchResult[]>
   listTargets?: () => CronTargetOption[]
 }
 ```
 
 - `dispatchToTargets` is **never throws** — every target's outcome (ok / error) is captured into a `DispatchResult[]` persisted to `cron_runs.dispatch_results`. One channel being down doesn't block the others.
+- **`MEDIA:` attachments**: the runner passes raw stdout down untouched; `dispatchToTargets(rawText, targets, workspacePath)` extracts the agent's `MEDIA:<path>` marker lines once, then decides **per target** (one run can mix both kinds of channel):
+  - `supportsMedia: true` (wechat, slack) → marker-stripped text + a `CronMedia { paths, workspacePath }`; the channel sends real file uploads, one `DispatchResult` row per attachment. Both skip the text send when a marker-only run leaves it empty.
+  - no `supportsMedia` (telegram, feishu) → the **original text with `MEDIA:` lines intact** — the attachment degrades to a visible path instead of silently vanishing.
+  - `CronMedia.workspacePath` is the **job's** workspace (where the run produced its files), not the target account's — it's the sandbox root for `isMediaPathAllowed` (paths outside workspace/OS-tmp are rejected with a failed result row).
+  - Wiring telegram/feishu up for real requires refactoring first, not copying: telegram's file send is an inline `sendPhoto/…/sendDocument` switch in `handler.ts`'s responder; feishu's `sendFeishuMedia` is anchored to an inbound `messageId` a cron run doesn't have. Extract the send-to-chat half in the channel module, then flip `supportsMedia: true` (details in each `cron-dispatcher.ts` header).
 - **`chatId` semantics**: when a job is created from inside a chat, the target pins to that conversation (`chatId` set). When unset, the channel's own fan-out / default-recipient logic decides (e.g. Telegram fans out to its whitelist; Slack/Feishu require an explicit `chatId`).
 - `listTargets()` aggregates across all dispatchers (`listAllCronTargets`) to feed the admin create-form dropdown without the routes knowing any channel.
 

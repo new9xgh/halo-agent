@@ -27,6 +27,21 @@ Two OS/browser signals supplement the timer:
 
 After a successful `_connected` event, session-resume messages are re-issued: `subscribe` (chat / agent state — sent by **use-websocket.ts only**; use-chat subscribes on project/session changes but deliberately not on reconnect, since a second subscribe would consume the detached-session reattach and then re-run the normal path over it) and `terminal:reattach` (PTY pool, terminal-panel.tsx).
 
+### Abandoned-listener reclaim and the `__ping__` contract
+
+The two keepalives above still miss one state: a **frozen renderer on a healthy TCP link**. When a tab's JS is suspended (Chrome tab freeze, energy/memory saver) the browser's *network process* keeps answering protocol pings — the server-side keepalive says "healthy" — while the page sends nothing, reads nothing, and never sends a close frame. `ws.on('close')` never runs, so the connection's event listener stays registered forever: every session event is also serialized into a socket nobody reads (measured: 5000×4 KB events → 18.4 MB `bufferedAmount`, +77 MB RSS), and the client's eventual reconnect registers a second listener next to the dead one. Live-process forensics: 4 listeners on one session, 3 admin sockets all `readyState=OPEN`, abandoned sockets receiving exactly 36 B/min — the protocol-pong floor, zero application frames.
+
+So the server treats **inbound application traffic** as the liveness signal — only running JS produces it. On the existing 10 s keepalive tick, each connection checks **itself** (`reclaimIfAbandoned`; deliberately no cross-connection authority — an earlier evict-the-peer-on-subscribe design made two tabs sharing one localStorage session mutually evict at ~1 Hz):
+
+- `readyState === CLOSED` with a listener still attached → reclaim immediately (unambiguous, no threshold).
+- Socket OPEN but **no inbound frame for `CLIENT_SILENCE_LIMIT_MS` = 3 min** → release the listener, keep the socket open. 3 min rather than the ~40 s two missed client probes would suggest: background-tab throttling stretches the 15 s probe to ~1/min, and anything under ~2 min kills the listener of a user who merely switched tabs. Only the listener is released — closing the socket would detach per-connection terminals (5-min PTY kill timers) and file watchers as collateral; a real close still takes the normal path.
+
+Reclaim alone would leave a *resumed* tab permanently deaf with a green light: the server still answers its probes with `__pong__`, so the client's staleness clock stays fresh and neither its zombie detection nor the visibility probe ever fires. Hence the release also sends **`listener:released` `{sessionId}`** on the reclaimed connection — `sendJson`'s OPEN guard makes it a no-op for truly dead sockets, while a frozen tab reads it from the kernel buffer on resume. The admin re-subscribes on receipt (`state-handlers.ts`, same store-bound session/project as the `_connected` resubscribe); subscribe is idempotent per connection, and the re-subscribe itself refreshes the silence clock (worst case one frame per 3 min, no storm). Belt-and-braces: `bindOrCreateSession` also re-registers a reclaimed listener when a `chat` arrives (`|| !client.unsubscribeEvents`), so typing into a resumed tab self-heals even if the frame was missed — without it the agent ran the turn while this connection received nothing.
+
+**Implicit contract for any WS consumer** (the admin's `ws-client.ts` satisfies both):
+1. Send `__ping__` periodically — any inbound frame counts as the aliveness signal (terminal input, subscribes, chats all refresh it), but a consumer that stays silent for >3 min loses its event listener.
+2. Handle `listener:released` by re-sending `subscribe` — it is the only recovery signal a frozen-and-resumed tab ever gets.
+
 ### Chat delivery: ack / resend / dedup
 
 Liveness probes bound how long a zombie lives, but a chat sent *into* the zombie window would still vanish silently (`ws.send()` on a zombie-OPEN socket reports nothing). Chat is the one message class that must survive this, so it rides a dedicated ack/resend protocol; everything else stays fire-and-forget.
@@ -93,6 +108,7 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId) |
 | `chat:ack` | `handleChat` | Chat with `clientMsgId` is persisted in the session log — releases the client's pending-ack entry (see [Chat delivery](#chat-delivery-ack--resend--dedup)) |
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
+| `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
 | `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
@@ -116,15 +132,16 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 ```typescript
 interface ConnectedClient {
   ws: WebSocket
-  sessionId: string | null
+  sessionId: string | null                 // root session this client is subscribed to
   projectId: string | null
   sessionManager: SessionManager | null    // shared per workspace
-  agentSessionId: string | null            // SessionManager's session ID
   agentId: string
-  terminalManager: TerminalManager
-  fileWatcher: WorkspaceWatcher
   backgroundSaves: Map<string, () => void>
   unsubscribeEvents: (() => void) | null
+  terminalManager: TerminalManager
+  fileWatcher: WorkspaceWatcher
+  gitDirWatcher: GitDirWatcher
+  lastClientPingAt: number                 // wall-clock ms of last INBOUND frame — the reclaim's liveness stamp
 }
 ```
 
