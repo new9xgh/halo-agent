@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-05
+
+### Added
+
+- Cron `MEDIA:` attachments dispatched per target — WeChat/Slack targets receive the actual file, Telegram/Feishu (no media support yet) receive the path as visible text instead of silently losing both; marker-only runs no longer send empty messages.
+- Default agent templates (default / goal / deep-executor / evolution internals) moved to Claude Opus 5 — prompt caching and thinking effort unchanged; template v49 reseeds existing installs.
+- New WS frame `listener:released` (S→C): the server reclaims a session's event listener from an abandoned connection (socket CLOSED, or >3 min of client silence while the browser's network process keeps answering protocol pings) and tells the tab to resubscribe on resume.
+
+### Fixed
+
+- WS listener leak: abandoned admin connections piled up session event listeners (4 on one session observed in prod), buffering events into dead sockets; reclaimed as above, and a chat sent after reclaim re-registers the listener instead of running the agent with no viewer attached.
+- All four chat channels dropped messages that arrived during context compaction (the busy hint returned early — the message was never queued); hints are now advisory-only and delivery always proceeds. Hint/upload-failure copy i18n'd; WeChat error/system prefixes now ❌/ℹ️.
+- Orphan "Compacting context…" notices with no outcome: compaction is now feasibility-gated before the notice, and an empty LLM summary or a thrown summarize call emits a close-out line (auto and manual `/compact`).
+- Git panel leaking an ancestor repo's state into a workspace nested inside it: all six git read endpoints now share the `isRepoRoot()` guard (was: status only) and return `{isRepo:false}` with a well-shaped empty payload.
+- Admin refresh storm: session-log writes (`.halo/sessions/`, `.halo/logs/`) no longer trigger git status/graph/decoration refreshes on every streamed event.
+- Duplicate system/queued notifications rendering twice in admin chat — adjacent identical notifications collapse; repeats separated by real messages still render.
+
 ## [1.0.2] - 2026-07-25
 
 ### Added
