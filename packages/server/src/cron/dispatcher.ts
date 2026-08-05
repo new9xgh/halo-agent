@@ -13,6 +13,7 @@
  * others. Returns a structured array the runner persists into
  * `cron_runs.dispatch_results` for the UI.
  */
+import { extractMediaMessage } from '../channels/shared/media.js'
 
 export interface CronTarget {
   /** Wire-level slug. Matches `ServerChannelDescriptor.channelType`. The
@@ -53,13 +54,29 @@ export interface CronTargetOption {
   hasActiveChat: boolean
 }
 
+/** Attachments extracted from a cron run's `MEDIA:<path>` markers, plus
+ *  the sandbox root they must live under. The root is the **cron job's**
+ *  `workspacePath`, deliberately not the channel account's: a job in
+ *  workspace A may target an account bound to workspace B, and the files
+ *  the run produced live in A. Channels pass it to `isMediaPathAllowed`. */
+export interface CronMedia {
+  paths: string[]
+  workspacePath: string
+}
+
 /**
  * A channel's cron-dispatch implementation. Each channel module supplies
  * one and registers it at boot. `dispatch` takes (accountId, text,
- * optional explicit chatId) and returns one or more `DispatchResult` rows
- * — telegram fans out to multiple chats so it returns N rows; wechat is
- * single-recipient so it returns one. Throwing is acceptable; the
- * orchestrator wraps it into a single failed-result.
+ * optional explicit chatId, optional media) and returns one or more
+ * `DispatchResult` rows — telegram fans out to multiple chats so it
+ * returns N rows; wechat is single-recipient so it returns one (plus one
+ * per failed attachment). Throwing is acceptable; the orchestrator wraps
+ * it into a single failed-result.
+ *
+ * `media` is only passed to dispatchers that declare `supportsMedia: true`;
+ * a channel with no file-send path keeps its 3-arg implementation and
+ * receives the original text with `MEDIA:` lines intact instead (see
+ * `dispatchToTargets`).
  *
  * `listTargets` is what the admin UI's create-form dropdown reads to know
  * which accounts of this channel can be picked. Optional — channels with
@@ -67,7 +84,12 @@ export interface CronTargetOption {
  */
 export interface CronChannelDispatcher {
   channelType: string
-  dispatch: (accountId: string, text: string, chatId?: string) => Promise<DispatchResult[]>
+  /** Declare true when `dispatch` actually delivers `media` attachments.
+   *  Media-capable channels receive marker-stripped text + the extracted
+   *  paths; channels without it receive the ORIGINAL text so attachment
+   *  paths degrade to visible `MEDIA:` lines instead of silently vanishing. */
+  supportsMedia?: boolean
+  dispatch: (accountId: string, text: string, chatId?: string, media?: CronMedia) => Promise<DispatchResult[]>
   listTargets?: () => CronTargetOption[]
 }
 
@@ -89,11 +111,20 @@ export function listAllCronTargets(): CronTargetOption[] {
 }
 
 /**
- * Send `text` to every target. Never throws — every target's outcome is
- * captured into the returned array. An empty `targets` returns []
+ * Fan `rawText` out to every target. `MEDIA:<path>` markers are extracted
+ * once here; each target then gets the form its channel can handle —
+ * media-capable dispatchers (`supportsMedia`) receive the stripped text
+ * plus a `CronMedia`, the rest receive `rawText` verbatim so attachment
+ * paths degrade to visible `MEDIA:` lines instead of silently vanishing.
+ * The choice is per-target because one run can mix both kinds (e.g.
+ * telegram + wechat). `workspacePath` is the job's workspace — the media
+ * sandbox root (see `CronMedia`). Never throws — every target's outcome
+ * is captured into the returned array. An empty `targets` returns []
  * (caller treats that as "log only" and skips dispatch entirely).
  */
-export async function dispatchToTargets(text: string, targets: CronTarget[]): Promise<DispatchResult[]> {
+export async function dispatchToTargets(rawText: string, targets: CronTarget[], workspacePath: string): Promise<DispatchResult[]> {
+  const { text: strippedText, mediaPaths } = extractMediaMessage(rawText)
+  const media: CronMedia | undefined = mediaPaths.length > 0 ? { paths: mediaPaths, workspacePath } : undefined
   const out: DispatchResult[] = []
   for (const t of targets) {
     const handler = _registry.get(t.channelType)
@@ -105,7 +136,9 @@ export async function dispatchToTargets(text: string, targets: CronTarget[]): Pr
       continue
     }
     try {
-      const results = await handler.dispatch(t.accountId, text, t.chatId)
+      const results = handler.supportsMedia
+        ? await handler.dispatch(t.accountId, strippedText, t.chatId, media)
+        : await handler.dispatch(t.accountId, rawText, t.chatId)
       for (const r of results) out.push(r)
     } catch (err) {
       out.push({

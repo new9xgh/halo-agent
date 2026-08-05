@@ -1,14 +1,17 @@
 /**
  * WeChat side of cron dispatch. Sends the final assistant text from a
  * cron run to the QR-bind owner (or to the explicit `chatId` if the cron
- * was created from inside a chat). WeChat is single-recipient for cron —
- * unlike telegram, there's no whitelist to fan out to.
+ * was created from inside a chat), followed by any `MEDIA:` attachments the
+ * run emitted. WeChat is single-recipient for cron — unlike telegram,
+ * there's no whitelist to fan out to.
  */
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getSharedAccount } from '../shared/accounts.js'
 import { getAccount as getWechatAccount, listAccounts as listWechatAccounts } from './accounts.js'
 import { sendToUser as sendWechatMessage } from './handler.js'
-import { registerCronDispatcher, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
+import { sendMediaFile } from './send-media.js'
+import { isMediaPathAllowed } from '../shared/media.js'
+import { registerCronDispatcher, type CronMedia, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
 function readLastActiveChatId(accountId: string): string | null {
   const acct = getSharedAccount(getChannelDb(), accountId)
@@ -17,7 +20,7 @@ function readLastActiveChatId(accountId: string): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null
 }
 
-async function dispatch(accountId: string, text: string, explicitChatId?: string): Promise<DispatchResult[]> {
+async function dispatch(accountId: string, text: string, explicitChatId?: string, media?: CronMedia): Promise<DispatchResult[]> {
   const acct = getWechatAccount(getChannelDb(), accountId)
   if (!acct) throw new Error(`wechat account ${accountId} not found`)
   if (!acct.enabled) throw new Error(`wechat account ${accountId} disabled`)
@@ -33,8 +36,35 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   if (!chatId) {
     throw new Error('no wechat target — bind the account first (the QR-login owner becomes the default cron recipient)')
   }
-  await sendWechatMessage({ account: acct, toUserId: chatId, text })
-  return [{ channelType: 'wechat', accountId, chatId, ok: true }]
+  // A marker-only run has no text left after MEDIA extraction — send the
+  // attachments alone rather than an empty WeChat message.
+  const out: DispatchResult[] = []
+  if (text) {
+    await sendWechatMessage({ account: acct, toUserId: chatId, text })
+    out.push({ channelType: 'wechat', accountId, chatId, ok: true })
+  }
+  // One result row per attachment so a failed upload is visible in the
+  // admin's run history; failures are per-file — one bad path must not
+  // block the rest.
+  for (const filePath of media?.paths ?? []) {
+    if (!isMediaPathAllowed(filePath, media!.workspacePath)) {
+      console.log(`[weixin] cron sendMediaFile blocked: ${filePath} not under ${media!.workspacePath}`)
+      out.push({ channelType: 'wechat', accountId, chatId, ok: false, error: `media path not under job workspace: ${filePath}` })
+      continue
+    }
+    try {
+      await sendMediaFile({
+        baseUrl: acct.baseUrl, token: acct.botToken,
+        toUserId: chatId, filePath,
+      })
+      out.push({ channelType: 'wechat', accountId, chatId, ok: true })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[weixin] cron sendMediaFile ${filePath} failed: ${msg}`)
+      out.push({ channelType: 'wechat', accountId, chatId, ok: false, error: `media ${filePath}: ${msg}` })
+    }
+  }
+  return out
 }
 
 function listTargets(): CronTargetOption[] {
@@ -60,5 +90,5 @@ function listTargets(): CronTargetOption[] {
 }
 
 export function registerWechatCronDispatcher(): void {
-  registerCronDispatcher({ channelType: 'wechat', dispatch, listTargets })
+  registerCronDispatcher({ channelType: 'wechat', supportsMedia: true, dispatch, listTargets })
 }

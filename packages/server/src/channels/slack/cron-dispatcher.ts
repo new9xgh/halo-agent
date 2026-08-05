@@ -13,8 +13,9 @@
  */
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getSlackAccount, listAccounts as listSlackAccounts } from './accounts.js'
-import { postMessage } from './api.js'
-import { registerCronDispatcher, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
+import { postMessage, uploadFile } from './api.js'
+import { isMediaPathAllowed } from '../shared/media.js'
+import { registerCronDispatcher, type CronMedia, type CronTargetOption, type DispatchResult } from '../../cron/dispatcher.js'
 
 /** Parse a stored chatId of the form `<channelId>:<threadTs>` back into
  *  the two pieces. The threadTs is optional — DM channels (`D…`) and
@@ -43,7 +44,7 @@ function parseChatId(raw: string): { channel: string; threadTs?: string } {
  * specify a target run silently — the result shows in the cron log,
  * nothing pushed.
  */
-async function dispatch(accountId: string, text: string, explicitChatId?: string): Promise<DispatchResult[]> {
+async function dispatch(accountId: string, text: string, explicitChatId?: string, media?: CronMedia): Promise<DispatchResult[]> {
   const acct = getSlackAccount(getChannelDb(), accountId)
   if (!acct) throw new Error(`slack account ${accountId} not found`)
   if (acct.enabled !== 1) throw new Error(`slack account ${accountId} disabled`)
@@ -52,15 +53,36 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
     throw new Error('slack cron target requires an explicit chatId (e.g. "D01234567" for a DM, or "C0123:1700.0" for a thread). Create the cron from inside a Slack chat to auto-pin, or pass --targets slack:<accountId>:<chatId>.')
   }
   const { channel, threadTs } = parseChatId(explicitChatId)
-  try {
-    await postMessage({ botToken: acct.botToken, channel, threadTs, text })
-    return [{ channelType: 'slack', accountId, chatId: explicitChatId, ok: true }]
-  } catch (err) {
-    return [{
-      channelType: 'slack', accountId, chatId: explicitChatId,
-      ok: false, error: err instanceof Error ? err.message : String(err),
-    }]
+  const out: DispatchResult[] = []
+  // Marker-only runs have no text left after MEDIA extraction — skip the
+  // empty post, still upload the attachments.
+  if (text) {
+    try {
+      await postMessage({ botToken: acct.botToken, channel, threadTs, text })
+      out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: true })
+    } catch (err) {
+      out.push({
+        channelType: 'slack', accountId, chatId: explicitChatId,
+        ok: false, error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
+  for (const filePath of media?.paths ?? []) {
+    if (!isMediaPathAllowed(filePath, media!.workspacePath)) {
+      console.log(`[slack] cron uploadFile blocked: ${filePath} not under ${media!.workspacePath}`)
+      out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: false, error: `media path not under job workspace: ${filePath}` })
+      continue
+    }
+    try {
+      await uploadFile({ botToken: acct.botToken, channel, threadTs, filePath })
+      out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: true })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log(`[slack] cron uploadFile ${filePath} failed: ${msg}`)
+      out.push({ channelType: 'slack', accountId, chatId: explicitChatId, ok: false, error: `media ${filePath}: ${msg}` })
+    }
+  }
+  return out
 }
 
 /** Slack accounts are always "ready" for the picker — readiness depends
@@ -78,5 +100,5 @@ function listTargets(): CronTargetOption[] {
 }
 
 export function registerSlackCronDispatcher(): void {
-  registerCronDispatcher({ channelType: 'slack', dispatch, listTargets })
+  registerCronDispatcher({ channelType: 'slack', supportsMedia: true, dispatch, listTargets })
 }

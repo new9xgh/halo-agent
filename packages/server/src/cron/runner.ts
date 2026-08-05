@@ -690,9 +690,16 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   // Dispatch only on success. Failed/timeout → skip channels (the user
   // is going to check the log anyway, no point pinging them with broken
   // output).
+  //
+  // Raw output goes down as-is; `dispatchToTargets` splits off the agent's
+  // `MEDIA:<path>` markers per target (media-capable channels get files,
+  // the rest keep the marker lines as visible text). The workspacePath is
+  // the media sandbox root = the JOB's workspace (where the run produced
+  // its files), not the target account's — the two differ whenever a job
+  // pushes into a channel account bound elsewhere.
   let dispatchResults: DispatchResult[] = []
   if (status === 'succeeded' && targets.length > 0) {
-    dispatchResults = await dispatchToTargets(trimmedOut, targets)
+    dispatchResults = await dispatchToTargets(trimmedOut, targets, job.workspacePath)
     // If every dispatch failed, downgrade the run status to 'failed' so
     // the UI surfaces the issue and the user notices.
     if (dispatchResults.length > 0 && dispatchResults.every((r) => !r.ok)) {

@@ -13,6 +13,15 @@
  *                      "post into existing thread" sendMessage path
  *                      analogous to Slack's thread_ts. The rootId is
  *                      kept in the storage shape for forward-compat.)
+ *
+ * `MEDIA:` attachments are NOT implemented here — this dispatcher doesn't
+ * declare `supportsMedia`, so `dispatchToTargets` hands it the original
+ * text with `MEDIA:` lines intact (the path stays visible instead of
+ * silently vanishing). The realtime path's uploader (`sendFeishuMedia` in
+ * `handler.ts`) is anchored to an inbound `messageId` for thread replies,
+ * which a cron run doesn't have; wiring cron up means splitting the
+ * send-to-chat half out of it, then adding `supportsMedia: true` + a
+ * `CronMedia` 4th arg below.
  */
 import { getChannelDb } from '../../db/channel-db.js'
 import { getAccount as getFeishuAccount, listAccounts as listFeishuAccounts } from './accounts.js'

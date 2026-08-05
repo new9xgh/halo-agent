@@ -10,6 +10,15 @@
  * `cron` skill auto-pin the current chat id; admin-UI
  * cron jobs that don't specify a target run silently — the result
  * shows in the cron log, nothing pushed.
+ *
+ * `MEDIA:` attachments are NOT implemented here — this dispatcher doesn't
+ * declare `supportsMedia`, so `dispatchToTargets` hands it the original
+ * text with `MEDIA:` lines intact (the path stays visible instead of
+ * silently vanishing). The realtime path's file send is an inline
+ * `sendPhoto/sendVideo/sendVoice/sendDocument` switch inside `handler.ts`'s
+ * responder, not a reusable function; wiring cron up means extracting that
+ * switch — do it there, not by copying it — then adding `supportsMedia:
+ * true` + a `CronMedia` 4th arg below.
  */
 import { Bot } from 'grammy'
 import { getChannelDb } from '../../db/channel-db.js'
