@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { ChatMessage, ToolCallInfo } from '@/shared/types'
 import { generateId } from '@/shared/utils'
-import { isMainConversationMessage } from '@/shared/types'
+import { isMainConversationMessage, inferMessageType } from '@/shared/types'
 
 /** How long an EMPTY optimistic streaming placeholder may sit with zero
  *  events before it's treated as abandoned. Normal turns produce something
@@ -51,6 +51,57 @@ export function takeReplaySnapshot(sessionId: string | null): ChatMessage[] | nu
   return lastSnapshot && sessionId && lastSnapshot.sessionId === sessionId
     ? lastSnapshot.messages
     : null
+}
+
+/**
+ * Identity of a server-pushed system notification, for redelivery dedup.
+ *
+ * Notifications (`chat:system`, `chat:queued`, `session:compacted`) were the
+ * only server-driven message class with NO dedup: each arrival did a plain
+ * `addMessage({ id: generateId() })`, so any redelivery of the same logical
+ * notification rendered another bubble. The two neighbouring event classes
+ * already reconcile — `chat:stream` accumulates into the turn's text block by
+ * `turnId`, and `agent:tool_call` drops rows whose `toolUseId` is already
+ * present — and the server assigns notifications a fresh `genId()` on both the
+ * live push and the persisted `messageLog` row, so ids can never be matched.
+ * Content identity is therefore the only available key.
+ *
+ * Key = notification-ness + taskId scope + exact text. Deliberately NOT
+ * time-windowed or count-based: a redelivery carries byte-identical text in
+ * the same scope, which is exactly what this collapses.
+ *
+ * Why this can't eat two genuinely different notifications:
+ *  - Compact preflight embeds the live token count ("Compacting context (161K
+ *    tokens)…"), and the result line embeds the compacted count
+ *    ("Auto-compacted 246 older messages"). Two real compactions of a moving
+ *    conversation differ in those numbers (verified against a 3549-message
+ *    production log: consecutive real preflights read 161K then 163K).
+ *  - Only an ADJACENT run is collapsed (the scan stops at the first
+ *    non-notification message). Two identical notifications separated by any
+ *    user turn / assistant reply / tool row both survive, so "user triggered
+ *    /compact twice" keeps both bubbles — the conversation in between breaks
+ *    the run. This is the guard that makes content-keying safe: a redelivery
+ *    always lands with no intervening conversation, a genuine repeat does not.
+ */
+function notificationKey(m: ChatMessage): string | null {
+  if (m.role !== 'system') return null
+  if (inferMessageType(m) !== 'notification') return null
+  return `${m.taskId ?? ''}\u0000${m.content}`
+}
+
+/**
+ * True when an identical notification already sits at the tail of the log,
+ * scanning back only across the current adjacent notification run.
+ */
+function hasAdjacentDuplicateNotification(messages: ChatMessage[], key: string): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const candidate = notificationKey(messages[i])
+    // First non-notification message ends the adjacent run — anything identical
+    // beyond it is a legitimate repeat in a later part of the conversation.
+    if (candidate === null) return false
+    if (candidate === key) return true
+  }
+  return false
 }
 
 /**
@@ -208,6 +259,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       clientMsgId: msg.clientMsgId,
     }
     set((state) => {
+      // Redelivery guard for server-pushed notifications — the only message
+      // class that used to append unconditionally (see notificationKey).
+      const key = notificationKey(message)
+      if (key !== null && hasAdjacentDuplicateNotification(state.messages, key)) {
+        return state
+      }
       const mainBefore = state.messages.filter(isMainConversationMessage).length
       console.log(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${mainBefore}+${isMainConversationMessage(message) ? 1 : 0}`)
       return {
