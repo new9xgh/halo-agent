@@ -72,6 +72,25 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
     }),
   )
 
+  // The server reclaimed this connection's event listener (renderer frozen
+  // >3min while the browser's network process kept answering pings — see
+  // ws/handler.ts reclaimIfAbandoned). The tab can't notice on its own: the
+  // server keeps answering `__pong__`, so the staleness clock stays fresh and
+  // neither the zombie detection nor the visibility probe ever fires. Reading
+  // this frame (from the kernel buffer, on resume) IS the recovery signal:
+  // re-subscribe to reattach. Idempotent server-side, and the snapshot that
+  // comes back restores whatever streamed while the listener was down. Same
+  // sessionId/projectId source as the `_connected` resubscribe in
+  // use-websocket.ts — the store, not the frame, is what the UI wants bound.
+  unsubs.push(
+    wsClient.on('listener:released', () => {
+      const activeProject = useProjectStore.getState().activeProject
+      if (!activeProject?.id) return
+      const sessionId = useChatStore.getState().sessionId ?? ''
+      wsClient.send({ type: 'subscribe', sessionId, projectId: activeProject.id })
+    }),
+  )
+
   // A root session was created server-side (channel / TUI / CLI / another web
   // client) — bump the shared session bus so every mounted session list
   // (chat-header dropdown, sessions sidebar, history count) re-fetches. The

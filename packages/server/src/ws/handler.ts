@@ -27,6 +27,20 @@ export interface WsHandlerDeps {
   registry: SessionManagerRegistry
 }
 
+/**
+ * How long a connection may go without sending ANY frame before we treat its
+ * peer's JS as gone and release its event listener (see `reclaimIfAbandoned`).
+ *
+ * 3min, not the ~40s that 2 missed 15s client probes would suggest: a
+ * background tab's throttled timers bottom out around 1 `__ping__`/min (a live
+ * throttled tab measured 97 B/min against a 15s nominal), so anything under
+ * ~2min silently kills the listener of a user who merely switched tabs. The
+ * only cost of being generous is that an abandoned socket lingers a few minutes
+ * longer, and its harm accrues slowly (send-buffer growth, no user-visible
+ * duplication).
+ */
+const CLIENT_SILENCE_LIMIT_MS = 3 * 60_000
+
 interface ClientMessage {
   type: 'chat' | 'chat:stop' | 'chat:interrupt' | 'subscribe' | 'agent:update_config' | `command:${string}` | 'session:clear' | 'session:delete' | 'exchange:delete' | 'terminal:start' | 'terminal:input' | 'terminal:resize' | 'terminal:close' | 'terminal:reattach'
   sessionId?: string
@@ -74,6 +88,11 @@ interface ConnectedClient {
   terminalManager: TerminalManager
   fileWatcher: WorkspaceWatcher
   gitDirWatcher: GitDirWatcher
+  /** Wall-clock ms of the last INBOUND frame from this peer. Proves the peer's
+   *  JS is still running — see the abandoned-socket reclaim in the keepalive
+   *  tick. Protocol-level pongs deliberately don't count (a kernel answers
+   *  those long after the browser stopped reading the socket). */
+  lastClientPingAt: number
 }
 
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
@@ -224,6 +243,66 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     }
   }
 
+  /**
+   * A browser that gives up on a socket doesn't always tell us. The admin's
+   * zombie detection (ws-client.ts: 2 unanswered `__ping__` round-trips →
+   * `close()` + reconnect) abandons a socket whose *TCP is still healthy* — it
+   * just stops reading it. No close frame arrives, so `ws.on('close')` never
+   * runs and this ConnectedClient keeps its `unsubscribeEvents` registered
+   * forever. Every event on that session then also gets serialized into a
+   * socket nobody reads, growing its kernel/ws send buffer without bound
+   * (measured: 5000×4KB events → 18.4MB `bufferedAmount`, +77MB RSS), and the
+   * client reconnects and registers a second listener next to the dead one.
+   * Live-process forensics: 4 listeners on one session, 3 admin sockets all
+   * `readyState=OPEN` + `destroyed=false`, ~16MB `bytesWritten` each.
+   *
+   * The two existing keepalives can't detect this, because they measure
+   * different things:
+   *   - the server's `ws.ping()` above tests the peer's KERNEL (it keeps
+   *     ACKing and ponging long after the tab is gone) → says "healthy"
+   *   - the client's `__ping__` tests the peer's JS → it stopped sending
+   * Socket state can't tell them apart either: an abandoned-but-ESTAB socket is
+   * indistinguishable from a healthy viewer by `readyState`/`destroyed` alone
+   * (verified on both live sockets above).
+   *
+   * So inbound application traffic is the liveness signal — only a running JS
+   * client produces it. Measured on the live process over 2min: abandoned
+   * sockets sat at exactly 36 B/min (the 6-byte protocol-pong floor, zero
+   * `__ping__`), live ones at 97 and 260 B/min.
+   *
+   * Wall clock is correct HERE even though the client counts probe misses
+   * tick-relative (ws-client.ts): the client's own timer is what background-tab
+   * throttling stretches, so it can only trust relative ordering — this timer
+   * is server-side and never throttled, so elapsed real time is the honest
+   * measure. Hence a threshold generous enough for the throttled peer instead.
+   *
+   * Releases only the LISTENER, never the socket: terminals and file watchers
+   * are per-connection state with their own lifecycles, and closing here would
+   * detach PTYs (5-minute kill timers) as collateral. A real close still
+   * arrives eventually and takes the normal path.
+   */
+  function reclaimIfAbandoned(client: ConnectedClient): void {
+    if (!client.unsubscribeEvents) return
+    // CLOSED with a listener still attached is unambiguous — no threshold
+    // needed. Seen on the live process too (sockets with `destroyed=true`
+    // holding listeners), and no heartbeat window would catch it as fast.
+    const closed = client.ws.readyState === client.ws.CLOSED
+    if (!closed && Date.now() - client.lastClientPingAt <= CLIENT_SILENCE_LIMIT_MS) return
+    client.unsubscribeEvents()
+    client.unsubscribeEvents = null
+    console.debug(`[WS] Released listener for ${closed ? 'closed' : 'abandoned'} connection session=${client.sessionId}`)
+    // Self-heal signal for a reclaim that hit a frozen-but-alive tab (renderer
+    // suspended >3min while the browser's network process kept answering
+    // pings). Such a peer can never notice on its own: our `__pong__` replies
+    // keep refreshing its staleness clock, so its zombie detection and
+    // visibility probe never fire and the event stream stays silent until F5.
+    // sendJson's OPEN guard makes this a no-op for truly dead sockets; a
+    // frozen tab reads the frame from the kernel buffer on resume and
+    // re-subscribes (idempotent server-side, and the resubscribe itself
+    // refreshes lastClientPingAt).
+    sendJson(client.ws, { type: 'listener:released', sessionId: client.sessionId })
+  }
+
   // ── Connection handler ─────────────────────────────────────────────
 
   wss.on('connection', (ws: WebSocket) => {
@@ -242,6 +321,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       terminalManager,
       backgroundSaves: new Map(),
       unsubscribeEvents: null,
+      lastClientPingAt: Date.now(),
     }
 
     fileWatcher.setCallback((evt) => {
@@ -271,6 +351,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     let missedPongs = 0
     ws.on('pong', () => { missedPongs = 0 })
     const keepaliveTimer = setInterval(() => {
+      reclaimIfAbandoned(client)
       if (missedPongs >= 2) {
         // Server-side liveness probe failed repeatedly — terminate forces a
         // close so the client's reconnect path runs.
@@ -294,6 +375,12 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     let messageQueue: Promise<void> = Promise.resolve()
 
     ws.on('message', (raw: Buffer | string) => {
+      // Any inbound frame proves the peer's JS is running, so stamp before the
+      // parse and before the early returns below — `__ping__` is the signal a
+      // silent tab still emits, and terminal input is the signal an active user
+      // emits while nothing else is chatty.
+      client.lastClientPingAt = Date.now()
+
       let msg: ClientMessage
       try {
         const text = typeof raw === 'string' ? raw : raw.toString('utf-8')
@@ -536,7 +623,11 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // its message list for non-empty snapshots.
         const ctxConfig = await sm.getContextConfig(client.sessionId)
         sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: [], sessionId: client.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId } })
-      } else if (client.sessionId !== msg.sessionId) {
+      } else if (client.sessionId !== msg.sessionId || !client.unsubscribeEvents) {
+        // `|| !client.unsubscribeEvents`: the reclaim above releases a frozen
+        // tab's listener but leaves `sessionId` bound, so a chat sent after
+        // resume matched neither branch — the agent ran with zero events
+        // reaching this connection (blind run; only F5 showed the answer).
         client.unsubscribeEvents?.()
         client.sessionId = msg.sessionId
         client.unsubscribeEvents = sm.registerEventListener(client.sessionId, createEventListener(client))
@@ -688,7 +779,13 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         saveSession(client)
       }
 
-      if (client.sessionId && client.sessionManager) {
+      // Release THIS connection's previous listener. Guard on sessionId only:
+      // requiring `sessionManager` too meant a client whose manager was never
+      // bound (subscribe with a not-yet-existing session, then a rebind) kept
+      // its old listener while the code below registered another. The
+      // unsubscribe closure carries its own session identity, so no manager
+      // reference is needed to call it.
+      if (client.sessionId) {
         client.unsubscribeEvents?.()
         client.unsubscribeEvents = null
         client.sessionId = null
