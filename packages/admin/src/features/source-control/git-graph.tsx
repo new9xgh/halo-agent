@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { GitBranch, Tag } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { isSessionLogEvent } from '@/shared/file-events'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { useT } from '@/shared/i18n'
 import { cn } from '@/shared/utils'
@@ -165,7 +166,10 @@ export function GitGraph({ projectId }: { projectId: string }) {
   // (the watcher ignores .git, so those wouldn't otherwise reach us).
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', () => {
+    const unsub = wsClient.on('file:changed', (data) => {
+      // A session transcript write can't have produced a commit — skip the log
+      // refetch for that churn (see isSessionLogEvent).
+      if (isSessionLogEvent(data)) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void refresh() }, 400)
     })

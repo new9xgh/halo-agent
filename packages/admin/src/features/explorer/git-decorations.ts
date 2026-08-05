@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { isSessionLogEvent } from '@/shared/file-events'
 import { isStagedChar, isWorkingChar } from '@/features/source-control/status-meta'
 
 /**
@@ -184,7 +185,11 @@ export function useGitDecorationsSync(projectId: string | null): void {
     void refresh()
 
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', () => {
+    const unsub = wsClient.on('file:changed', (data) => {
+      // Skip the agent's own transcript/log churn — a refresh here is two git
+      // round-trips, and a live session rewrites its (multi-MB) log on every
+      // utterance. See isSessionLogEvent for the accepted staleness.
+      if (isSessionLogEvent(data)) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void refresh() }, 400)
     })

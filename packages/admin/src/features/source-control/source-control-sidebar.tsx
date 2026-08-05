@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { isSessionLogEvent } from '@/shared/file-events'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
@@ -94,7 +95,10 @@ export function SourceControlSidebar() {
   useEffect(() => {
     if (!projectId) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    const unsub = wsClient.on('file:changed', () => {
+    const unsub = wsClient.on('file:changed', (data) => {
+      // Agent transcript/log churn isn't a working-tree change worth a status +
+      // remotes refetch (see isSessionLogEvent).
+      if (isSessionLogEvent(data)) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void refresh() }, 400)
     })
