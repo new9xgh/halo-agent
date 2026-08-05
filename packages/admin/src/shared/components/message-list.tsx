@@ -342,7 +342,10 @@ function UsageLine({ message }: { message: ChatMessage }) {
   const fmtMs = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 
   const ts = new Date(message.timestamp)
-  const tsLabel = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}:${ts.getSeconds().toString().padStart(2, '0')}`
+  // Date included: agent sessions routinely span days now, so a bare
+  // HH:mm:ss can't tell 10:23 today from 10:23 three days ago.
+  const pad2 = (n: number) => n.toString().padStart(2, '0')
+  const tsLabel = `${pad2(ts.getMonth() + 1)}-${pad2(ts.getDate())} ${pad2(ts.getHours())}:${pad2(ts.getMinutes())}:${pad2(ts.getSeconds())}`
   return (
     <div className="flex flex-wrap items-center gap-1 py-0.5 text-[10px] font-mono text-[var(--muted-foreground)]">
       <span
