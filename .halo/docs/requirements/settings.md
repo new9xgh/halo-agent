@@ -164,6 +164,14 @@ Values present in `settings.yaml` whose namespace doesn't appear in any current 
 
 `general.*` is intentionally excluded from orphan detection — its declared keys are enumerated by the built-in schema, so anything else there is treated as either a typo or a forward-compat field, not an orphan.
 
+## Security view (change password + logout)
+
+A **Security** entry in the left nav (below the System group) opens a page with two cards. Like `__orphans` it's a synthetic nav target, not a schema section — the credential lives in `~/.halo/secrets/config.yaml` (`server.password`, scrypt hash), not `settings.yaml`, and the header shows that path accordingly.
+
+**Change password** — three inputs: current password, new password, confirm. Live client-side feedback while typing: strength rule (≥8 chars, at least one letter and one digit), new ≠ current, confirm matches; the submit button stays disabled until all pass. Submit posts to `POST /api/auth/change-password` (see [dev/api.md](../dev/api.md)) — the server re-runs the same checks authoritatively; a server rejection is shown verbatim under the form. Success shows an inline confirmation and clears all three fields. Existing sessions stay signed in (`jwt_secret` is not rotated). Forgotten password (can't provide the current one) is out of scope here — that's `halo setup`'s reset path.
+
+**Log out** — the login state is an httpOnly JWT cookie, so JS can't clear it directly: the button calls `POST /api/auth/logout` (server expires the cookie via Set-Cookie) and reloads; the boot auth check then lands on the login page. This browser only — no server-side token blacklist.
+
 ## API
 
 | Operation | Method | Endpoint | Purpose |

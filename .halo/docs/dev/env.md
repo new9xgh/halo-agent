@@ -156,6 +156,8 @@ Two ways to authenticate:
 1. **Interactive** — run `halo setup`, pick "Set / change password". The value is scrypt-hashed and written to `~/.halo/secrets/config.yaml server.password`. Best for personal installs.
 2. **Env** — export `HALO_PASSWORD=...` before launching the server. The plaintext value is compared directly (no hashing) and takes precedence over any stored hash. A stored hash isn't required at all — env plaintext alone satisfies the startup gate, so env-only deployments are legal. Best for Docker / systemd / CI where a secrets manager already protects the env.
 
+Once logged in, the password can also be changed from the panel (**Settings → Security**, requires the current password) — except when `HALO_PASSWORD` env manages it, in which case the endpoint refuses (the env value would keep winning at login).
+
 ## Verify
 
 ```bash

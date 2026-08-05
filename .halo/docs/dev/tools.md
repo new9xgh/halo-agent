@@ -117,8 +117,8 @@ Each session carries `accessLevel: 'readonly' | 'workspace' | null` (persisted i
 | Level | DB value | Tools (with bwrap) | Tools (without bwrap) | Sandbox |
 |---|---|---|---|---|
 | `null` (full) | `full` | All 9 tools | All 9 tools | None |
-| `workspace` | `workspace` | All 9 tools | All 9 tools | bwrap: workspace rw, sensitive paths hidden |
-| `readonly` | `readonly` | All 9 tools | file_read, view_image, file_list, grep, glob (5 tools) | bwrap: workspace ro, sensitive paths hidden |
+| `workspace` | `workspace` | All 9 tools | All 9 tools | bwrap: workspace rw, sensitive paths + workspace runtime state hidden |
+| `readonly` | `readonly` | All 9 tools | file_read, view_image, file_list, grep, glob (5 tools) | bwrap: workspace ro, sensitive paths + workspace runtime state hidden |
 
 `view_image` is additionally gated on `capabilities.image` (see its section above). Models without vision support get the same lists minus `view_image` — so a non-vision model on `readonly` ends up with 4 tools, not 5.
 
@@ -131,9 +131,9 @@ Dependency: `bubblewrap` (`apt install bubblewrap`) on Linux. Without it, only l
 
 ### Sandbox hidden paths
 
-Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays. Paths that don't exist on the filesystem are silently skipped.
+Sensitive directories and files are hidden from workspace/readonly sessions via bwrap overlays (and the same lists gate `assertPathAllowed` on the no-bwrap fallback). Paths that don't exist on the filesystem are silently skipped. Two categories coexist:
 
-Configured in `settings.yaml` under `general.sandbox`:
+**Global lists (configurable)** — credentials and cross-workspace state, configured in `settings.yaml` under `general.sandbox`:
 
 | Setting | Default | Method |
 |---|---|---|
@@ -142,6 +142,15 @@ Configured in `settings.yaml` under `general.sandbox`:
 | `writable_dirs` | (empty) | `--bind` read-write — for external CLIs that keep local state (e.g. `~/.kiro`); not applied to readonly sessions |
 
 Changes take effect immediately — `config.ts` reads settings.yaml via an mtime-watched lazy cache, so the next `shell_exec` reads the latest values. These keys are `globalOnly` in the schema — a workspace `settings.yaml` cannot override them, since they define the security boundary agents run inside.
+
+**Workspace-relative set (hardcoded)** — the workspace's own runtime state, which holds other channels'/users' conversations on a shared workspace. Code constants in `sandbox.ts` (`WORKSPACE_HIDDEN_DIRS` / `WORKSPACE_HIDDEN_FILES`), deliberately not settings: this is a security boundary (a config edit must not be able to open it), and the entries are workspace-relative while the settings lists are absolute/`~` paths.
+
+| Constant | Entries | Method |
+|---|---|---|
+| `WORKSPACE_HIDDEN_DIRS` | `.halo/sessions` (session transcripts), `.halo/logs`, `.halo/evo` (run dirs contain full source-session snapshots) | `--tmpfs` overlay |
+| `WORKSPACE_HIDDEN_FILES` | `.halo/halo.db` + `-wal`/`-shm` (sqlite `agent_sessions` rows) | `--ro-bind /dev/null` |
+
+The rest of `.halo/` (INSTRUCTIONS.md, INDEX.md, docs/, memory/, skills/, agents/, prompts/, tmp/, canvas/, goal/, settings.yaml) stays readable — it's workspace knowledge agents need to work. `full` sessions bypass the sandbox entirely and see everything.
 
 `/tmp` is not in the hidden list — it receives a standalone `--tmpfs` mount for process isolation (each bwrap invocation gets its own empty `/tmp`), not for hiding secrets.
 

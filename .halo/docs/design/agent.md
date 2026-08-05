@@ -77,9 +77,10 @@ When `accessLevel` is not `full`, tool execution is routed through a bwrap sandb
 - Sensitive paths hidden via tmpfs/devnull overlays — configurable in `settings.yaml general.sandbox.hidden_dirs/hidden_files` (scope: global only, workspace cannot override)
 - `workspace`: workspace directory overridden with `--bind` (rw)
 - `readonly`: workspace stays ro from the root bind; without bwrap, tool set is reduced to 5 read-only tools
+- Workspace runtime state (`.halo/sessions`, `.halo/logs`, `.halo/evo`, `halo.db` + sqlite sidecars) is masked even *inside* the workspace — hardcoded constants, not settings — because it holds other channels'/users' conversations on a shared workspace. The principle: workspace knowledge (INSTRUCTIONS, docs, skills, memory, …) stays readable, runtime state is hidden. These masks must be mounted *after* the workspace `--bind` (bwrap: last mount on a path wins; ordering gotcha in [memory/2026-08-05-sandbox-workspace-hidden-and-auth-hot-reload.md](../../memory/2026-08-05-sandbox-workspace-hidden-and-auth-hot-reload.md))
 - Error sanitization: sandbox internals (bwrap flags, mount details) are stripped from error messages before reaching the agent
 
-When bwrap is not installed, app-level path validation (`assertPathAllowed`) enforces workspace + `~/.halo/global/` boundaries. `shell_exec` is blocked entirely without bwrap for non-full sessions.
+Every hidden path — global lists and workspace-relative set alike — is enforced twice: bwrap masks when available, and `assertPathAllowed` on the no-bwrap fallback. When bwrap is not installed, that app-level validation (workspace + `~/.halo/global/` boundaries, minus the hidden sets) is the only boundary; `shell_exec` is blocked entirely without bwrap for non-full sessions.
 
 **`activate_skill`**: auto-injected whenever the YAML has a non-empty `skills` list (does **not** need to be declared in `tools`). It loads the full SKILL.md on demand. Disabled skills are excluded.
 

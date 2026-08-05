@@ -2,7 +2,7 @@
 
 All REST endpoints are served by Hono on port 9527 at `/api/`.
 
-Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/*`, the web-channel routes (`/api/web/chat|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
+Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
 
 ## Health
 
@@ -17,8 +17,9 @@ File: `packages/server/src/middleware/auth.ts`
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/auth/login` | Password login, returns a JWT cookie |
-| POST | `/api/auth/logout` | Clears the auth cookie |
+| POST | `/api/auth/logout` | Clears the auth cookie (Set-Cookie `Max-Age=0`). In `PUBLIC_PATHS`. No server-side token blacklist — a copied JWT stays valid until natural expiry |
 | GET | `/api/auth/check` | Validates the current token; refreshes stale tokens |
+| POST | `/api/auth/change-password` | Change the admin password. **Not** in `PUBLIC_PATHS` — requires a valid JWT cookie. Persists the new scrypt hash to `~/.halo/secrets/config.yaml`; takes effect immediately (no restart), does **not** rotate `jwt_secret` so existing sessions stay signed in |
 
 ## Files
 
@@ -358,6 +359,26 @@ Source: [packages/server/src/middleware/auth.ts:123-134](../../../packages/serve
 
 // 401 not authenticated
 { "authenticated": false }
+```
+
+### POST `/api/auth/change-password`
+
+Source: [packages/server/src/middleware/auth.ts](../../../packages/server/src/middleware/auth.ts). Admin-cookie authed (not in `PUBLIC_PATHS`). Validation order: wrong current password → 401; strength (≥8 chars, at least one letter and one digit) → 400 with the specific reason; new === old → 400. When `HALO_PASSWORD` env is set it overrides the stored hash at login, so a file rewrite would silently not take effect — the endpoint rejects with 400 instead.
+
+```json
+// Request
+{ "oldPassword": "...", "newPassword": "..." }
+
+// 200 OK — new scrypt hash persisted to ~/.halo/secrets/config.yaml,
+// live for the next login without restart; jwt_secret is NOT rotated
+// (existing cookies stay valid)
+{ "ok": true }
+
+// 401 wrong current password
+{ "error": "Incorrect current password" }
+
+// 400 strength / same-as-old / env-managed (message names the reason)
+{ "error": "Password must be at least 8 characters" }
 ```
 
 ### GET `/api/files/tree?projectId=<absPath>&path=<relPath>`

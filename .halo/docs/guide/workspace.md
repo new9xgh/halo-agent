@@ -126,6 +126,6 @@ Two tabs in the header: Chat / Terminal. Current tab lives in `editorStore.botto
 The login page runs through `POST /api/auth/login`; the JWT lives in an HTTP-only cookie:
 - 14-day expiry
 - Auto-refresh after 24 hours of access
-- Click the avatar in the top-right to log out
+- Log out via **Settings → Security** (returns to the login page; this browser only)
 
-**Where to set the password**: `~/.halo/secrets/config.yaml`'s `server.password`, or the `HALO_PASSWORD` env var.
+**Password**: set initially by `halo setup` (or the `HALO_PASSWORD` env var); change it later in **Settings → Security** (needs the current password). Forgot it? Re-run `halo setup` to reset.
