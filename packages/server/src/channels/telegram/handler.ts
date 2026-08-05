@@ -1,5 +1,4 @@
 import { Bot, InputFile } from 'grammy'
-import path from 'node:path'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
@@ -11,6 +10,7 @@ import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accou
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
+import { busyHint } from '../shared/busy-hint.js'
 import { builtinCommandNames } from '../../commands/index.js'
 
 interface AccountRunner {
@@ -28,7 +28,7 @@ export interface TelegramChannel {
   stopAll(): Promise<void>
 }
 
-import { classifyMedia, isInTempDir } from '../shared/media.js'
+import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
 
 function inferMediaKind(filePath: string): 'photo' | 'video' | 'voice' | 'document' {
   const cls = classifyMedia(filePath)
@@ -352,13 +352,10 @@ async function handleUserMessage(args: {
   // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
   const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel, workspace))
 
-  if (sm.isSessionCompacting(sessionId)) {
-    await ctx.reply(t('handler.compacting', lang))
-    return
-  }
-  if (sm.isSessionRunning(sessionId)) {
-    await ctx.reply(t('handler.queued', lang))
-  }
+  // Hint only — the message is delivered either way (sendUserMessage queues a
+  // compacting/busy session).
+  const hint = busyHint(sm, sessionId, lang)
+  if (hint) await ctx.reply(hint)
 
   if (!unsubscribers.has(sessionId)) {
     const responder = new TelegramResponder({
@@ -366,12 +363,7 @@ async function handleUserMessage(args: {
         await bot.api.sendMessage(chatId, chunk, { parse_mode: undefined })
       },
       sendMedia: async (filePath) => {
-        const resolved = path.resolve(filePath)
-        const ws = path.resolve(workspace)
-        // Segment-boundary check, not raw prefix — a sibling dir like
-        // `<workspace>-other` must not pass as "inside the workspace".
-        const inWorkspace = resolved === ws || resolved.startsWith(ws + path.sep)
-        if (!inWorkspace && !isInTempDir(resolved)) {
+        if (!isMediaPathAllowed(filePath, workspace)) {
           console.log(`[telegram] sendMedia blocked: ${filePath} not under workspace`)
           return
         }

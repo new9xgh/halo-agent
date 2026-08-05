@@ -18,19 +18,14 @@ import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accou
 import { WeixinResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { isInTempDir, tempDir } from '../shared/media.js'
+import { isMediaPathAllowed, tempDir } from '../shared/media.js'
 import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
-
-/** Allow files under workspace or the OS temp dir (agent-generated temp files like screenshots) */
-function isPathAllowed(filePath: string, workspacePath: string): boolean {
-  const resolved = path.resolve(filePath)
-  return resolved.startsWith(path.resolve(workspacePath)) || isInTempDir(resolved)
-}
+import { busyHint } from '../shared/busy-hint.js'
 
 const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
@@ -394,18 +389,13 @@ async function handleInbound(args: {
   const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel, account.workspacePath))
 
   // If the session is currently compacting or mid-turn, send an immediate hint
-  // so the WeChat user doesn't stare at a silent chat for 30+ seconds.
-  if (sm.isSessionCompacting(sessionId)) {
+  // so the WeChat user doesn't stare at a silent chat for 30+ seconds. Hint
+  // only — delivery continues either way (sendUserMessage queues it).
+  const hint = busyHint(sm, sessionId, lang)
+  if (hint) {
     await sendToUser({
       account, toUserId: fromUserId, contextToken: msg.context_token,
-      text: t('handler.compacting', lang),
-    })
-    return
-  }
-  if (sm.isSessionRunning(sessionId)) {
-    await sendToUser({
-      account, toUserId: fromUserId, contextToken: msg.context_token,
-      text: t('handler.queued', lang),
+      text: hint,
     })
   }
 
@@ -418,7 +408,7 @@ async function handleInbound(args: {
         account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
       }),
       sendMedia: async (filePath) => {
-        if (!isPathAllowed(filePath, account.workspacePath)) {
+        if (!isMediaPathAllowed(filePath, account.workspacePath)) {
           console.log(`[weixin] sendMedia blocked: ${filePath} not under workspace`)
           return
         }
@@ -474,7 +464,7 @@ async function handleSlashCommand(args: {
         account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
       }),
       sendMedia: async (filePath) => {
-        if (!isPathAllowed(filePath, account.workspacePath)) {
+        if (!isMediaPathAllowed(filePath, account.workspacePath)) {
           console.log(`[weixin] sendMedia blocked: ${filePath} not under workspace`)
           return
         }

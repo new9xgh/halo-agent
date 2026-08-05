@@ -29,19 +29,14 @@ import type { FeishuAccount, FeishuMessageEvent, FeishuTextContent } from './typ
 import { FeishuResponder } from './event-adapter.js'
 import { downloadResource, sendMessage, replyMessage, uploadImage, uploadFile } from './api.js'
 import { formatForFeishu } from '../shared/markdown.js'
-import { classifyMedia, isInTempDir } from '../shared/media.js'
+import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
-import { getLang } from '../shared/i18n.js'
-
-function isPathAllowed(filePath: string, workspacePath: string): boolean {
-  const resolved = path.resolve(filePath)
-  const wsResolved = path.resolve(workspacePath)
-  return resolved.startsWith(wsResolved + path.sep) || resolved === wsResolved || isInTempDir(resolved)
-}
+import { t, getLang } from '../shared/i18n.js'
+import { busyHint } from '../shared/busy-hint.js'
 
 export interface FeishuChannel {
   startAccount(accountId: string): void
@@ -355,12 +350,11 @@ async function handleInbound(args: {
   // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
   const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateSessionForThread({ sm, chatId, rootId, userId, accessLevel, state, workspacePath: workspace }))
 
-  if (sm.isSessionCompacting(sessionId)) {
-    await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: '⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）' })
-    return
-  }
-  if (sm.isSessionRunning(sessionId)) {
-    await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: '已收到，会在当前轮结束后处理。' })
+  // Hint only — the message is delivered either way (sendUserMessage queues a
+  // compacting/busy session).
+  const hint = busyHint(sm, sessionId, getLang(account))
+  if (hint) {
+    await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: hint })
   }
 
   if (!state.unsubscribers.has(sessionId)) {
@@ -370,7 +364,7 @@ async function handleInbound(args: {
       },
       sendMedia: async (filePath) => {
         const resolved = path.resolve(filePath)
-        if (!isPathAllowed(resolved, workspace)) {
+        if (!isMediaPathAllowed(resolved, workspace)) {
           console.log(`[feishu] sendMedia blocked: ${filePath} not under workspace`)
           return
         }
@@ -382,7 +376,10 @@ async function handleInbound(args: {
           console.log(`[feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
           await replyToInbound({
             account, inboundMessageId, isP2P, chatId,
-            text: `⚠️ 文件上传失败：${path.basename(filePath)} — ${err instanceof Error ? err.message : String(err)}`,
+            text: t('handler.upload_failed', getLang(account), {
+              name: path.basename(filePath),
+              error: err instanceof Error ? err.message : String(err),
+            }),
           }).catch(() => { /* ignore */ })
         }
       },

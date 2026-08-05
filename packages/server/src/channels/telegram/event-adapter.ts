@@ -1,7 +1,7 @@
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
+import { extractMediaMessage } from '../shared/media.js'
 
 const HARD_CHARS = 4000
-const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
 
 export interface TelegramResponderDeps {
   sendText: (text: string) => Promise<void>
@@ -82,11 +82,7 @@ export class TelegramResponder {
   }
 
   private async dispatchChunk(chunk: string): Promise<void> {
-    const mediaPaths: string[] = []
-    const text = chunk.replace(MEDIA_MARKER_RE, (_m, p: string) => {
-      if (p) mediaPaths.push(p.trim())
-      return ''
-    }).replace(/\n{3,}/g, '\n\n').trim()
+    const { text, mediaPaths } = extractMediaMessage(chunk)
 
     if (text) {
       try { await this.deps.sendText(text) }

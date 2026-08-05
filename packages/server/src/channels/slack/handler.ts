@@ -24,14 +24,15 @@ import type { SlackAccount, SlackMessageEvent, SlackAppMentionEvent, SlackFile, 
 import { SlackResponder } from './event-adapter.js'
 import { downloadFile, postMessage, openSocketModeConnection, uploadFile } from './api.js'
 import { formatForSlack } from '../shared/markdown.js'
-import { isInTempDir } from '../shared/media.js'
+import { isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
 import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { builtinCommandNames } from '../../commands/index.js'
-import { getLang } from '../shared/i18n.js'
+import { t, getLang } from '../shared/i18n.js'
+import { busyHint } from '../shared/busy-hint.js'
 
 /** Sandbox guard for outbound file references — only paths under the
  *  account's own workspace are allowed (or the temp dir, for assistant-
@@ -61,12 +62,6 @@ function slashToBang(text: string, commandNames: string[]): string {
   const alternation = commandNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
   const re = new RegExp(`(^|[\\s(\\[,，、])\\/(${alternation})\\b`, 'g')
   return text.replace(re, '$1!$2')
-}
-
-function isPathAllowed(filePath: string, workspacePath: string): boolean {
-  const resolved = path.resolve(filePath)
-  const wsResolved = path.resolve(workspacePath)
-  return resolved.startsWith(wsResolved + path.sep) || resolved === wsResolved || isInTempDir(resolved)
 }
 
 /** Slack retries every webhook up to 3× over 30 minutes if it gets a
@@ -464,12 +459,11 @@ async function handleInbound(args: {
   // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
   const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateSessionForThread({ sm, channelId, rootTs, userId, accessLevel, state, workspacePath: workspace }))
 
-  if (sm.isSessionCompacting(sessionId)) {
-    await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: '⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）' })
-    return
-  }
-  if (sm.isSessionRunning(sessionId)) {
-    await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: '已收到，会在当前轮结束后处理。' })
+  // Hint only — the message is delivered either way (sendUserMessage queues a
+  // compacting/busy session).
+  const hint = busyHint(sm, sessionId, getLang(account))
+  if (hint) {
+    await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: hint })
   }
 
   // Wire the thread → SessionManager event bridge once. The same
@@ -487,7 +481,7 @@ async function handleInbound(args: {
         // freshly-generated artifacts) are allowed. Without this guard
         // a compromised agent could exfiltrate arbitrary host paths.
         const resolved = path.resolve(filePath)
-        if (!isPathAllowed(resolved, workspace)) {
+        if (!isMediaPathAllowed(resolved, workspace)) {
           console.log(`[slack] sendMedia blocked: ${filePath} not under workspace`)
           return
         }
@@ -504,7 +498,10 @@ async function handleInbound(args: {
           // wondering why no attachment showed up.
           await postMessage({
             botToken: account.botToken, channel: channelId, threadTs: replyTs,
-            text: `⚠️ Failed to upload \`${path.basename(filePath)}\`: ${err instanceof Error ? err.message : String(err)}`,
+            text: t('handler.upload_failed', getLang(account), {
+              name: path.basename(filePath),
+              error: err instanceof Error ? err.message : String(err),
+            }),
           }).catch(() => { /* ignore */ })
         }
       },

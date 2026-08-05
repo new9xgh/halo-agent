@@ -12,9 +12,9 @@
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { formatForFeishu } from '../shared/markdown.js'
+import { extractMediaMessage } from '../shared/media.js'
 
 const HARD_CHARS = 4500
-const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
 
 export interface FeishuResponderDeps {
   sendText: (text: string) => Promise<void>
@@ -85,11 +85,7 @@ export class FeishuResponder {
   }
 
   private async dispatchChunk(chunk: string): Promise<void> {
-    const mediaPaths: string[] = []
-    const stripped = chunk.replace(MEDIA_MARKER_RE, (_m, p: string) => {
-      if (p) mediaPaths.push(p.trim())
-      return ''
-    }).replace(/\n{3,}/g, '\n\n').trim()
+    const { text: stripped, mediaPaths } = extractMediaMessage(chunk)
     // Feishu's text msg type renders markup literally; strip the
     // common-mark markers so users don't see stray `**` / `[link]`.
     const text = formatForFeishu(stripped)

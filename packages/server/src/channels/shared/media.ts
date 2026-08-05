@@ -26,6 +26,44 @@ export function isInTempDir(filePath: string): boolean {
   return resolved === tmp || resolved.startsWith(tmp + path.sep)
 }
 
+/**
+ * Agent-emitted `MEDIA:<absolute_path>` lines are extracted from outbound
+ * text before it is sent, and each path dispatched through the channel's
+ * own file-send path. The marker MUST be on its own line; trailing text on
+ * the same line is preserved by only matching up to EOL.
+ */
+const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
+
+/** Strip `MEDIA:` lines out of `text`, returning the remaining text
+ *  verbatim — whitespace preserved, because streaming callers concatenate
+ *  successive chunks — plus the extracted paths in marker order. */
+export function extractMediaPaths(text: string): { text: string; mediaPaths: string[] } {
+  const mediaPaths: string[] = []
+  const stripped = text.replace(MEDIA_MARKER_RE, (_m, p: string) => {
+    if (p) mediaPaths.push(p)
+    return ''
+  })
+  return { text: stripped, mediaPaths }
+}
+
+/** `extractMediaPaths` for block-oriented senders (one send per message):
+ *  the blank holes left by removed marker lines are collapsed and the
+ *  result trimmed, so a marker-only chunk comes back as ''. */
+export function extractMediaMessage(text: string): { text: string; mediaPaths: string[] } {
+  const { text: stripped, mediaPaths } = extractMediaPaths(text)
+  return { text: stripped.replace(/\n{3,}/g, '\n\n').trim(), mediaPaths }
+}
+
+/** Sandbox for outbound `MEDIA:` paths: only files under `workspacePath`
+ *  or in the OS temp dir (agent-generated artifacts like screenshots) may
+ *  be sent out. Segment-boundary match, not a raw prefix — a sibling dir
+ *  like `<workspace>-other` must not pass as "inside the workspace". */
+export function isMediaPathAllowed(filePath: string, workspacePath: string): boolean {
+  const resolved = path.resolve(filePath)
+  const ws = path.resolve(workspacePath)
+  return resolved === ws || resolved.startsWith(ws + path.sep) || isInTempDir(resolved)
+}
+
 export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
 export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.avi'])
 export const VOICE_EXTS = new Set(['.ogg', '.oga', '.opus'])

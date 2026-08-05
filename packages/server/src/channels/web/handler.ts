@@ -7,6 +7,7 @@ import { createSaveSnapshot } from '../../sessions/ui-log-builder.js'
 import { getAccountByToken } from './accounts.js'
 import { updateAccount } from './accounts.js'
 import { saveInboundMedia, VISION_IMAGE_MIME_TYPES } from '../shared/media-store.js'
+import { extractMediaPaths } from '../shared/media.js'
 import { resolveAccountWorkspace } from '../shared/accounts.js'
 import { findActiveSessionId, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
 import { resolveGoalRoute } from '../../agents/goal-mode.js'
@@ -412,14 +413,11 @@ function sseData(obj: Record<string, unknown>): string {
   return `data: ${JSON.stringify(obj)}\n\n`
 }
 
-const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
-
 function flushText(text: string): string {
-  const files: string[] = []
-  const cleaned = text.replace(MEDIA_MARKER_RE, (_match, p: string) => { files.push(p); return '' })
+  const { text: cleaned, mediaPaths } = extractMediaPaths(text)
   let out = ''
   if (cleaned) out += sseData({ type: 'stream', text: cleaned })
-  for (const filePath of files) out += sseData({ type: 'file', path: filePath })
+  for (const filePath of mediaPaths) out += sseData({ type: 'file', path: filePath })
   return out
 }
 

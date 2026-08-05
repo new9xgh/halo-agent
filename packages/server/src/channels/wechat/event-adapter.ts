@@ -11,6 +11,7 @@
  * always flushed immediately.
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
+import { extractMediaMessage } from '../shared/media.js'
 
 /**
  * WeChat sendMessage rejects payloads beyond ~4000 chars. When the buffer
@@ -18,14 +19,6 @@ import type { AgentSessionEvent } from '../../agents/agent-events.js'
  * back to a hard cut.
  */
 const HARD_CHARS = 3500
-
-/**
- * Agent-emitted `MEDIA:<absolute_path>` lines are extracted from the stream
- * before text is flushed to WeChat. Each match triggers the media sender.
- * The marker MUST be on its own line; trailing text on the same line is
- * preserved by only matching up to EOL.
- */
-const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
 
 export interface WeixinResponderDeps {
   sendText: (text: string) => Promise<void>
@@ -55,13 +48,13 @@ export class WeixinResponder {
       case 'error':
         if (event.error) {
           this.flushAll()
-          void this.dispatchChunk(`[错误] ${event.error}`)
+          void this.dispatchChunk(`❌ ${event.error}`)
         }
         break
       case 'system':
         if (event.text) {
           this.flushAll()
-          void this.dispatchChunk(`[系统] ${event.text}`)
+          void this.dispatchChunk(`ℹ️ ${event.text}`)
         }
         break
       case 'complete':
@@ -121,11 +114,7 @@ export class WeixinResponder {
    * goes out as a WeChat message (if non-empty after trim).
    */
   private async dispatchChunk(chunk: string): Promise<void> {
-    const mediaPaths: string[] = []
-    const text = chunk.replace(MEDIA_MARKER_RE, (_m, p: string) => {
-      if (p) mediaPaths.push(p.trim())
-      return ''
-    }).replace(/\n{3,}/g, '\n\n').trim()
+    const { text, mediaPaths } = extractMediaMessage(chunk)
 
     if (text) {
       try { await this.deps.sendText(text) }

@@ -109,8 +109,15 @@ const messages: Record<string, Record<Lang, string>> = {
 
   // ── Channel handler messages ──
   'handler.workspace_missing': { zh: '⚠️ 这个 bot 绑定的 workspace 已不存在：\n{path}\n\n请到 web 端的 Channels 设置里更新绑定目录。', en: '⚠️ The workspace bound to this bot no longer exists:\n{path}\n\nPlease update the binding in web Channels settings.' },
-  'handler.compacting': { zh: '⏳ 正在整理上下文，请稍后再发消息（通常 30 秒内完成）', en: '⏳ Compacting context, please wait (usually under 30s)' },
+  // Both hints must read as "received, will be answered" — the message IS
+  // queued (sendUserMessage queues compacting/busy sessions). Telling the user
+  // to re-send would make them duplicate a message that was never lost.
+  'handler.compacting': { zh: '⏳ 正在整理上下文，消息已收到，整理完成后立即处理（通常 30 秒内）', en: '⏳ Compacting context — got your message, will process as soon as it finishes (usually under 30s)' },
   'handler.queued': { zh: '🔄 刚才那条还在处理中，消息已排队，请稍候', en: '🔄 Previous message still processing, queued' },
+  // Outbound media upload failed — tells the user why no attachment showed up.
+  // Plain text (no backticks): slack/feishu render markdown differently, and the
+  // filename is already delimited by the surrounding punctuation.
+  'handler.upload_failed': { zh: '⚠️ 文件上传失败：{name} — {error}', en: '⚠️ Failed to upload {name}: {error}' },
   'handler.workspace_gone': { zh: '⚠️ workspace 不存在，请到 web 端更新绑定', en: '⚠️ Workspace does not exist, please update binding in web' },
   'handler.not_allowed': { zh: '⚠️ 你不在这个 bot 的允许列表中', en: '⚠️ You are not in this bot\'s allowed list' },
   'handler.start_greeting': { zh: '👋 Halo bot 已就绪。直接发消息开始对话。发 /help 查看可用命令。', en: '👋 Halo bot ready. Send a message to start. /help for commands.' },

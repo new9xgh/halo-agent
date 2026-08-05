@@ -13,9 +13,9 @@
  */
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { formatForSlack } from '../shared/markdown.js'
+import { extractMediaMessage } from '../shared/media.js'
 
 const HARD_CHARS = 35_000
-const MEDIA_MARKER_RE = /^MEDIA:\s*(\S.*?)\s*$/gm
 
 export interface SlackResponderDeps {
   sendText: (text: string) => Promise<void>
@@ -88,11 +88,7 @@ export class SlackResponder {
   }
 
   private async dispatchChunk(chunk: string): Promise<void> {
-    const mediaPaths: string[] = []
-    const stripped = chunk.replace(MEDIA_MARKER_RE, (_m, p: string) => {
-      if (p) mediaPaths.push(p.trim())
-      return ''
-    }).replace(/\n{3,}/g, '\n\n').trim()
+    const { text: stripped, mediaPaths } = extractMediaMessage(chunk)
     // Convert CommonMark → mrkdwn before send. Stream chunks, system
     // notices, and slash-command output all flow through here, so
     // bold/italic/links/headers come out right regardless of source.
