@@ -8,8 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.0.3] - 2026-08-05
 
+### Security
+
+- workspace/readonly sessions could read `<workspace>/.halo/sessions/` transcripts (other users' full chat history on a shared workspace), `halo.db` (+WAL/SHM), `.halo/logs/` and `.halo/evo/` run dumps by naming absolute paths — both sandbox layers (bwrap masks and the no-bwrap `assertPathAllowed` fallback) now hide the workspace's own runtime state while keeping knowledge files (docs/memory/skills/tmp/assets) readable. Admin (full) sessions unaffected.
+
 ### Added
 
+- Settings → Security: change the admin password from the panel (current + new twice, strength rules: ≥8 chars with letters and digits; same scrypt format and `config.yaml` writer as `halo setup`, effective immediately — no restart) and a logout button (the `/api/auth/logout` endpoint existed; the UI entry didn't). When `HALO_PASSWORD` env manages the password, the endpoint refuses instead of silently not applying.
+- Session detail timestamps now include the date (`MM-DD HH:mm:ss`) — sessions routinely span days.
 - Cron `MEDIA:` attachments dispatched per target — WeChat/Slack targets receive the actual file, Telegram/Feishu (no media support yet) receive the path as visible text instead of silently losing both; marker-only runs no longer send empty messages.
 - Default agent templates (default / goal / deep-executor / evolution internals) moved to Claude Opus 5 — prompt caching and thinking effort unchanged; template v49 reseeds existing installs.
 - New WS frame `listener:released` (S→C): the server reclaims a session's event listener from an abandoned connection (socket CLOSED, or >3 min of client silence while the browser's network process keeps answering protocol pings) and tells the tab to resubscribe on resume.
@@ -22,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Git panel leaking an ancestor repo's state into a workspace nested inside it: all six git read endpoints now share the `isRepoRoot()` guard (was: status only) and return `{isRepo:false}` with a well-shaped empty payload.
 - Admin refresh storm: session-log writes (`.halo/sessions/`, `.halo/logs/`) no longer trigger git status/graph/decoration refreshes on every streamed event.
 - Duplicate system/queued notifications rendering twice in admin chat — adjacent identical notifications collapse; repeats separated by real messages still render.
+- `~/.halo/secrets/config.yaml` was read once at startup — runtime credential changes (the new change-password endpoint) needed a restart to take effect; now mtime-watched like `settings.yaml`.
 
 ## [1.0.2] - 2026-07-25
 
