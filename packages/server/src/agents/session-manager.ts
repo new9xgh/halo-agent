@@ -2119,16 +2119,23 @@ export class SessionManager implements SessionManagerInternals {
     if (session.isCompacting) return
     const overThreshold = session.lastContextTokens > session.contextConfig.maxTokens * session.contextConfig.compressAt
     if (!overThreshold) return
+    // Feasibility gate BEFORE the preflight notice: selfCompactSession returns
+    // null when there is nothing to compact (too few messages). Announcing
+    // "Compacting context…" first and then silently not compacting left an
+    // orphan notification with no matching "Auto-compacted" in the chat log.
+    // Reads the exact state (session.agent.messages) selfCompactSession
+    // re-checks in the same synchronous slice — gate and compact can't drift.
+    if (this.compactCut(session.agent.messages) === 0) return
 
+    // For sub-agents, route notifications + summary into THEIR sub-session
+    // log (not the root). ui-log-builder uses `taskId` to pick the target
+    // log; root sessions pass undefined, sub-agents pass their own session
+    // id. Without this, sub-agent compaction noise leaks into the user's
+    // main conversation flow even though the user usually never sees the
+    // sub-agent's messages directly.
+    const taskId = session.parentId ? session.id : undefined
     try {
       session.isCompacting = true
-      // For sub-agents, route notifications + summary into THEIR sub-session
-      // log (not the root). ui-log-builder uses `taskId` to pick the target
-      // log; root sessions pass undefined, sub-agents pass their own session
-      // id. Without this, sub-agent compaction noise leaks into the user's
-      // main conversation flow even though the user usually never sees the
-      // sub-agent's messages directly.
-      const taskId = session.parentId ? session.id : undefined
       // Pre-flight notice — selfCompactSession runs an LLM call that can take
       // 5-10s; without this the UI looks frozen mid-turn. emitEvent('system')
       // persists into messageLog via ui-log-builder.
@@ -2144,9 +2151,18 @@ export class SessionManager implements SessionManagerInternals {
         this.emitEvent(session.id, { type: 'user', text: `[Conversation Summary — ${result.olderCount} messages compacted]\n${result.summary}`, agentName: 'user', report: true, taskId })
         this.emitEvent(session.id, { type: 'compacted', totalTokens: result.estimatedTokens, taskId })
         console.debug(`[SessionManager] Auto-compact ${session.id}: ${result.olderCount} messages compacted`)
+      } else {
+        // The one bail the gate above can't predict: the summarize LLM call
+        // returned no text (selfCompactSession → null). Close out the
+        // preflight instead of leaving it dangling; the next beforeCallModel
+        // check retries automatically.
+        this.emitEvent(session.id, { type: 'system', text: 'Compaction skipped — no summary produced', taskId })
       }
     } catch (err) {
       console.debug(`[SessionManager] Auto-compact ${session.id} failed: ${err instanceof Error ? err.message : String(err)}`)
+      // A THROWN summarize call (model error) leaves the same orphan as the
+      // null path — close it out too.
+      this.emitEvent(session.id, { type: 'system', text: 'Compaction failed — context unchanged', taskId })
     } finally {
       session.isCompacting = false
     }
@@ -2240,6 +2256,35 @@ export class SessionManager implements SessionManagerInternals {
   }
 
   /**
+   * Compute the compaction cut point: messages[0..cut) get summarized,
+   * messages[cut..] are kept. Returns 0 when there is nothing to compact
+   * (too few messages) — the "compaction is feasible" predicate.
+   *
+   * Single source of truth shared by selfCompactSession AND the
+   * pre-preflight feasibility gates in maybeAutoCompact / compactSession:
+   * gate and actual compact must run the same computation on the same
+   * `session.agent.messages` reference or they drift ("gate said yes,
+   * compact said no" re-creates the orphan-preflight bug).
+   *
+   * Note the tail loop only ever moves `cut` UP (a tail of user tool_result
+   * messages extends the summarized region — they're protocol continuations
+   * of an assistant turn, not standalone turns), so cut === 0 is exactly
+   * the `messages.length <= keepCount` case.
+   */
+  private compactCut(messages: AnthropicMessage[]): number {
+    const keepCount = config.compact.keep_messages
+    if (messages.length <= keepCount) return 0
+    let cut = Math.max(0, messages.length - keepCount)
+    while (cut < messages.length) {
+      const m = messages[cut]
+      const firstBlock = Array.isArray(m.content) ? (m.content[0] as { type?: string } | undefined) : undefined
+      if (m.role === 'user' && firstBlock?.type === 'tool_result') { cut++; continue }
+      break
+    }
+    return cut
+  }
+
+  /**
    * Self-compact: let the current agent summarize its own conversation.
    * The agent already has full context cached, so this is fast and lossless.
    * Returns the summary text, or null if compaction was not needed/failed.
@@ -2249,8 +2294,9 @@ export class SessionManager implements SessionManagerInternals {
     if (!session) return null
 
     const messages = session.agent.messages
-    const keepCount = config.compact.keep_messages
-    if (messages.length <= keepCount) return null
+    // Split messages: keep recent, summarize older (0 = nothing to compact).
+    const cut = this.compactCut(messages)
+    if (cut === 0) return null
 
     // Mark the session so an enqueueing wrapper (turn-end auto-compact, or
     // manual /compact) knows a compaction happened. We deliberately do NOT
@@ -2259,16 +2305,6 @@ export class SessionManager implements SessionManagerInternals {
     // The actual enqueue happens at turn-end (runSession) or right after
     // /compact returns. See `compactedThisTurn` doc on the session type.
     session.compactedThisTurn = true
-
-    // Split messages: keep recent, summarize older
-    let cut = Math.max(0, messages.length - keepCount)
-    while (cut < messages.length) {
-      const m = messages[cut]
-      const firstBlock = Array.isArray(m.content) ? (m.content[0] as { type?: string } | undefined) : undefined
-      if (m.role === 'user' && firstBlock?.type === 'tool_result') { cut++; continue }
-      break
-    }
-    if (cut === 0) return null
 
     const olderCount = cut
 
@@ -2369,9 +2405,13 @@ export class SessionManager implements SessionManagerInternals {
     if (this.isSessionRunning(sessionId)) return 'running'
     if (session.isCompacting) return 'already'
 
-    const keepCount = config.compact.keep_messages
+    // Feasibility gate BEFORE the preflight notice — same shared computation
+    // as selfCompactSession (see compactCut), so "gate said yes, compact said
+    // no" can't happen for the nothing-to-compact case. After this gate the
+    // only reachable null from selfCompactSession is the empty-summary /
+    // session-evicted case, which gets an explicit close-out notice below.
     const rawCount = session.agent.messages.length
-    if (rawCount <= keepCount) return 'nothing'
+    if (this.compactCut(session.agent.messages) === 0) return 'nothing'
 
     const ac = await this.beginCompact(sessionId)
     if (!ac) return 'no_session'
@@ -2388,7 +2428,13 @@ export class SessionManager implements SessionManagerInternals {
 
     try {
       const result = await this.selfCompactSession(sessionId, ac.signal)
-      if (!result) return 'nothing'
+      if (!result) {
+        // Preflight already went out — close it out (empty summary from the
+        // LLM, or session evicted mid-call). Silent return left an orphan
+        // "Compacting context…" with no outcome line in the chat log.
+        this.emitEvent(sessionId, { type: 'system', text: 'Compaction skipped — no summary produced', taskId })
+        return 'nothing'
+      }
 
       // Update token estimate (selfCompactSession already replaced rawMessages).
       session.lastContextTokens = result.estimatedTokens
@@ -2415,6 +2461,9 @@ export class SessionManager implements SessionManagerInternals {
         this.emitEvent(sessionId, { type: 'system', text: 'Compact cancelled' })
         return 'nothing'
       }
+      // Rethrow path: callers only log / toast the error — nothing lands in
+      // the persistent chat log, so close out the preflight here first.
+      this.emitEvent(sessionId, { type: 'system', text: 'Compaction failed — context unchanged', taskId })
       throw err
     } finally {
       this.endCompact(sessionId)
