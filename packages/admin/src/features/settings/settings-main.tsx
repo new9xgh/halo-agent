@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw } from 'lucide-react'
+import { Settings2, Globe, FolderDot, Eye, EyeOff, Trash2, RotateCcw, RefreshCw, KeyRound } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { useI18n } from '@/shared/i18n'
 import { useTheme } from '@/shared/theme'
+import { SecurityView } from './security-view'
 
 type Schema = Awaited<ReturnType<typeof api.settings.getSchema>>
 type Section = Schema['sections'][number]
@@ -49,7 +50,7 @@ export function SettingsMain() {
       // (e.g. user uninstalled a skill), fall back to general. The synthetic
       // `__orphans` value is always allowed since it's a UI-only nav target.
       setActiveNs((prev) => {
-        if (prev === '__orphans') return prev
+        if (prev === '__orphans' || prev === '__security') return prev
         return res.sections.find((s) => s.namespaceId === prev) ? prev : 'general'
       })
     }).catch((err) => {
@@ -200,13 +201,19 @@ export function SettingsMain() {
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-4">
           <span className="text-[11px] text-[var(--muted-foreground)]">
-            {scope === 'global' ? '~/.halo/secrets/settings.yaml' : `${activeProject?.path ?? '...'}/.halo/settings.yaml`}
-            {' '}&rarr; <code className="text-[var(--foreground)]">{activeNs}</code>
+            {activeNs === '__security'
+              ? <>~/.halo/secrets/config.yaml &rarr; <code className="text-[var(--foreground)]">server.password</code></>
+              : <>
+                  {scope === 'global' ? '~/.halo/secrets/settings.yaml' : `${activeProject?.path ?? '...'}/.halo/settings.yaml`}
+                  {' '}&rarr; <code className="text-[var(--foreground)]">{activeNs}</code>
+                </>}
           </span>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {activeNs === '__orphans' ? (
+          {activeNs === '__security' ? (
+            <SecurityView />
+          ) : activeNs === '__orphans' ? (
             <OrphansView orphans={orphans} onRemove={handleRemoveOrphan} saving={saving} />
           ) : activeSection ? (
             <SectionView
@@ -249,6 +256,20 @@ function NavList({
   return (
     <div className="py-1">
       <NavGroup label={t('settings.nav.system')} items={grouped.general} active={active} onPick={onPick} />
+      {/* Security — synthetic nav target like __orphans; credentials live in
+          config.yaml, not the schema-driven settings.yaml. */}
+      <button
+        onClick={() => onPick('__security')}
+        className={cn(
+          'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] transition-colors',
+          active === '__security'
+            ? 'bg-[var(--secondary)] text-[var(--foreground)]'
+            : 'text-[var(--foreground)]/80 hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+        )}
+      >
+        <KeyRound className="h-3 w-3" />
+        <span>{t('settings.nav.security')}</span>
+      </button>
       <NavGroup label={t('settings.nav.providers')} items={grouped.providers} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.agents')} items={grouped.agents} active={active} onPick={onPick} />
       <NavGroup label={t('settings.nav.skills')} items={grouped.skills} active={active} onPick={onPick} />

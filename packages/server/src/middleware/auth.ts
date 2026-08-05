@@ -14,7 +14,8 @@ import { Hono } from 'hono'
 import { getCookie, setCookie } from 'hono/cookie'
 import crypto from 'node:crypto'
 import { config } from '../config.js'
-import { verifyPassword } from './password-hash.js'
+import { hashPassword, verifyPassword } from './password-hash.js'
+import { updateConfigLeaves } from '../setup-config.js'
 
 // ---------- Config ----------
 
@@ -212,7 +213,55 @@ export function createAuthRoutes() {
     return c.json({ ok: true })
   })
 
+  // Change password. NOT in PUBLIC_PATHS — authMiddleware has already
+  // validated the JWT cookie by the time this handler runs. Writes the new
+  // scrypt hash through the same setup-config writer `halo setup` uses, so
+  // the on-disk format stays identical and setup remains compatible.
+  //
+  // jwt_secret is deliberately left untouched: it's independent of the
+  // password, so existing sessions (including the one making this request)
+  // stay valid. `halo setup` rotates it for a global re-login; here we don't.
+  app.post('/auth/change-password', async (c) => {
+    const body = await c.req.json<{ oldPassword?: string; newPassword?: string }>()
+      .catch(() => ({} as { oldPassword?: string; newPassword?: string }))
+    const oldPassword = typeof body.oldPassword === 'string' ? body.oldPassword : ''
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
+
+    // HALO_PASSWORD env overrides the stored hash at login (see /auth/login),
+    // so rewriting config.yaml while the env is set would change nothing —
+    // reject loudly instead of reporting a success that doesn't take effect.
+    if (passwordEnvPlaintext() != null) {
+      return c.json({ error: 'Password is managed by the HALO_PASSWORD environment variable' }, 400)
+    }
+
+    if (!(await verifyPassword(oldPassword, passwordHash()))) {
+      return c.json({ error: 'Incorrect current password' }, 401)
+    }
+
+    const weak = passwordStrengthError(newPassword)
+    if (weak) return c.json({ error: weak }, 400)
+
+    if (newPassword === oldPassword) {
+      return c.json({ error: 'New password must differ from the current password' }, 400)
+    }
+
+    updateConfigLeaves({ 'server.password': await hashPassword(newPassword) })
+    // config.server.password re-reads config.yaml on mtime change, so the
+    // new hash is live for the next login without a restart.
+    return c.json({ ok: true })
+  })
+
   return app
+}
+
+/** Strength rule for change-password: ≥8 chars with at least one letter and
+ *  one digit. Client mirrors this for live feedback; this is authoritative.
+ *  Returns the rejection reason, or null when acceptable. */
+function passwordStrengthError(pw: string): string | null {
+  if (pw.length < 8) return 'Password must be at least 8 characters'
+  if (!/[A-Za-z]/.test(pw)) return 'Password must contain at least one letter'
+  if (!/[0-9]/.test(pw)) return 'Password must contain at least one digit'
+  return null
 }
 
 // ---------- Middleware ----------

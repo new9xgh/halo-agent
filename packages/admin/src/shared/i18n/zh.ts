@@ -260,6 +260,7 @@ export const zh: Record<string, string> = {
 
   // 配置页（schema 驱动）
   'settings.nav.system': '系统',
+  'settings.nav.security': '安全',
   'settings.nav.providers': '模型供应商',
   'settings.nav.skills': '技能',
   'settings.nav.agents': 'Agent',
@@ -288,6 +289,25 @@ export const zh: Record<string, string> = {
   'settings.orphans.confirm': '移除孤儿项 {key}？将从 settings.yaml 删除该值。',
   'settings.empty': '未选中分类。',
   'settings.loading': '加载中…',
+
+  // security (change password + logout)
+  'security.changePassword.title': '修改密码',
+  'security.changePassword.desc': '修改 admin 登录密码。已登录的会话保持有效。',
+  'security.changePassword.current': '原密码',
+  'security.changePassword.new': '新密码',
+  'security.changePassword.confirm': '确认新密码',
+  'security.changePassword.rule': '至少 8 位，且包含至少一个字母和一个数字。',
+  'security.changePassword.tooShort': '密码至少需要 8 位',
+  'security.changePassword.needLetter': '密码需包含至少一个字母',
+  'security.changePassword.needDigit': '密码需包含至少一个数字',
+  'security.changePassword.sameAsOld': '新密码不能与原密码相同',
+  'security.changePassword.mismatch': '两次输入的密码不一致',
+  'security.changePassword.submit': '修改密码',
+  'security.changePassword.submitting': '修改中…',
+  'security.changePassword.success': '密码已修改，下次登录请使用新密码。',
+  'security.changePassword.connectionFailed': '连接失败',
+  'security.logout': '退出登录',
+  'security.logout.desc': '在此浏览器上退出登录并返回登录页。',
 
   // ── Nav ──
   'nav.explorer': '文件',

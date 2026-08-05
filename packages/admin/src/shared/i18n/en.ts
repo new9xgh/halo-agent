@@ -260,6 +260,7 @@ export const en: Record<string, string> = {
 
   // settings page (schema-driven)
   'settings.nav.system': 'System',
+  'settings.nav.security': 'Security',
   'settings.nav.providers': 'Model Providers',
   'settings.nav.skills': 'Skills',
   'settings.nav.agents': 'Agents',
@@ -288,6 +289,25 @@ export const en: Record<string, string> = {
   'settings.orphans.confirm': 'Remove orphan {key}? This deletes the value from settings.yaml.',
   'settings.empty': 'No section selected.',
   'settings.loading': 'Loading…',
+
+  // security (change password + logout)
+  'security.changePassword.title': 'Change Password',
+  'security.changePassword.desc': 'Change the admin login password. Existing sessions stay signed in.',
+  'security.changePassword.current': 'Current password',
+  'security.changePassword.new': 'New password',
+  'security.changePassword.confirm': 'Confirm new password',
+  'security.changePassword.rule': 'At least 8 characters, with at least one letter and one digit.',
+  'security.changePassword.tooShort': 'Password must be at least 8 characters',
+  'security.changePassword.needLetter': 'Password must contain at least one letter',
+  'security.changePassword.needDigit': 'Password must contain at least one digit',
+  'security.changePassword.sameAsOld': 'New password must differ from the current password',
+  'security.changePassword.mismatch': "Passwords don't match",
+  'security.changePassword.submit': 'Change password',
+  'security.changePassword.submitting': 'Changing…',
+  'security.changePassword.success': 'Password changed. Use the new password next time you log in.',
+  'security.changePassword.connectionFailed': 'Connection failed',
+  'security.logout': 'Log out',
+  'security.logout.desc': 'Sign out on this browser and return to the login page.',
 
   // ── Nav ──
   'nav.explorer': 'Explorer',

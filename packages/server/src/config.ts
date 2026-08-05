@@ -59,7 +59,20 @@ function modelsRegistry(): { providers: Array<Record<string, unknown>> } {
   if (!_modelsRegistryCache) _modelsRegistryCache = loadModelsRegistry()
   return _modelsRegistryCache
 }
-const _systemConfig = loadYamlFile(path.join(HALO_SECRETS_DIR, 'config.yaml'))
+/** Mtime-watched like getSettings() below. config.yaml used to be read once
+ *  at module load, but POST /api/auth/change-password rewrites
+ *  `server.password` at runtime — a frozen snapshot would keep accepting the
+ *  old password (and rejecting the new one) until restart. */
+const SYSTEM_CONFIG_PATH = path.join(HALO_SECRETS_DIR, 'config.yaml')
+let _systemConfigCache: { mtimeMs: number; data: Record<string, unknown> } | null = null
+function getSystemConfig(): Record<string, unknown> {
+  let mtimeMs = 0
+  try { mtimeMs = fs.statSync(SYSTEM_CONFIG_PATH).mtimeMs } catch { /* missing → mtime 0 */ }
+  if (!_systemConfigCache || _systemConfigCache.mtimeMs !== mtimeMs) {
+    _systemConfigCache = { mtimeMs, data: loadYamlFile(SYSTEM_CONFIG_PATH) }
+  }
+  return _systemConfigCache.data
+}
 
 /** Lazy + mtime-watched settings cache. UI saves rewrite the file; bumping
  *  the mtime triggers a reparse on the next read so the server picks up new
@@ -111,7 +124,7 @@ function settingsValue(dotPath: string): string | undefined {
 
 /** Read from config.yaml (server, timeout, logging.max_*). Raw type preserved (number/string/array). */
 function configValue(dotPath: string): unknown {
-  return readYamlValue(_systemConfig, dotPath)
+  return readYamlValue(getSystemConfig(), dotPath)
 }
 
 function envInt(key: string, fallback: number): number {
