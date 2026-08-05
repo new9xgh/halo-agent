@@ -267,7 +267,9 @@ export const api = {
     },
 
     ignored(projectId: string) {
-      return request<{ ignored: string[] }>(`/git/ignored?projectId=${encodeURIComponent(projectId)}`)
+      // Same isRepo:false gate as status() (a folder nested inside an ancestor's
+      // repo is not this workspace's repo); `ignored` is always present, [] then.
+      return request<{ isRepo?: boolean; ignored: string[] }>(`/git/ignored?projectId=${encodeURIComponent(projectId)}`)
     },
 
     diff(projectId: string, path: string, staged: boolean, from?: string, commit?: string) {

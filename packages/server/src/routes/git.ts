@@ -61,6 +61,40 @@ export function createGitRoutes() {
     return { git, projectPath }
   }
 
+  /**
+   * `getGit` for READ endpoints: same resolution plus the isRepoRoot gate.
+   * git resolves `.git` by walking UP the directory tree, so a workspace that
+   * merely sits inside an ancestor repo (dotfiles `$HOME`, monorepo subdir)
+   * otherwise reports that ancestor's data — leaking its paths, history, remote
+   * URLs and even file contents across the workspace boundary, and mismatching
+   * every path the explorer tries to decorate (they'd be relative to the
+   * ancestor root). Every read must pass this gate; the guard lives here rather
+   * than being re-typed per route so it can't be forgotten again.
+   *
+   * Callers answer a `notRepo` result with their own empty-but-valid payload —
+   * the response shape stays the documented one so the client never reads
+   * `undefined`.
+   *
+   * On the write side, `/git/init` is the ONLY endpoint with a legitimate
+   * reason to bypass this gate: initializing a nested folder's own repo is
+   * exactly its purpose (see git-manager.ts init(), which deliberately tests
+   * isRepoRoot rather than checkIsRepo for the same reason). Every other write
+   * (stage/unstage/commit/push/pull/remote) is ungated only because the UI
+   * can't reach it from a non-root folder — the three-gate onboarding puts all
+   * write controls behind gate ①, which a nested workspace never passes. That
+   * is reachability, NOT semantic safety: run from a nested folder these
+   * commands operate on the ANCESTOR repo (stage into its index, commit onto
+   * its HEAD, push its commits to its remote, rewrite its origin URL). So if a
+   * write endpoint ever becomes callable from a non-root folder — new UI entry
+   * point, a tool, an API consumer — it must go through this guard first.
+   */
+  async function getGitForRead(projectId: string | undefined) {
+    const res = await getGit(projectId)
+    if ('error' in res) return res
+    if (!(await res.git.isRepoRoot())) return { notRepo: true as const }
+    return res
+  }
+
   // GET /git/status?projectId=xxx — structured working-tree status.
   // A folder that isn't a git work-tree root (no repo, or merely nested inside
   // an ancestor's repo) is a normal state, not an error — return 200 with
@@ -68,9 +102,9 @@ export function createGitRoutes() {
   // a console-reddening 500. Only genuine failures fall through to 500.
   app.get('/git/status', async (c) => {
     try {
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
-      if (!(await res.git.isRepoRoot())) return c.json({ isRepo: false })
+      if ('notRepo' in res) return c.json({ isRepo: false })
       const status = await res.git.getStatus()
       return c.json({ isRepo: true, ...status })
     } catch (err) {
@@ -85,8 +119,11 @@ export function createGitRoutes() {
   // status path is untouched.
   app.get('/git/ignored', async (c) => {
     try {
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
+      // Mirror /git/status's `isRepo: false`, and keep `ignored` present so the
+      // explorer's `ign.ignored` read is never undefined.
+      if ('notRepo' in res) return c.json({ isRepo: false, ignored: [] })
       const ignored = await res.git.getIgnoredPaths()
       return c.json({ ignored })
     } catch (err) {
@@ -105,9 +142,13 @@ export function createGitRoutes() {
       const staged = c.req.query('staged') === '1'
       const from = c.req.query('from') || undefined
       const commit = c.req.query('commit') || undefined
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!filePath) return c.json({ error: 'path is required' }, 400)
+      // Nested-in-ancestor: `git show HEAD:<path>` resolves against the ANCESTOR
+      // work-tree root, so without this gate the diff viewer served that repo's
+      // file *contents* — not just names. Empty sides = "nothing to compare".
+      if ('notRepo' in res) return c.json({ path: filePath, original: '', modified: '' })
       if (!validatePath(filePath, res.projectPath)) {
         return c.json({ error: 'Path traversal not allowed' }, 403)
       }
@@ -123,8 +164,9 @@ export function createGitRoutes() {
   // GET /git/log?projectId=xxx[&limit=50] — recent commits for the Graph view
   app.get('/git/log', async (c) => {
     try {
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
+      if ('notRepo' in res) return c.json({ commits: [] })
       const limitRaw = Number(c.req.query('limit'))
       const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 50
       const commits = await res.git.getLog(limit)
@@ -140,9 +182,10 @@ export function createGitRoutes() {
   app.get('/git/commit-files', async (c) => {
     try {
       const hash = c.req.query('hash')
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!hash) return c.json({ error: 'hash is required' }, 400)
+      if ('notRepo' in res) return c.json({ files: [] })
       const files = await res.git.getCommitFiles(hash)
       return c.json({ files })
     } catch (err) {
@@ -261,8 +304,9 @@ export function createGitRoutes() {
   // GET /git/remotes?projectId=xxx — configured remotes ([] when none)
   app.get('/git/remotes', async (c) => {
     try {
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
+      if ('notRepo' in res) return c.json({ remotes: [] })
       const remotes = await res.git.getRemotes()
       return c.json({ remotes })
     } catch (err) {
@@ -406,8 +450,11 @@ export function createGitRoutes() {
   // GET /git/remote/protocol?projectId=xxx — current origin url + protocol
   app.get('/git/remote/protocol', async (c) => {
     try {
-      const res = await getGit(c.req.query('projectId'))
+      const res = await getGitForRead(c.req.query('projectId'))
       if ('error' in res) return c.json({ error: res.error }, res.status)
+      // `git -C <nested> remote get-url origin` answers from the ancestor repo —
+      // that URL (often carrying an org/user name) is not this workspace's.
+      if ('notRepo' in res) return c.json({ url: '', protocol: 'other' as const })
       return c.json(getRemoteProtocol(res.projectPath))
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
