@@ -394,6 +394,13 @@ export const zh: Record<string, string> = {
   'common.global': '全局',
   'common.workspace': '工作区',
 
+  // ── Data previews (parquet / sqlite) ──
+  'dataPreview.range': '第 {from}–{to} 行 / 共 {total} 行',
+  'dataPreview.prev': '上一页',
+  'dataPreview.next': '下一页',
+  'dataPreview.empty': '无数据行',
+  'dataPreview.noTables': '该数据库中没有表',
+
   // ── Cron jobs ──
   'cron.title': '定时任务',
   'cron.new': '新建',

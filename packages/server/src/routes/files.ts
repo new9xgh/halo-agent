@@ -6,31 +6,10 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { Workspace, GitManager, type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
+import { resolveProjectPath, validatePath } from './workspace-path.js'
 
 export function createFileRoutes() {
   const app = new Hono()
-
-  async function resolveProjectPath(projectId: string): Promise<string | null> {
-    if (path.isAbsolute(projectId)) {
-      try {
-        await fs.access(projectId)
-        return projectId
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
-
-  // Validate that a resolved path is within the project workspace (prevent traversal).
-  // Match on a path-segment boundary, not a raw string prefix — otherwise a sibling
-  // dir whose name starts with the project name (e.g. `myapp-secret` vs `myapp`)
-  // passes startsWith and escapes the sandbox.
-  function validatePath(filePath: string, projectPath: string): boolean {
-    const resolved = path.resolve(projectPath, filePath)
-    const proj = path.resolve(projectPath)
-    return resolved === proj || resolved.startsWith(proj + path.sep)
-  }
 
   function isSkippedName(name: string): boolean {
     // Modern IDE convention (VS Code / Cursor / JetBrains): show every

@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 
 import { createFileRoutes } from './routes/files.js'
+import { createDataPreviewRoutes } from './routes/data-preview.js'
 import { createGitRoutes } from './routes/git.js'
 import { createAgentConfigRoutes } from './routes/agent-configs.js'
 import { createSkillRoutes } from './routes/skills.js'
@@ -337,6 +338,9 @@ app.get('/api/health', (c) => {
 
 const fileRoutes = createFileRoutes()
 app.route('/api', fileRoutes)
+
+const dataPreviewRoutes = createDataPreviewRoutes()
+app.route('/api', dataPreviewRoutes)
 
 const gitRoutes = createGitRoutes()
 app.route('/api', gitRoutes)

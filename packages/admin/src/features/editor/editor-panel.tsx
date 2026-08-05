@@ -937,6 +937,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             <FilePreview
                               path={t.path}
                               name={t.path.split('/').pop() ?? ''}
+                              projectId={projectId ?? undefined}
                               downloadUrl={t.preview!.downloadUrl}
                               viewUrl={t.preview!.viewUrl}
                               onOpenAsText={() => handleOpenAsText(t.path)}
@@ -948,6 +949,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                           <FilePreview
                             path={paneFile.path}
                             name={paneFile.path.split('/').pop() ?? ''}
+                            projectId={projectId ?? undefined}
                             downloadUrl={paneFile.preview.downloadUrl}
                             viewUrl={paneFile.preview.viewUrl}
                             onOpenAsText={() => handleOpenAsText(paneFile.path)}

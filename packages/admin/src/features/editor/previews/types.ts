@@ -18,6 +18,9 @@ export interface PreviewProps {
   name: string
   /** Relative path inside the workspace (or absolute for /tmp files) */
   path: string
+  /** Workspace absolute path — needed by plugins that call server-side parse
+   *  endpoints (sqlite / parquet) instead of fetching the raw bytes */
+  projectId?: string
   /** URL for inline viewing — supports HTTP Range */
   viewUrl: string
   /** URL for forced download */

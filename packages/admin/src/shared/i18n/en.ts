@@ -394,6 +394,13 @@ export const en: Record<string, string> = {
   'common.global': 'Global',
   'common.workspace': 'Workspace',
 
+  // ── Data previews (parquet / sqlite) ──
+  'dataPreview.range': '{from}–{to} of {total} rows',
+  'dataPreview.prev': 'Previous page',
+  'dataPreview.next': 'Next page',
+  'dataPreview.empty': 'No rows',
+  'dataPreview.noTables': 'No tables in this database',
+
   // ── Cron jobs ──
   'cron.title': 'Cron Jobs',
   'cron.new': 'New',

@@ -92,6 +92,8 @@
     "drizzle-orm": "^0.45.2",
     "grammy": "^1.42.0",
     "hono": "^4.6.0",
+    "hyparquet": "^1.27.1",
+    "hyparquet-compressors": "^1.1.1",
     "jimp": "^1.6.1",
     "nanoid": "^5.0.9",
     "node-pty": "1.2.0-beta.12",

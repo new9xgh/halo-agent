@@ -13,9 +13,13 @@ import { docxPlugin } from './docx'
 import { xlsxPlugin } from './xlsx'
 import { pptxPlugin } from './pptx'
 import { mediaPlugin } from './media'
+import { parquetPlugin } from './parquet'
+import { sqlitePlugin } from './sqlite'
 
 register(pdfPlugin)
 register(docxPlugin)
 register(xlsxPlugin)
 register(pptxPlugin)
 register(mediaPlugin)
+register(parquetPlugin)
+register(sqlitePlugin)

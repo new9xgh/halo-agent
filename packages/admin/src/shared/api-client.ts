@@ -252,6 +252,43 @@ export const api = {
     },
   },
 
+  // Server-side tabular previews (parquet / sqlite) — schema + one page of rows.
+  dataPreview: {
+    sqliteTables(path: string, projectId: string, signal?: AbortSignal) {
+      return request<{ tables: Array<{ name: string; rowCount: number }> }>(
+        `/data-preview/sqlite/tables?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}`,
+        { signal },
+      )
+    },
+
+    sqliteRows(path: string, projectId: string, table: string, offset: number, limit: number, signal?: AbortSignal) {
+      return request<{
+        table: string
+        columns: Array<{ name: string; type: string }>
+        rows: Array<Array<string | number | boolean | null>>
+        totalRows: number
+        offset: number
+        limit: number
+      }>(
+        `/data-preview/sqlite/rows?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&table=${encodeURIComponent(table)}&offset=${offset}&limit=${limit}`,
+        { signal },
+      )
+    },
+
+    parquet(path: string, projectId: string, offset: number, limit: number, signal?: AbortSignal) {
+      return request<{
+        columns: Array<{ name: string; type: string }>
+        rows: Array<Array<string | number | boolean | null>>
+        totalRows: number
+        offset: number
+        limit: number
+      }>(
+        `/data-preview/parquet?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&offset=${offset}&limit=${limit}`,
+        { signal },
+      )
+    },
+  },
+
   git: {
     status(projectId: string) {
       return request<{
