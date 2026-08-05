@@ -289,6 +289,20 @@ const DEFAULT_HIDDEN_FILES = [
   '~/.halo/global/cron.db-shm',
 ]
 
+// Workspace-relative runtime state hidden from workspace/readonly sessions.
+// `<ws>/.halo/sessions` holds every channel/user's transcripts on this
+// workspace, halo.db carries the agent_sessions rows (+ WAL/SHM sidecars),
+// logs/ is server output, and evo/ run dirs contain full source-session
+// snapshots (source-snapshot.json / tool-flow.md dumped by enqueue) — all of
+// it would leak other users' conversations to a low-privilege channel
+// session. Code constants, not settings: this is a security boundary, and
+// the entries are workspace-relative while the settings lists are absolute/~
+// paths. Workspace knowledge (INSTRUCTIONS.md / INDEX.md / docs / memory /
+// skills / agents / prompts / tmp / canvas / goal / settings.yaml) stays
+// readable — agents need it to work.
+const WORKSPACE_HIDDEN_DIRS = ['.halo/sessions', '.halo/logs', '.halo/evo']
+const WORKSPACE_HIDDEN_FILES = ['.halo/halo.db', '.halo/halo.db-wal', '.halo/halo.db-shm']
+
 let _hiddenDirs: string[] = DEFAULT_HIDDEN_DIRS
 let _hiddenFiles: string[] = DEFAULT_HIDDEN_FILES
 /** Extra dirs bind-mounted read-write inside the sandbox. For external CLIs
@@ -308,7 +322,9 @@ export function setSandboxHiddenPaths(dirs: string[], files: string[], writableD
   _writableDirs = writableDirs
 }
 
-function buildBwrapArgs(opts: SandboxOptions): string[] {
+/** Exported for tests (mount-order assertions) — like the build*ScriptArgs
+ *  builders, bwrap can't run in CI, so the argv itself is the testable unit. */
+export function buildBwrapArgs(opts: SandboxOptions): string[] {
   const args: string[] = []
 
   // Entire filesystem — read-only base
@@ -340,6 +356,21 @@ function buildBwrapArgs(opts: SandboxOptions): string[] {
       const dir = expandTilde(raw)
       if (existsSync(dir)) args.push('--bind', dir, dir)
     }
+  }
+
+  // Workspace-relative runtime state (sessions, db, logs, evo) — masked for
+  // BOTH workspace and readonly levels. ORDER MATTERS: bwrap applies mounts
+  // in argv order and the last mount on a path wins, so these must come
+  // AFTER the workspace `--bind` above — placed before it, the rw workspace
+  // bind would re-expose them. (The global hidden lists above can sit before
+  // the workspace bind only because their paths never overlap it.)
+  for (const rel of WORKSPACE_HIDDEN_DIRS) {
+    const dir = path.join(opts.workspaceRoot, rel)
+    if (existsSync(dir)) args.push('--tmpfs', dir)
+  }
+  for (const rel of WORKSPACE_HIDDEN_FILES) {
+    const file = path.join(opts.workspaceRoot, rel)
+    if (existsSync(file)) args.push('--ro-bind', '/dev/null', file)
   }
 
   // /proc and /dev need real mounts
@@ -408,6 +439,12 @@ export function assertPathAllowed(filePath: string, opts: SandboxOptions, write 
   const wsRoot = realpathBounded(opts.workspaceRoot)
 
   if (resolved === wsRoot || resolved.startsWith(wsRoot + '/')) {
+    // Workspace runtime state (sessions, db, logs, evo) is hidden even
+    // inside the workspace — mirrors the bwrap masks above. Denied for
+    // read AND write.
+    if (isHiddenWorkspacePath(resolved, wsRoot)) {
+      throw new Error(`Access denied: "${filePath}" is outside the allowed sandbox paths`)
+    }
     if (write && opts.accessLevel === 'readonly') {
       throw new Error(`Access denied: readonly session cannot write to "${filePath}"`)
     }
@@ -434,6 +471,24 @@ function isHiddenGlobalPath(resolved: string): boolean {
   }
   for (const raw of _hiddenDirs) {
     const dir = expandTilde(raw)
+    if (resolved === dir || resolved.startsWith(dir + '/')) return true
+  }
+  return false
+}
+
+/** True when a workspace-internal path hits the workspace-relative hidden
+ *  set (WORKSPACE_HIDDEN_DIRS/FILES). Fallback-layer counterpart of the
+ *  bwrap masks in buildBwrapArgs — without it, the blanket workspace-prefix
+ *  allowance above would leak `.halo/sessions` transcripts / halo.db to
+ *  workspace/readonly sessions on platforms without bwrap. `resolved` and
+ *  `wsRoot` are both already realpath'd by the caller, so a symlink pointing
+ *  into these paths lands here too. */
+function isHiddenWorkspacePath(resolved: string, wsRoot: string): boolean {
+  for (const rel of WORKSPACE_HIDDEN_FILES) {
+    if (resolved === path.join(wsRoot, rel)) return true
+  }
+  for (const rel of WORKSPACE_HIDDEN_DIRS) {
+    const dir = path.join(wsRoot, rel)
     if (resolved === dir || resolved.startsWith(dir + '/')) return true
   }
   return false

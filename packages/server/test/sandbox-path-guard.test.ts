@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { assertPathAllowed, type SandboxOptions } from '../src/tools/sandbox.js'
+import { assertPathAllowed, buildBwrapArgs, type SandboxOptions } from '../src/tools/sandbox.js'
 
 /**
  * Contract: on the no-bwrap fallback, assertPathAllowed is the ONLY boundary
@@ -114,5 +114,158 @@ describe('assertPathAllowed symlink boundary', () => {
     // No throw, returns a resolved absolute path even for an outside file.
     const result = assertPathAllowed(path.join(outside, 'secret.txt'), opts('full'))
     expect(path.isAbsolute(result)).toBe(true)
+  })
+})
+
+/**
+ * Contract: the workspace's own `.halo/` runtime state (sessions/ transcripts,
+ * halo.db + sqlite sidecars, logs/, evo/ run dirs with source-session
+ * snapshots) is hidden from workspace/readonly sessions — it holds OTHER
+ * channels'/users' full conversations on a shared workspace. The knowledge
+ * surface (INSTRUCTIONS.md, docs/, skills/, tmp/, …) stays readable. Enforced
+ * in assertPathAllowed (no-bwrap fallback) here; the bwrap layer is covered by
+ * the mount-order suite below.
+ */
+describe('workspace-relative hidden paths (assertPathAllowed)', () => {
+  let root: string
+  let workspace: string
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-wsguard-'))
+    workspace = path.join(root, 'workspace')
+    fs.mkdirSync(path.join(workspace, '.halo', 'sessions', 'default'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'logs'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'evo', 'runs', 'r1'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'skills', 'demo'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'tmp'), { recursive: true })
+    fs.writeFileSync(path.join(workspace, '.halo', 'sessions', 'default', 's1.json'), '{"transcript":true}')
+    fs.writeFileSync(path.join(workspace, '.halo', 'logs', 'server.log'), 'log')
+    fs.writeFileSync(path.join(workspace, '.halo', 'halo.db'), 'sqlite')
+    fs.writeFileSync(path.join(workspace, '.halo', 'halo.db-wal'), 'wal')
+    fs.writeFileSync(path.join(workspace, '.halo', 'INSTRUCTIONS.md'), '# rules')
+    fs.writeFileSync(path.join(workspace, '.halo', 'skills', 'demo', 'SKILL.md'), '# skill')
+    fs.writeFileSync(path.join(workspace, '.halo', 'tmp', 'scratch.txt'), 'tmp')
+  })
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  const opts = (accessLevel: SandboxOptions['accessLevel']): SandboxOptions => ({
+    workspaceRoot: workspace,
+    accessLevel,
+  })
+
+  it('denies reads of sessions / db / logs / evo to workspace and readonly', () => {
+    for (const p of [
+      path.join(workspace, '.halo', 'sessions', 'default', 's1.json'),
+      path.join(workspace, '.halo', 'sessions'),
+      path.join(workspace, '.halo', 'halo.db'),
+      path.join(workspace, '.halo', 'halo.db-wal'),
+      path.join(workspace, '.halo', 'logs', 'server.log'),
+      path.join(workspace, '.halo', 'evo', 'runs', 'r1'),
+    ]) {
+      expect(() => assertPathAllowed(p, opts('workspace')), p).toThrow(/outside the allowed sandbox/)
+      expect(() => assertPathAllowed(p, opts('readonly')), p).toThrow(/outside the allowed sandbox/)
+    }
+  })
+
+  it('denies writes into hidden paths too (workspace level)', () => {
+    expect(() => assertPathAllowed(path.join(workspace, '.halo', 'sessions', 'default', 'new.json'), opts('workspace'), true))
+      .toThrow(/outside the allowed sandbox/)
+    expect(() => assertPathAllowed(path.join(workspace, '.halo', 'halo.db'), opts('workspace'), true))
+      .toThrow(/outside the allowed sandbox/)
+  })
+
+  it('keeps the workspace knowledge surface readable', () => {
+    for (const p of [
+      path.join(workspace, '.halo', 'INSTRUCTIONS.md'),
+      path.join(workspace, '.halo', 'skills', 'demo', 'SKILL.md'),
+      path.join(workspace, '.halo', 'tmp', 'scratch.txt'),
+    ]) {
+      expect(assertPathAllowed(p, opts('workspace'))).toBe(fs.realpathSync(p))
+      expect(assertPathAllowed(p, opts('readonly'))).toBe(fs.realpathSync(p))
+    }
+  })
+
+  it('writes to non-hidden .halo paths still work at workspace level, still denied at readonly', () => {
+    const tmpFile = path.join(workspace, '.halo', 'tmp', 'new.txt')
+    expect(() => assertPathAllowed(tmpFile, opts('workspace'), true)).not.toThrow()
+    expect(() => assertPathAllowed(tmpFile, opts('readonly'), true)).toThrow(/readonly session cannot write/)
+  })
+
+  it('catches a workspace symlink pointing into .halo/sessions', () => {
+    // ws/innocent.json -> ws/.halo/sessions/default/s1.json — lexically the
+    // link is outside the hidden set; realpath resolves it inside → deny.
+    const link = path.join(workspace, 'innocent.json')
+    fs.symlinkSync(path.join(workspace, '.halo', 'sessions', 'default', 's1.json'), link)
+    expect(() => assertPathAllowed(link, opts('workspace'))).toThrow(/outside the allowed sandbox/)
+    expect(() => assertPathAllowed(link, opts('readonly'))).toThrow(/outside the allowed sandbox/)
+  })
+
+  it('full access is unaffected', () => {
+    const p = path.join(workspace, '.halo', 'sessions', 'default', 's1.json')
+    expect(assertPathAllowed(p, opts('full'))).toBe(path.resolve(p))
+  })
+})
+
+/**
+ * Contract: buildBwrapArgs masks the workspace-relative hidden set with
+ * `--tmpfs` / `--ro-bind /dev/null` AFTER the workspace `--bind` — bwrap
+ * applies mounts in argv order and the last mount wins, so a mask placed
+ * before the rw workspace bind would be silently re-exposed. bwrap itself
+ * can't run in CI (needs user namespaces), so the argv is the testable unit
+ * (same approach as the injection-safety suite).
+ */
+describe('buildBwrapArgs workspace masking order', () => {
+  let root: string
+  let workspace: string
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-bwrap-'))
+    workspace = path.join(root, 'workspace')
+    fs.mkdirSync(path.join(workspace, '.halo', 'sessions'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'logs'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, '.halo', 'evo'), { recursive: true })
+    fs.writeFileSync(path.join(workspace, '.halo', 'halo.db'), 'sqlite')
+  })
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  /** Index of the exact arg triple/pair start, or -1. */
+  const indexOfSeq = (args: string[], seq: string[]): number => {
+    for (let i = 0; i <= args.length - seq.length; i++) {
+      if (seq.every((s, j) => args[i + j] === s)) return i
+    }
+    return -1
+  }
+
+  it('workspace level: masks come after the rw workspace bind', () => {
+    const args = buildBwrapArgs({ workspaceRoot: workspace, accessLevel: 'workspace' })
+    const bindIdx = indexOfSeq(args, ['--bind', workspace, workspace])
+    expect(bindIdx).toBeGreaterThan(-1)
+    for (const rel of ['.halo/sessions', '.halo/logs', '.halo/evo']) {
+      const maskIdx = indexOfSeq(args, ['--tmpfs', path.join(workspace, rel)])
+      expect(maskIdx, `--tmpfs ${rel}`).toBeGreaterThan(bindIdx)
+    }
+    const dbIdx = indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(workspace, '.halo', 'halo.db')])
+    expect(dbIdx, 'halo.db mask').toBeGreaterThan(bindIdx)
+  })
+
+  it('readonly level: no workspace bind, masks still present', () => {
+    const args = buildBwrapArgs({ workspaceRoot: workspace, accessLevel: 'readonly' })
+    expect(indexOfSeq(args, ['--bind', workspace, workspace])).toBe(-1)
+    for (const rel of ['.halo/sessions', '.halo/logs', '.halo/evo']) {
+      expect(indexOfSeq(args, ['--tmpfs', path.join(workspace, rel)]), `--tmpfs ${rel}`).toBeGreaterThan(-1)
+    }
+    expect(indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(workspace, '.halo', 'halo.db')])).toBeGreaterThan(-1)
+  })
+
+  it('non-existent hidden paths are skipped (no mask args for a bare workspace)', () => {
+    const bare = path.join(root, 'bare')
+    fs.mkdirSync(bare, { recursive: true })
+    const args = buildBwrapArgs({ workspaceRoot: bare, accessLevel: 'workspace' })
+    expect(indexOfSeq(args, ['--tmpfs', path.join(bare, '.halo/sessions')])).toBe(-1)
+    expect(indexOfSeq(args, ['--ro-bind', '/dev/null', path.join(bare, '.halo', 'halo.db')])).toBe(-1)
   })
 })
