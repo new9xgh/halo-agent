@@ -53,6 +53,26 @@ All file operations validate the path stays inside the project root (prevents pa
 
 Absolute paths only. Purpose: Explorer's workspace picker and switching validation. Reading/writing files still goes through `/api/files/*` and remains project-sandboxed.
 
+## Data Preview
+
+File: `packages/server/src/routes/data-preview.ts`
+
+Tabular file previews (Parquet / SQLite / CSV / TSV) for the Canvas editor — parsed server-side, returned as schema + one page of JSON-safe rows so large files never travel to the browser.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/data-preview/sqlite/tables?path=&projectId=` | List tables. Returns `{ tables: [{name, rowCount}] }` |
+| GET | `/api/data-preview/sqlite/rows?path=&projectId=&table=&offset=&limit=` | One page of rows. Returns `{ table, columns, rows, totalRows, offset, limit }` |
+| GET | `/api/data-preview/parquet?path=&projectId=&offset=&limit=` | Schema + one page of rows. Returns `{ columns, rows, totalRows, offset, limit }` |
+| GET | `/api/data-preview/csv?path=&projectId=&offset=&limit=` | Header + one page of data rows. Returns `{ columns, rows, totalRows, hasMore, offset, limit }` |
+
+Pagination: `limit` defaults to 100, capped at 1000. Same `(path, projectId)` resolution + traversal guard as `files.ts` (400/403/404 with a readable `{error}` body, never a 500 stack trace).
+
+- **sqlite/tables**, **sqlite/rows** — opens the db `readonly` + `fileMustExist`, closed per request (no lingering lock on a live WAL db). Table names can't be parameterized, so they're gated on `sqlite_master` membership before being quoted into the query.
+- **parquet** — reads only the footer + the row groups covering the requested page (hyparquet), never the whole file.
+- **csv** — streaming RFC 4180 tokenizer, memory O(page). Delimiter is sniffed from the header line (`,` / `;` / tab, comma wins ties); `.tsv` forces tab. `totalRows` is a lazy lower bound while `hasMore` is true (exact once the scan reaches EOF, to avoid re-reading the whole file on every page turn). A single row over 1MB is rejected with 400 (delimiter-flood / non-CSV guard).
+- All four fold cells to JSON scalars: bigints beyond ±2^53 become exact strings, BLOB/binary becomes a `<blob N bytes>` placeholder, `Date` becomes ISO text.
+
 ## Session Logs (unified)
 
 File: `packages/server/src/routes/sessions.ts`
@@ -70,14 +90,6 @@ Unified session log API — list + read session files across all agents.
 The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / messageCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId). The frontend builds the tree from `parentSessionId`; `goalSessionId` (non-null on a goal-bound worker row) drives the 🎯 badge.
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
-
-### Legacy DB sessions
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/sessions?projectId=` | List sessions (DB, legacy) |
-| GET | `/api/sessions/:id` | Full session (DB, legacy) |
-| DELETE | `/api/sessions/:id` | Delete session (DB, legacy) |
 
 ## Weixin Channel
 

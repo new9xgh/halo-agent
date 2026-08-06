@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Canvas can preview Parquet and SQLite (.db/.sqlite/.sqlite3) files — a paginated table (SQLite adds a table-selector sidebar with per-table row counts), parsed server-side so large files open instantly.
+- CSV/TSV previews now page server-side instead of loading the whole file into the browser (delimiter auto-detected, including semicolon-separated files); XLSX/XLS previews page client-side too, so rows past 500 are reachable instead of being silently cut off.
+
 ## [1.0.3] - 2026-08-05
 
 ### Security

@@ -41,7 +41,10 @@ Open tabs and the active tab live in localStorage; survive refresh.
 Non-text files go through `FilePreview`, which looks up a **plugin** in the preview registry by file extension. Built-in plugins:
 - **PDF** — browser-native iframe
 - **DOCX / DOC** — `mammoth` → HTML (parsed in a Web Worker so the UI stays responsive)
-- **XLSX / XLS / CSV** — `xlsx` (SheetJS) → table (parsed in a Web Worker; CSV decoded as UTF-8 with BOM strip)
+- **XLSX / XLS** — `xlsx` (SheetJS) → table, parsed whole in a Web Worker (zip can't stream); rendered with client-side paging (500 rows/page over the in-memory parse — no truncation, just paged)
+- **CSV / TSV** — server-paginated table: each page (100 rows) is parsed and fetched from the server on demand, so large files open instantly. Delimiter is sniffed from the header line (comma/semicolon/tab; `.tsv` forces tab); total row count is a lazy lower bound ("N+") until the last page is reached
+- **Parquet** — server-paginated table (schema + 100-row pages), same pager as CSV/SQLite
+- **SQLite / DB (.db / .sqlite / .sqlite3)** — server-paginated table with a table-selector sidebar (name + row count per table); opened read-only, one page (100 rows) per request
 - **PPTX / PPT** — `pptx-preview` list mode. Fidelity is approximate — complex animations / SmartArt / embedded fonts may not render perfectly; users can download for the exact source. Flagged `heavy: true` so only the *active* pptx mounts (canvas-based rendering needs the main thread). **Speaker-notes sidebar**: notes are extracted from the pptx zip in presentation (play) order and listed on the left; clicking a note scrolls to the corresponding slide (a domIndex mapping bridges play order to pptx-preview's part-filename render order, so reordered decks still land on the right slide). Collapsible with the state remembered in localStorage (`halo.pptxNotesHidden`); the sidebar doesn't appear at all when no slide has notes. Decks with dangling `[Content_Types].xml` overrides (e.g. some WPS exports) are repaired before rendering; if zero slides render anyway, a real error UI is shown instead of a silent black wrapper
 - **Images / video / audio** — native `<img>` / `<video>` / `<audio>`, supports HTTP Range for seek-without-full-download
 

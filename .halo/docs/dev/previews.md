@@ -15,6 +15,10 @@ previews/
 ├── ui/
 │   ├── preview-shell.tsx     Standard header (filename + Open-as-Text + Download + extraToolbar)
 │   ├── use-preview-fetch.ts  Hook: fetch + AbortController + parse, returns {data, error, loading}
+│   ├── use-data-fetch.ts     JSON-endpoint sibling: abortable fetcher → {data, error, loading},
+│   │                         for previews that parse server-side instead of raw bytes
+│   ├── data-table.tsx        Shared table renderer (headers + rows + prev/next pager) for
+│   │                         server-parsed previews (parquet / sqlite / csv)
 │   └── print.ts              Pop-up print helper
 ├── workers/                  Parse workers (one per heavy format)
 │   ├── worker-client.ts      Generic WorkerClient<T> class — id-routed postMessage
@@ -30,7 +34,10 @@ previews/
     ├── pptx-notes.ts         pptx zip helpers: speaker-notes extraction (jszip +
     │                         DOMParser, play order via sldIdLst) + Content_Types
     │                         repair for decks with dangling Override parts
-    └── media.tsx / media-view.tsx
+    ├── media.tsx / media-view.tsx
+    ├── parquet.tsx / parquet-view.tsx   Server-parsed: GET /api/data-preview/parquet
+    ├── sqlite.tsx / sqlite-view.tsx     Server-parsed: GET /api/data-preview/sqlite/*
+    └── csv.tsx / csv-view.tsx           Server-parsed: GET /api/data-preview/csv (csv + tsv)
 ```
 
 **Two-file-per-plugin pattern**: `foo.tsx` is tiny metadata (no runtime deps). `foo-view.tsx` holds the component and its heavy dependencies. The metadata file uses `React.lazy()` so the view file (and its deps) only loads when a user actually opens that file type.
@@ -40,7 +47,7 @@ previews/
 ```typescript
 interface PreviewPlugin {
   id: string                    // stable id, e.g. 'pdf'
-  extensions: readonly string[] // lowercase, no dot — e.g. ['xlsx', 'xls', 'csv']
+  extensions: readonly string[] // lowercase, no dot — e.g. ['xlsx', 'xls'] (csv/tsv is a separate plugin)
   Component: React.ComponentType<PreviewProps>
   heavy?: boolean               // true = main-thread-heavy; active-only mount, skip MRU cache
 }
@@ -48,6 +55,8 @@ interface PreviewPlugin {
 interface PreviewProps {
   name: string         // full filename including extension
   path: string         // relative workspace path (or absolute for /tmp files)
+  projectId?: string   // workspace absolute path — needed by server-parsed plugins
+                        // (parquet/sqlite/csv) to call /api/data-preview/*
   viewUrl: string      // for inline viewing, supports HTTP Range
   downloadUrl: string  // for forced download (used by the shell's Download button)
   onOpenAsText?: () => void  // set when the file can also be force-opened as text
@@ -206,12 +215,58 @@ Only pptx currently uses this. Don't set it by default — the MRU cache gives m
 
 When the user right-clicks a previewable file in Explorer and picks "Open as Text", Canvas closes the preview tab and opens the raw file in Monaco. The preview plugin receives this as `props.onOpenAsText` — pass it straight through to `PreviewShell` and the button appears automatically.
 
+## Two plugin patterns: raw-bytes vs. server-parsed
+
+Most built-in plugins (pdf, docx, xlsx, pptx, media) are **raw-bytes**: `usePreviewFetch` downloads the whole file as an ArrayBuffer via `GET /api/files/download?inline=1`, then parsing happens client-side (a Worker for the heavy formats). This is the pattern documented above.
+
+Parquet, SQLite and CSV/TSV are **server-parsed** instead: the server does the parsing and hands back one page of JSON rows at a time via `GET /api/data-preview/*` (route details in [`dev/api.md`](api.md#data-preview)), so a multi-GB file never has to reach the browser.
+
+```tsx
+// plugins/foo-view.tsx (server-parsed)
+import { useState } from 'react'
+import type { PreviewProps } from '../types'
+import { PreviewShell } from '../ui/preview-shell'
+import { useDataFetch } from '../ui/use-data-fetch'
+import { DataTable } from '../ui/data-table'
+import { api } from '@/shared/api-client'
+
+const PAGE_SIZE = 100
+
+export function FooPreview({ name, path, projectId, downloadUrl, onOpenAsText }: PreviewProps) {
+  const [offset, setOffset] = useState(0)
+  const { data, error, loading } = useDataFetch(
+    projectId ? (signal) => api.dataPreview.foo(path, projectId, offset, PAGE_SIZE, signal) : null,
+    [path, projectId, offset],
+  )
+  return (
+    <PreviewShell name={name} downloadUrl={downloadUrl} onOpenAsText={onOpenAsText} loading={loading} error={error}>
+      {data && (
+        <DataTable
+          columns={data.columns}
+          rows={data.rows}
+          offset={data.offset}
+          limit={data.limit}
+          totalRows={data.totalRows}
+          onPage={setOffset}
+        />
+      )}
+    </PreviewShell>
+  )
+}
+```
+
+Server-parsed plugins need `PreviewProps.projectId` (the workspace absolute path, threaded from editor-panel's two `FilePreview` call sites) to build the `/api/data-preview/*` query.
+
+**Which pattern to pick for a new format**: if the format can be read incrementally on disk (row groups, pages, or lines — like parquet/sqlite/csv), add a route in `data-preview.ts` and go server-parsed — it scales to large files and keeps the browser light. If the format can only be parsed after reading the whole file (zip-based containers like xlsx/docx/pptx), stay raw-bytes; page the fully-parsed result client-side (see xlsx's `DataTable` usage) instead of a hard row cutoff.
+
 ## Server side
 
-All previews fetch via `GET /api/files/download?inline=1` which:
+Raw-bytes previews fetch via `GET /api/files/download?inline=1` which:
 - Streams the file (doesn't read entire buffer into memory)
 - Supports HTTP `Range` (206 Partial Content) for video/audio seek + progressive load
 - Aborts the read when the client disconnects (tab closed / URL changed)
+
+Server-parsed previews fetch via `GET /api/data-preview/*` (schema + one page of rows, `projectId`-scoped like `/api/files/*`).
 
 See [`dev/api.md`](api.md) for the route details.
 
