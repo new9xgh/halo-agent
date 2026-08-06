@@ -191,8 +191,8 @@ Flags:
                           server: proxy Cookie, CF-Access-*, basic auth.
 
 ACP method coverage:
-  initialize, authenticate, session/new, session/prompt, session/cancel.
-  session/load, reverse fs/terminal, requestPermission are NOT
+  initialize, authenticate, session/new, session/load, session/prompt,
+  session/cancel. Reverse fs/terminal and requestPermission are NOT
   implemented — see .halo/docs/dev/acp-adapter.md for the full matrix.
 `
 

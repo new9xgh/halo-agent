@@ -4,10 +4,9 @@
  * Wraps the four endpoints the adapter cares about:
  *   POST /api/web/chat        — send a user message, receive SSE stream
  *   POST /api/web/stop        — cancel the running turn
- *   GET  /api/web/history     — read persisted message log (used for
- *                                first-load if the adapter ever needs to
- *                                replay; currently unused but kept for
- *                                future session/load support)
+ *   GET  /api/web/history     — probe that a session id still exists on
+ *                                the server (`sessionExists`, backing
+ *                                ACP `session/load`)
  *   GET  /api/web/subscribe   — long-lived SSE for an already-running
  *                                session (used when a stop was requested
  *                                or when the adapter reconnects mid-turn)

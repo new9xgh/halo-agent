@@ -7,12 +7,13 @@
  *   authenticate — no-op (token authentication is handled by the
  *                  adapter's launch flags, not by ACP)
  *   session/new  — create a new halo session for this ACP session
+ *   session/load — resume a session id the client persisted (verified
+ *                  against the halo server; no adapter-side storage —
+ *                  see AcpSessionState below)
  *   session/prompt   — forward the user message to halo, stream back
  *   session/cancel   — POST /web/stop on the underlying halo session
  *
  * Out of scope (returns method-not-found):
- *   - session/load              — needs persistent storage of acp→halo
- *                                 session map across adapter restarts
  *   - reverse fs / terminal     — halo agent reads its own server-side
  *                                 workspace; client-side filesystem
  *                                 access isn't wired through

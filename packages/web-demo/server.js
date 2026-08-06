@@ -19,6 +19,8 @@ app.use(express.json({ limit: '10mb' }))
 
 // ── Session auth (HMAC-based, survives restart) ──
 
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000  // 7 days
+
 function createSession() {
   const payload = Date.now().toString(36)
   const sig = crypto.createHmac('sha256', PASSWORD).update(payload).digest('hex').slice(0, 16)
@@ -31,7 +33,12 @@ function isValidSession(token) {
   if (dot === -1) return false
   const payload = token.slice(0, dot)
   const sig = crypto.createHmac('sha256', PASSWORD).update(payload).digest('hex').slice(0, 16)
-  return sig === token.slice(dot + 1)
+  if (sig !== token.slice(dot + 1)) return false
+  // The signed payload IS the issue timestamp — expire without storage.
+  // A leaked token stops working after SESSION_TTL_MS; frontend gets a
+  // 401 and falls back to the login view (handleAuthFail → logout).
+  const issuedAt = parseInt(payload, 36)
+  return Number.isFinite(issuedAt) && Date.now() - issuedAt <= SESSION_TTL_MS
 }
 
 function authMiddleware(req, res, next) {
