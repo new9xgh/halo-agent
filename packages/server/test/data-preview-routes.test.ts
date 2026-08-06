@@ -7,12 +7,14 @@ import Database from 'better-sqlite3'
 import { createDataPreviewRoutes } from '../src/routes/data-preview.js'
 
 /**
- * Contract: /data-preview/* parses parquet + sqlite server-side and returns
- * schema + one page of rows as plain JSON — with files.ts-grade workspace
- * path validation, strictly read-only close-per-request sqlite opens (a live
- * WAL db is immediately writable by its owner after a preview — no lingering
- * lock), and 400-with-readable-message for bad input (missing table, corrupt
- * file, wrong format) instead of a 500.
+ * Contract: /data-preview/* parses parquet + sqlite + csv/tsv server-side and
+ * returns schema + one page of rows as plain JSON — with files.ts-grade
+ * workspace path validation, strictly read-only close-per-request sqlite
+ * opens (a live WAL db is immediately writable by its owner after a preview —
+ * no lingering lock), and 400-with-readable-message for bad input (missing
+ * table, corrupt file, wrong format) instead of a 500. CSV is streamed with
+ * O(page) memory and a lazy row count (totalRows is a lower bound while
+ * hasMore is true; exact once a page's scan reaches EOF).
  *
  * fixtures/sample.parquet was generated with python3 + pyarrow (snappy
  * compression), 250 rows exercising int64 beyond 2^53, nulls and binary:
@@ -29,6 +31,7 @@ const FIXTURE_PARQUET = path.join(path.dirname(fileURLToPath(import.meta.url)), 
 describe('data-preview routes', () => {
   let ws: string
   let outside: string
+  let boundaryField: string
   const app = createDataPreviewRoutes()
 
   const get = async (route: string, params: Record<string, string>) => {
@@ -45,6 +48,48 @@ describe('data-preview routes', () => {
     fs.copyFileSync(FIXTURE_PARQUET, path.join(ws, 'sample.parquet'))
     fs.writeFileSync(path.join(ws, 'fake.parquet'), 'not really a parquet file at all')
     fs.writeFileSync(path.join(ws, 'garbage.db'), 'not a sqlite database, just text padding padding')
+
+    // CSV fixtures: RFC 4180 edge cases (quoted delimiter / escaped quote /
+    // newline inside quotes), BOM, TSV, empty / header-only, CRLF, 250 data
+    // rows to exercise pagination + the lazy hasMore count.
+    const csvLines = ['id,name,note']
+    for (let i = 1; i <= 250; i++) csvLines.push(`${i},row-${i},note ${i}`)
+    fs.writeFileSync(path.join(ws, 'plain.csv'), csvLines.join('\n') + '\n')
+    fs.writeFileSync(
+      path.join(ws, 'tricky.csv'),
+      // CRLF line endings; row 1 has a quoted comma, an escaped "" and a
+      // newline inside quotes; row 2 is plain.
+      'id,text,tail\r\n1,"a, ""quoted"" value\nsecond line",end\r\n2,plain,done\r\n',
+    )
+    fs.writeFileSync(path.join(ws, 'bom.csv'), '\uFEFFa,b\n1,2\n')
+    fs.writeFileSync(path.join(ws, 'empty.csv'), '')
+    fs.writeFileSync(path.join(ws, 'header-only.csv'), 'x,y,z\n')
+    fs.writeFileSync(path.join(ws, 'data.tsv'), 'col1\tcol2\nv1\tv,2\nv3\tv4\n')
+    // Lone-\r (old Mac) line endings.
+    fs.writeFileSync(path.join(ws, 'maccr.csv'), 'a,b\r1,2\r3,4\r')
+    // Delimiter sniffing: European semicolon CSV; and a header whose
+    // semicolons all sit inside quotes (must not fool the sniffer).
+    fs.writeFileSync(path.join(ws, 'semi.csv'), 'a;b;c\n1;2,5;3\n')
+    fs.writeFileSync(path.join(ws, 'quoted-semis.csv'), 'a,"b;;;;;",c\n1,2,3\n')
+    // Delimiter flood (reviewer's attack shape): 4MB of pure commas, no
+    // newline — one giant row of empty fields. Must 400, not balloon memory.
+    fs.writeFileSync(path.join(ws, 'comma-flood.csv'), ','.repeat(4 * 1024 * 1024))
+    // Chunk-boundary fixture: fs.createReadStream default highWaterMark is
+    // 64KB, so token state must carry across push() calls. Engineered so the
+    // `""` escape straddles byte 65536 (quotePending carry) and row 1's CRLF
+    // terminator straddles byte 131072 (sawCR carry); the quoted field itself
+    // spans the first boundary (inQuotes carry) and contains a literal \n.
+    const CHUNK = 64 * 1024
+    const pre = 'id,text\r\n1,"'
+    const part1 = 'A\n' + 'x'.repeat(CHUNK - 1 - pre.length - 2)
+    const part2 = 'y'.repeat(2 * CHUNK - 2 - (pre.length + part1.length + 2))
+    boundaryField = part1 + '"' + part2
+    const boundary = pre + part1 + '""' + part2 + '"\r\n2,tail\n'
+    // Pin the engineering — if these drift the test silently stops covering
+    // the boundary carries.
+    expect([boundary[CHUNK - 1], boundary[CHUNK]]).toEqual(['"', '"'])
+    expect([boundary[2 * CHUNK - 1], boundary[2 * CHUNK]]).toEqual(['\r', '\n'])
+    fs.writeFileSync(path.join(ws, 'boundary.csv'), boundary)
 
     // WAL-mode db mirroring a live workspace halo.db: BLOB column, big int64,
     // NULLs, and >100 rows to exercise pagination.
@@ -191,11 +236,118 @@ describe('data-preview routes', () => {
     expect(String(body.error)).toMatch(/parquet/i)
   })
 
+  // ── csv / tsv ──
+
+  it('csv first page: header as columns, lazy totalRows lower bound + hasMore', async () => {
+    const { status, body } = await get('/data-preview/csv', { path: 'plain.csv', projectId: ws })
+    expect(status).toBe(200)
+    expect(body.columns).toEqual([
+      { name: 'id', type: '' }, { name: 'name', type: '' }, { name: 'note', type: '' },
+    ])
+    const rows = body.rows as string[][]
+    expect(rows).toHaveLength(100)
+    expect(rows[0]).toEqual(['1', 'row-1', 'note 1'])
+    expect(rows[99]).toEqual(['100', 'row-100', 'note 100'])
+    // Lazy count: scan stopped at the 101st data row — lower bound, not 250.
+    expect(body.totalRows).toBe(101)
+    expect(body.hasMore).toBe(true)
+  })
+
+  it('csv last page: exact totalRows once EOF is reached', async () => {
+    const { body } = await get('/data-preview/csv', { path: 'plain.csv', projectId: ws, offset: '200', limit: '100' })
+    const rows = body.rows as string[][]
+    expect(rows).toHaveLength(50)
+    expect(rows[0]).toEqual(['201', 'row-201', 'note 201'])
+    expect(body.totalRows).toBe(250)
+    expect(body.hasMore).toBe(false)
+  })
+
+  it('csv offset far past EOF returns empty page with exact total', async () => {
+    const { status, body } = await get('/data-preview/csv', { path: 'plain.csv', projectId: ws, offset: '99999' })
+    expect(status).toBe(200)
+    expect(body.rows).toEqual([])
+    expect(body.totalRows).toBe(250)
+    expect(body.hasMore).toBe(false)
+  })
+
+  it('csv handles RFC 4180: quoted comma, escaped quote, newline in quotes, CRLF', async () => {
+    const { body } = await get('/data-preview/csv', { path: 'tricky.csv', projectId: ws })
+    const rows = body.rows as string[][]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual(['1', 'a, "quoted" value\nsecond line', 'end'])
+    expect(rows[1]).toEqual(['2', 'plain', 'done'])
+    expect(body.totalRows).toBe(2)
+  })
+
+  it('csv strips BOM from the first header cell', async () => {
+    const { body } = await get('/data-preview/csv', { path: 'bom.csv', projectId: ws })
+    expect(body.columns).toEqual([{ name: 'a', type: '' }, { name: 'b', type: '' }])
+    expect(body.rows).toEqual([['1', '2']])
+  })
+
+  it('csv empty file and header-only file return zero rows', async () => {
+    const empty = await get('/data-preview/csv', { path: 'empty.csv', projectId: ws })
+    expect(empty.status).toBe(200)
+    expect(empty.body.columns).toEqual([])
+    expect(empty.body.rows).toEqual([])
+    expect(empty.body.totalRows).toBe(0)
+
+    const headerOnly = await get('/data-preview/csv', { path: 'header-only.csv', projectId: ws })
+    expect(headerOnly.status).toBe(200)
+    expect((headerOnly.body.columns as unknown[]).length).toBe(3)
+    expect(headerOnly.body.rows).toEqual([])
+    expect(headerOnly.body.totalRows).toBe(0)
+  })
+
+  it('tsv splits on tab (comma stays literal)', async () => {
+    const { body } = await get('/data-preview/csv', { path: 'data.tsv', projectId: ws })
+    expect(body.columns).toEqual([{ name: 'col1', type: '' }, { name: 'col2', type: '' }])
+    expect(body.rows).toEqual([['v1', 'v,2'], ['v3', 'v4']])
+  })
+
+  it('csv handles lone-\\r (old Mac) line endings', async () => {
+    const { body } = await get('/data-preview/csv', { path: 'maccr.csv', projectId: ws })
+    expect(body.columns).toEqual([{ name: 'a', type: '' }, { name: 'b', type: '' }])
+    expect(body.rows).toEqual([['1', '2'], ['3', '4']])
+  })
+
+  it('csv sniffs a semicolon delimiter; quoted semicolons do not fool it', async () => {
+    const semi = await get('/data-preview/csv', { path: 'semi.csv', projectId: ws })
+    expect(semi.body.columns).toEqual([
+      { name: 'a', type: '' }, { name: 'b', type: '' }, { name: 'c', type: '' },
+    ])
+    expect(semi.body.rows).toEqual([['1', '2,5', '3']]) // European decimal comma intact
+
+    const quoted = await get('/data-preview/csv', { path: 'quoted-semis.csv', projectId: ws })
+    expect((quoted.body.columns as Array<{ name: string }>).map((c) => c.name)).toEqual(['a', 'b;;;;;', 'c'])
+    expect(quoted.body.rows).toEqual([['1', '2', '3']])
+  })
+
+  it('csv carries tokenizer state across 64KB stream chunks (inQuotes / "" escape / CRLF)', async () => {
+    const { status, body } = await get('/data-preview/csv', { path: 'boundary.csv', projectId: ws })
+    expect(status).toBe(200)
+    expect(body.columns).toEqual([{ name: 'id', type: '' }, { name: 'text', type: '' }])
+    const rows = body.rows as string[][]
+    expect(rows).toHaveLength(2)
+    expect(rows[0][0]).toBe('1')
+    // The chunk-straddling "" resolved to one literal quote, the quoted \n
+    // preserved, the field not split or truncated at either boundary.
+    expect(rows[0][1]).toBe(boundaryField)
+    expect(rows[1]).toEqual(['2', 'tail'])
+    expect(body.totalRows).toBe(2)
+  })
+
+  it('csv 400s on a delimiter flood (megabytes of commas, no newline) without buffering it', async () => {
+    const { status, body } = await get('/data-preview/csv', { path: 'comma-flood.csv', projectId: ws })
+    expect(status).toBe(400)
+    expect(body.error).toBe('Row exceeds 1MB — file may not be valid CSV/TSV')
+  })
+
   // ── shared guards ──
 
-  it('rejects path traversal out of the workspace on all three endpoints', async () => {
+  it('rejects path traversal out of the workspace on all four endpoints', async () => {
     const escape = `../${path.basename(outside)}/secret.db`
-    for (const route of ['/data-preview/sqlite/tables', '/data-preview/sqlite/rows', '/data-preview/parquet']) {
+    for (const route of ['/data-preview/sqlite/tables', '/data-preview/sqlite/rows', '/data-preview/parquet', '/data-preview/csv']) {
       const { status, body } = await get(route, { path: escape, projectId: ws, table: 'items' })
       expect(status).toBe(403)
       expect(body.error).toBe('Path traversal not allowed')
@@ -208,5 +360,6 @@ describe('data-preview routes', () => {
     expect((await get('/data-preview/sqlite/rows', { path: 'app.db', projectId: ws })).status).toBe(400) // no table
     expect((await get('/data-preview/parquet', { path: 'sample.parquet', projectId: path.join(ws, 'nope') })).status).toBe(404)
     expect((await get('/data-preview/parquet', { path: 'missing.parquet', projectId: ws })).status).toBe(404)
+    expect((await get('/data-preview/csv', { path: 'missing.csv', projectId: ws })).status).toBe(404)
   })
 })

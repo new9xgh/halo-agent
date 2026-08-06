@@ -1,11 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { PreviewProps } from '../types'
 import { PreviewShell } from '../ui/preview-shell'
 import { usePreviewFetch } from '../ui/use-preview-fetch'
 import { WorkerClient } from '../workers/worker-client'
+import { DataTable } from '../ui/data-table'
 import type { XlsxSheet } from '../workers/xlsx.worker'
+
+// Client-side page size: all rows are already in memory (xlsx is a zip — no
+// streaming possible, the worker parses the whole book), so paging is just a
+// slice; 500 keeps the DOM small while showing plenty per page.
+const PAGE_SIZE = 500
 
 let client: WorkerClient | null = null
 function getClient(): WorkerClient {
@@ -19,23 +25,47 @@ function getClient(): WorkerClient {
 
 export function XlsxPreview(props: PreviewProps) {
   const { name, viewUrl, downloadUrl, onOpenAsText } = props
-  const ext = name.split('.').pop()?.toLowerCase() ?? ''
 
   const { data: sheets, error, loading } = usePreviewFetch<XlsxSheet[]>(
     viewUrl,
-    (buf, signal) => getClient().call<XlsxSheet[], { ext: string }>(signal, buf, { ext }),
-    [ext],
+    (buf, signal) => getClient().call<XlsxSheet[]>(signal, buf),
+    [],
   )
 
   const [activeSheet, setActiveSheet] = useState(0)
+  const [offset, setOffset] = useState(0)
   const sheet = sheets?.[activeSheet]
+
+  const columns = useMemo(
+    () =>
+      sheet
+        ? Array.from({ length: sheet.colCount }, (_, i) => ({
+            name: sheet.headers[i] || String.fromCharCode(65 + i),
+            type: '',
+          }))
+        : [],
+    [sheet],
+  )
+  // Slice the current page and pad ragged rows to colCount so cells render
+  // as blanks (worker rows can be shorter than the widest row).
+  const pageRows = useMemo(() => {
+    if (!sheet) return []
+    return sheet.rows
+      .slice(offset, offset + PAGE_SIZE)
+      .map((row) =>
+        row.length >= sheet.colCount ? row : [...row, ...Array<string>(sheet.colCount - row.length).fill('')],
+      )
+  }, [sheet, offset])
 
   const extraToolbar = sheets && sheets.length > 1 ? (
     <div className="flex gap-1">
       {sheets.map((s, i) => (
         <button
           key={s.name}
-          onClick={() => setActiveSheet(i)}
+          onClick={() => {
+            setActiveSheet(i)
+            setOffset(0)
+          }}
           className={`rounded px-2 py-0.5 text-[10px] ${
             i === activeSheet
               ? 'bg-[var(--secondary)] text-[var(--foreground)]'
@@ -58,32 +88,15 @@ export function XlsxPreview(props: PreviewProps) {
       error={error}
     >
       {sheet && (
-        <div className="h-full overflow-auto">
-          <table className="min-w-full border-collapse text-xs">
-            <thead className="sticky top-0 z-10 bg-[var(--card)] shadow-[inset_0_-1px_0_var(--border)]">
-              <tr>
-                <th className="px-2 py-1.5 text-right text-[10px] font-medium text-[var(--muted-foreground)]">#</th>
-                {Array.from({ length: sheet.colCount }).map((_, i) => (
-                  <th key={i} className="whitespace-nowrap px-3 py-1.5 text-left text-[10px] font-medium text-[var(--foreground)]">
-                    {sheet.headers[i] || String.fromCharCode(65 + i)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sheet.rows.slice(0, 500).map((row, ri) => (
-                <tr key={ri} className="odd:bg-[var(--card)]/40 hover:bg-[var(--secondary)]">
-                  <td className="px-2 py-1 text-right text-[10px] text-[var(--muted-foreground)] tabular-nums">{ri + 1}</td>
-                  {Array.from({ length: sheet.colCount }).map((_, ci) => (
-                    <td key={ci} className="whitespace-nowrap px-3 py-1 text-[var(--foreground)]">{row[ci] ?? ''}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={columns}
+          rows={pageRows}
+          offset={offset}
+          limit={PAGE_SIZE}
+          totalRows={sheet.rows.length}
+          onPage={setOffset}
+        />
       )}
     </PreviewShell>
   )
 }
-

@@ -287,6 +287,21 @@ export const api = {
         { signal },
       )
     },
+
+    csv(path: string, projectId: string, offset: number, limit: number, signal?: AbortSignal) {
+      return request<{
+        columns: Array<{ name: string; type: string }>
+        rows: Array<Array<string | number | boolean | null>>
+        // Lazy count: while hasMore, totalRows is the known lower bound only.
+        totalRows: number
+        hasMore: boolean
+        offset: number
+        limit: number
+      }>(
+        `/data-preview/csv?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&offset=${offset}&limit=${limit}`,
+        { signal },
+      )
+    },
   },
 
   git: {

@@ -4,8 +4,8 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 /**
- * Shared table renderer for server-parsed tabular previews (parquet / sqlite):
- * column headers (name + type), rows, and a prev/next pager showing the
+ * Shared table renderer for server-parsed tabular previews (parquet / sqlite /
+ * csv): column headers (name + type), rows, and a prev/next pager showing the
  * current range vs. total. Long cell values are truncated with the full value
  * in the title tooltip.
  */
@@ -25,6 +25,7 @@ export function DataTable({
   offset,
   limit,
   totalRows,
+  hasMore,
   onPage,
 }: {
   columns: Array<{ name: string; type: string }>
@@ -32,6 +33,8 @@ export function DataTable({
   offset: number
   limit: number
   totalRows: number
+  /** Lazy-count endpoints (csv): totalRows is a lower bound, shown as "N+". */
+  hasMore?: boolean
   onPage: (nextOffset: number) => void
 }) {
   const t = useT()
@@ -45,8 +48,9 @@ export function DataTable({
           <thead className="sticky top-0 z-10 bg-[var(--card)] shadow-[inset_0_-1px_0_var(--border)]">
             <tr>
               <th className="px-2 py-1.5 text-right text-[10px] font-medium text-[var(--muted-foreground)]">#</th>
-              {columns.map((col) => (
-                <th key={col.name} className="whitespace-nowrap px-3 py-1.5 text-left">
+              {/* Index key: csv/xlsx column names can be duplicate or empty. */}
+              {columns.map((col, ci) => (
+                <th key={ci} className="whitespace-nowrap px-3 py-1.5 text-left">
                   <span className="text-[10px] font-medium text-[var(--foreground)]">{col.name}</span>
                   {col.type && <span className="ml-1.5 text-[9px] font-normal text-[var(--muted-foreground)]">{col.type}</span>}
                 </th>
@@ -80,7 +84,7 @@ export function DataTable({
       </div>
       <div className="flex h-8 shrink-0 items-center justify-end gap-2 border-t border-[var(--border)] bg-[var(--card)] px-3">
         <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
-          {t('dataPreview.range', { from, to, total: totalRows })}
+          {t('dataPreview.range', { from, to, total: hasMore ? `${totalRows}+` : totalRows })}
         </span>
         <button
           onClick={() => onPage(Math.max(offset - limit, 0))}
@@ -92,7 +96,7 @@ export function DataTable({
         </button>
         <button
           onClick={() => onPage(offset + limit)}
-          disabled={offset + limit >= totalRows}
+          disabled={!hasMore && offset + limit >= totalRows}
           title={t('dataPreview.next')}
           className="rounded p-1 text-[var(--muted-foreground)] transition-colors enabled:hover:bg-[var(--secondary)] enabled:hover:text-[var(--foreground)] disabled:opacity-40"
         >

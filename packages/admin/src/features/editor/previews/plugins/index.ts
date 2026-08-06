@@ -15,6 +15,7 @@ import { pptxPlugin } from './pptx'
 import { mediaPlugin } from './media'
 import { parquetPlugin } from './parquet'
 import { sqlitePlugin } from './sqlite'
+import { csvPlugin } from './csv'
 
 register(pdfPlugin)
 register(docxPlugin)
@@ -23,3 +24,4 @@ register(pptxPlugin)
 register(mediaPlugin)
 register(parquetPlugin)
 register(sqlitePlugin)
+register(csvPlugin)
