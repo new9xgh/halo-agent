@@ -64,7 +64,7 @@ function sanitizeFilename(name: string): string {
 
 export interface SaveMediaParams {
   workspacePath: string
-  /** Channel slug — weixin uses accountId, web uses 'web'. Determines subpath. */
+  /** Channel slug — wechat uses accountId, web uses 'web'. Determines subpath. */
   accountId: string
   /** Top-level channel directory under `.halo/`. Defaults to 'weixin' for backward compat. */
   channel?: string

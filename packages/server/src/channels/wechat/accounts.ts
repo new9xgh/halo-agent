@@ -12,7 +12,7 @@ import {
 
 export type AccessLevel = 'full' | 'workspace' | 'readonly' | 'observer'
 
-export interface WeixinAccount {
+export interface WechatAccount {
   accountId: string
   botToken: string
   baseUrl: string
@@ -29,7 +29,7 @@ export interface WeixinAccount {
 
 const CH = 'wechat'
 
-function toWeixin(a: ChannelAccount): WeixinAccount {
+function toWechat(a: ChannelAccount): WechatAccount {
   const c = a.config as Record<string, string>
   return {
     accountId: a.accountId,
@@ -51,17 +51,17 @@ export function normalizeAccountId(raw: string): string {
   return raw.replace(/[@.]/g, '-')
 }
 
-export function listAccounts(db: ChannelDb): WeixinAccount[] {
-  return sharedList(db, CH).map(toWeixin)
+export function listAccounts(db: ChannelDb): WechatAccount[] {
+  return sharedList(db, CH).map(toWechat)
 }
 
-export function listEnabledAccounts(db: ChannelDb): WeixinAccount[] {
-  return sharedListEnabled(db, CH).map(toWeixin)
+export function listEnabledAccounts(db: ChannelDb): WechatAccount[] {
+  return sharedListEnabled(db, CH).map(toWechat)
 }
 
-export function getAccount(db: ChannelDb, accountId: string): WeixinAccount | null {
+export function getAccount(db: ChannelDb, accountId: string): WechatAccount | null {
   const a = sharedGet(db, accountId)
-  return a && a.channelType === CH ? toWeixin(a) : null
+  return a && a.channelType === CH ? toWechat(a) : null
 }
 
 export function insertAccount(db: ChannelDb, params: {

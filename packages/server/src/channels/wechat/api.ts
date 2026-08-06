@@ -69,7 +69,7 @@ async function apiGet(params: { baseUrl: string; endpoint: string; timeoutMs?: n
     })
     if (t) clearTimeout(t)
     const text = await res.text()
-    if (!res.ok) throw new Error(`[weixin:${params.label}] ${res.status}: ${text}`)
+    if (!res.ok) throw new Error(`[wechat:${params.label}] ${res.status}: ${text}`)
     return text
   } catch (err) {
     if (t) clearTimeout(t)
@@ -104,7 +104,7 @@ async function apiPost(params: {
     clearTimeout(t)
     params.externalSignal?.removeEventListener('abort', onExternalAbort)
     const text = await res.text()
-    if (!res.ok) throw new Error(`[weixin:${params.label}] ${res.status}: ${text}`)
+    if (!res.ok) throw new Error(`[wechat:${params.label}] ${res.status}: ${text}`)
     return text
   } catch (err) {
     clearTimeout(t)
@@ -198,11 +198,11 @@ export async function sendMessage(params: {
       // with this bot. The gateway gates first-time outbound on a prior
       // inbound, so the user must DM the bot once before any push works.
       const hint = parsed.ret === -2 ? ' (target user has never messaged this bot — they must send any message first)' : ''
-      throw new Error(`[weixin:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
+      throw new Error(`[wechat:sendmessage] gateway error ret=${parsed.ret} errcode=${parsed.errcode} ${parsed.errmsg ?? ''}${hint}`)
     }
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith('[weixin:sendmessage]')) throw err
-    console.log(`[weixin:sendmessage] non-JSON response: ${raw.slice(0, 200)}`)
+    if (err instanceof Error && err.message.startsWith('[wechat:sendmessage]')) throw err
+    console.log(`[wechat:sendmessage] non-JSON response: ${raw.slice(0, 200)}`)
   }
 }
 

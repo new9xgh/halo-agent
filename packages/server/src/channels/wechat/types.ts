@@ -85,7 +85,7 @@ export interface MessageItem {
   is_completed?: boolean
 }
 
-export interface WeixinMessage {
+export interface WechatMessage {
   seq?: number
   message_id?: number
   from_user_id?: string
@@ -107,13 +107,13 @@ export interface GetUpdatesResp {
   ret?: number
   errcode?: number
   errmsg?: string
-  msgs?: WeixinMessage[]
+  msgs?: WechatMessage[]
   get_updates_buf?: string
   longpolling_timeout_ms?: number
 }
 
 export interface SendMessageReq {
-  msg?: WeixinMessage
+  msg?: WechatMessage
 }
 
 export interface NotifyResp {

@@ -6,7 +6,7 @@
  * Scans message text for known media path markers, renders thumbnails, and
  * pops a modal preview on click. Supported categories:
  *
- *   - Inbound WeChat media (written by weixin/handler.ts processItems):
+ *   - Inbound WeChat media (written by wechat/handler.ts processItems):
  *       [图片已保存: /abs/path]
  *       [视频已保存: /abs/path]
  *       [语音消息 0:03已保存: /abs/path, 服务端转写: ...]

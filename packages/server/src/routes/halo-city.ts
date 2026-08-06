@@ -1,3 +1,8 @@
+/**
+ * Data endpoints for the halo-city pixel visualizer (`halo-city/`) — serves
+ * the world snapshot + per-session inspector under `/api/show/*` (route paths
+ * kept stable: the halo-city frontend, docs, and PUBLIC_PATHS all point here).
+ */
 import { Hono, type Context } from 'hono'
 import fs from 'node:fs'
 import path from 'node:path'

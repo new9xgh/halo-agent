@@ -118,7 +118,7 @@ function buildFallbackUploadUrl(uploadParam: string, filekey: string): string {
 
 /**
  * POST encrypted bytes to CDN. Returns the download x-encrypted-param header
- * to be stored on the outbound WeixinMessage so the receiver can download.
+ * to be stored on the outbound WechatMessage so the receiver can download.
  */
 export async function uploadCiphertext(params: {
   plaintext: Buffer

@@ -5,7 +5,7 @@ import { create } from 'zustand'
 /**
  * "Channel data changed / please reload" signal. The Channels sidebar fires
  * this when the user clicks refresh; whichever channel page is currently
- * mounted (weixin / telegram / web) re-fetches its account list. Same shape
+ * mounted (wechat / telegram / web) re-fetches its account list. Same shape
  * as skill-bus / agent-bus.
  */
 interface ChannelBus {

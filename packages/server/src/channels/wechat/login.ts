@@ -65,10 +65,10 @@ export async function startLogin(opts?: { sessionKey?: string; force?: boolean }
       startedAt: Date.now(),
       currentBaseUrl: QR_BASE_URL,
     })
-    console.log(`[weixin] QR generated sessionKey=${sessionKey}`)
+    console.log(`[wechat] QR generated sessionKey=${sessionKey}`)
     return { qrcodeUrl: qr.qrcode_img_content, message: '使用微信扫描二维码以完成连接', sessionKey }
   } catch (err) {
-    console.log(`[weixin] startLogin error: ${err instanceof Error ? err.message : String(err)}`)
+    console.log(`[wechat] startLogin error: ${err instanceof Error ? err.message : String(err)}`)
     return { message: `生成二维码失败: ${String(err)}`, sessionKey }
   }
 }
@@ -96,7 +96,7 @@ export async function waitLogin(params: { sessionKey: string; timeoutMs?: number
         case 'scaned_but_redirect':
           if (status.redirect_host) {
             login.currentBaseUrl = `https://${status.redirect_host}`
-            console.log(`[weixin] IDC redirect to ${login.currentBaseUrl}`)
+            console.log(`[wechat] IDC redirect to ${login.currentBaseUrl}`)
           }
           break
         case 'expired':
@@ -121,7 +121,7 @@ export async function waitLogin(params: { sessionKey: string; timeoutMs?: number
             return { connected: false, message: '登录失败：服务器未返回 ilink_bot_id' }
           }
           activeLogins.delete(params.sessionKey)
-          console.log(`[weixin] Login confirmed bot_id=${status.ilink_bot_id}`)
+          console.log(`[wechat] Login confirmed bot_id=${status.ilink_bot_id}`)
           return {
             connected: true,
             botToken: status.bot_token,
@@ -132,7 +132,7 @@ export async function waitLogin(params: { sessionKey: string; timeoutMs?: number
           }
       }
     } catch (err) {
-      console.log(`[weixin] poll error: ${err instanceof Error ? err.message : String(err)}`)
+      console.log(`[wechat] poll error: ${err instanceof Error ? err.message : String(err)}`)
       activeLogins.delete(params.sessionKey)
       return { connected: false, message: `登录失败: ${String(err)}` }
     }

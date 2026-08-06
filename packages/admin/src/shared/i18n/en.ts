@@ -1,6 +1,6 @@
 export const en: Record<string, string> = {
   // ── Channels sidebar ──
-  'channels.weixin': 'WeChat',
+  'channels.wechat': 'WeChat',
 
   // ── Telegram settings ──
   'tg.title': 'Telegram Bot',

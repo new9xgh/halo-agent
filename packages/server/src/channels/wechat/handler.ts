@@ -4,7 +4,7 @@
  * Mirrors ws/handler.ts's role for the web channel: one dedicated loop per
  * enabled account pulls inbound messages and feeds them into the shared
  * SessionManager. Outbound agent events are streamed back through a
- * WeixinResponder (coalesced text chunks).
+ * WechatResponder (coalesced text chunks).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -12,10 +12,10 @@ import type { SessionManagerRegistry } from '../../agents/session-manager-regist
 import type { ChannelDb } from '../../db/channel-db.js'
 import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { getUpdates, sendMessage, notifyStart, notifyStop } from './api.js'
-import { MessageItemType, MessageState, MessageType, type WeixinMessage, type MessageItem, type SendMessageReq } from './types.js'
-import { listEnabledAccounts, getAccount, insertAccount, saveSyncBuf, updateAccount, normalizeAccountId, type WeixinAccount, type AccessLevel } from './accounts.js'
+import { MessageItemType, MessageState, MessageType, type WechatMessage, type MessageItem, type SendMessageReq } from './types.js'
+import { listEnabledAccounts, getAccount, insertAccount, saveSyncBuf, updateAccount, normalizeAccountId, type WechatAccount, type AccessLevel } from './accounts.js'
 import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { WeixinResponder } from './event-adapter.js'
+import { WechatResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
 import { isMediaPathAllowed, tempDir } from '../shared/media.js'
@@ -41,31 +41,31 @@ interface AccountRunner {
   activeOverrides: Map<string, string>
 }
 
-export interface WeixinChannel {
+export interface WechatChannel {
   startAccount(accountId: string): void
   stopAccount(accountId: string): Promise<void>
   stopAll(): Promise<void>
 }
 
-export function startWeixinChannel(deps: {
+export function startWechatChannel(deps: {
   registry: SessionManagerRegistry
   db: ChannelDb
-}): WeixinChannel {
+}): WechatChannel {
   const { registry, db } = deps
   const runners = new Map<string, AccountRunner>()
 
   function startAccount(accountId: string): void {
     if (runners.has(accountId)) {
-      console.log(`[weixin] account ${accountId} already running`)
+      console.log(`[wechat] account ${accountId} already running`)
       return
     }
     const account = getAccount(db, accountId)
     if (!account) {
-      console.log(`[weixin] account ${accountId} not found`)
+      console.log(`[wechat] account ${accountId} not found`)
       return
     }
     if (!account.enabled) {
-      console.log(`[weixin] account ${accountId} disabled, skip`)
+      console.log(`[wechat] account ${accountId} disabled, skip`)
       return
     }
     const abort = new AbortController()
@@ -79,9 +79,9 @@ export function startWeixinChannel(deps: {
       })
     }
     const promise = runAccountLoop({ registry, db, account, abort: abort.signal, unsubscribers, activeOverrides, sessionContextTokens, restartSelf, startNewAccount: startAccount })
-      .catch((err) => console.log(`[weixin] account ${accountId} loop crashed: ${String(err)}`))
+      .catch((err) => console.log(`[wechat] account ${accountId} loop crashed: ${String(err)}`))
     runners.set(accountId, { accountId, abort, promise, unsubscribers, activeOverrides })
-    console.log(`[weixin] account ${accountId} started (workspace=${account.workspacePath})`)
+    console.log(`[wechat] account ${accountId} started (workspace=${account.workspacePath})`)
   }
 
   async function stopAccount(accountId: string): Promise<void> {
@@ -98,10 +98,10 @@ export function startWeixinChannel(deps: {
       try {
         await notifyStop({ baseUrl: account.baseUrl, token: account.botToken })
       } catch (err) {
-        console.log(`[weixin] notifyStop ${accountId}: ${String(err)}`)
+        console.log(`[wechat] notifyStop ${accountId}: ${String(err)}`)
       }
     }
-    console.log(`[weixin] account ${accountId} stopped`)
+    console.log(`[wechat] account ${accountId} stopped`)
   }
 
   async function stopAll(): Promise<void> {
@@ -118,7 +118,7 @@ export function startWeixinChannel(deps: {
 async function runAccountLoop(args: {
   registry: SessionManagerRegistry
   db: ChannelDb
-  account: WeixinAccount
+  account: WechatAccount
   abort: AbortSignal
   unsubscribers: Map<string, () => void>
   activeOverrides: Map<string, string>
@@ -131,7 +131,7 @@ async function runAccountLoop(args: {
   try {
     await notifyStart({ baseUrl: account.baseUrl, token: account.botToken })
   } catch (err) {
-    console.log(`[weixin] ${account.accountId} notifyStart failed (ignored): ${String(err)}`)
+    console.log(`[wechat] ${account.accountId} notifyStart failed (ignored): ${String(err)}`)
   }
 
   let getUpdatesBuf = account.syncBuf
@@ -155,7 +155,7 @@ async function runAccountLoop(args: {
       const isErr = (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0)
       if (isErr) {
         consecutiveFailures++
-        console.log(`[weixin] ${account.accountId} getUpdates err ret=${resp.ret} errcode=${resp.errcode} ${resp.errmsg ?? ''}`)
+        console.log(`[wechat] ${account.accountId} getUpdates err ret=${resp.ret} errcode=${resp.errcode} ${resp.errmsg ?? ''}`)
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           consecutiveFailures = 0
           await sleep(BACKOFF_DELAY_MS, abort)
@@ -178,7 +178,7 @@ async function runAccountLoop(args: {
     } catch (err) {
       if (abort.aborted) return
       consecutiveFailures++
-      console.log(`[weixin] ${account.accountId} poll error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)}`)
+      console.log(`[wechat] ${account.accountId} poll error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)}`)
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         consecutiveFailures = 0
         await sleep(BACKOFF_DELAY_MS, abort)
@@ -197,7 +197,7 @@ interface ProcessedMessage {
 }
 
 async function processItems(args: {
-  account: WeixinAccount
+  account: WechatAccount
   items: MessageItem[]
 }): Promise<ProcessedMessage> {
   const { account, items } = args
@@ -227,7 +227,7 @@ async function processItems(args: {
         images.push({ data: buf.toString('base64'), mimeType })
         textParts.push(`[图片已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[weixin] ${account.accountId} image download failed: ${String(err)}`)
+        console.log(`[wechat] ${account.accountId} image download failed: ${String(err)}`)
         textParts.push(`[图片下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -249,7 +249,7 @@ async function processItems(args: {
         const playtime = voice.playtime ? `${Math.round(voice.playtime / 1000)}s` : ''
         textParts.push(`[语音消息${playtime ? ' ' + playtime : ''}已保存: ${savedPath}${extra}]`)
       } catch (err) {
-        console.log(`[weixin] ${account.accountId} voice download failed: ${String(err)}`)
+        console.log(`[wechat] ${account.accountId} voice download failed: ${String(err)}`)
         textParts.push(`[语音下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -269,7 +269,7 @@ async function processItems(args: {
         })
         textParts.push(`[视频已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[weixin] ${account.accountId} video download failed: ${String(err)}`)
+        console.log(`[wechat] ${account.accountId} video download failed: ${String(err)}`)
         textParts.push(`[视频下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -289,7 +289,7 @@ async function processItems(args: {
         })
         textParts.push(`[文件 "${fileItem.file_name ?? ''}" 已保存: ${savedPath}]`)
       } catch (err) {
-        console.log(`[weixin] ${account.accountId} file download failed: ${String(err)}`)
+        console.log(`[wechat] ${account.accountId} file download failed: ${String(err)}`)
         textParts.push(`[文件下载失败: ${err instanceof Error ? err.message : String(err)}]`)
       }
       continue
@@ -334,8 +334,8 @@ async function getOrCreateActiveSession(
 async function handleInbound(args: {
   registry: SessionManagerRegistry
   db: ChannelDb
-  account: WeixinAccount
-  msg: WeixinMessage
+  account: WechatAccount
+  msg: WechatMessage
   unsubscribers: Map<string, () => void>
   activeOverrides: Map<string, string>
   sessionContextTokens: Map<string, string>
@@ -351,30 +351,30 @@ async function handleInbound(args: {
   // If the workspace is gone, tell the user and bail.
   const currentPath = resolveAccountWorkspace(storedAccount)
   if (!currentPath) {
-    console.log(`[weixin] ${storedAccount.accountId} workspace missing (path=${storedAccount.workspacePath})`)
+    console.log(`[wechat] ${storedAccount.accountId} workspace missing (path=${storedAccount.workspacePath})`)
     await sendToUser({
       account: storedAccount, toUserId: fromUserId, contextToken: msg.context_token,
       text: t('handler.workspace_missing', lang, { path: storedAccount.workspacePath }),
     })
     return
   }
-  const account: WeixinAccount = { ...storedAccount, workspacePath: currentPath }
+  const account: WechatAccount = { ...storedAccount, workspacePath: currentPath }
 
   const { text, images } = await processItems({ account, items: msg.item_list ?? [] })
   if (!text && images.length === 0) {
-    console.log(`[weixin] ${account.accountId} empty message from ${fromUserId}, ignoring`)
+    console.log(`[wechat] ${account.accountId} empty message from ${fromUserId}, ignoring`)
     return
   }
 
   // Slash commands run before the agent and reply immediately.
   const trimmedText = text.trimStart()
-  console.log(`[weixin] ${account.accountId} msg from ${fromUserId.slice(0, 20)}: "${trimmedText.slice(0, 60)}" startsWithSlash=${trimmedText.startsWith('/')}`)
+  console.log(`[wechat] ${account.accountId} msg from ${fromUserId.slice(0, 20)}: "${trimmedText.slice(0, 60)}" startsWithSlash=${trimmedText.startsWith('/')}`)
   if (trimmedText.startsWith('/')) {
     const handled = await handleSlashCommand({
       text: text.trim(), account, db, fromUserId, contextToken: msg.context_token, restartSelf, startNewAccount,
       registry, activeOverrides, unsubscribers, sessionContextTokens, lang,
     })
-    console.log(`[weixin] ${account.accountId} slash handled=${handled}`)
+    console.log(`[wechat] ${account.accountId} slash handled=${handled}`)
     if (handled) return
   }
 
@@ -403,13 +403,13 @@ async function handleInbound(args: {
   if (msg.context_token) sessionContextTokens.set(sessionId, msg.context_token)
 
   if (!unsubscribers.has(sessionId)) {
-    const responder = new WeixinResponder({
+    const responder = new WechatResponder({
       sendText: (chunk) => sendToUser({
         account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
       }),
       sendMedia: async (filePath) => {
         if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-          console.log(`[weixin] sendMedia blocked: ${filePath} not under workspace`)
+          console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
           return
         }
         await sendMediaFile({
@@ -434,7 +434,7 @@ async function handleInbound(args: {
   const agentInput = `[channel: wechat | user: ${fromUserId}]\n${userText}`
   sm.appendUserMessage(sessionId, userText || '[仅图片]')
   sm.sendUserMessage(sessionId, agentInput, images.length > 0 ? images : undefined, sessionAccessLevel).catch((err) => {
-    console.log(`[weixin] sendUserMessage ${sessionId}: ${String(err)}`)
+    console.log(`[wechat] sendUserMessage ${sessionId}: ${String(err)}`)
   })
 }
 
@@ -442,7 +442,7 @@ async function handleInbound(args: {
 
 async function handleSlashCommand(args: {
   text: string
-  account: WeixinAccount
+  account: WechatAccount
   db: ChannelDb
   fromUserId: string
   contextToken?: string
@@ -459,13 +459,13 @@ async function handleSlashCommand(args: {
 
   function ensureListener(sm: ReturnType<SessionManagerRegistry['getOrCreate']>, sessionId: string): void {
     if (unsubscribers.has(sessionId)) return
-    const responder = new WeixinResponder({
+    const responder = new WechatResponder({
       sendText: (chunk) => sendToUser({
         account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
       }),
       sendMedia: async (filePath) => {
         if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-          console.log(`[weixin] sendMedia blocked: ${filePath} not under workspace`)
+          console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
           return
         }
         await sendMediaFile({
@@ -589,7 +589,7 @@ async function handleSlashCommand(args: {
 // ── Outbound ─────────────────────────────────────────────────────────
 
 export async function sendToUser(params: {
-  account: WeixinAccount
+  account: WechatAccount
   toUserId: string
   text: string
   contextToken?: string

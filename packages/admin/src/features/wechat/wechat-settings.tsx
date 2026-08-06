@@ -9,7 +9,7 @@ import { useProjectStore } from '@/shared/stores/project-store'
 import { useT, useI18n, LanguageSelect } from '@/shared/i18n'
 import { useChannelBus } from '@/shared/channel-bus'
 
-interface WeixinAccount {
+interface WechatAccount {
   accountId: string
   baseUrl: string
   userId: string
@@ -31,18 +31,18 @@ interface LoginIntent {
   skipConfig: boolean
 }
 
-export function WeixinSettings() {
+export function WechatSettings() {
   const t = useT()
   const { lang } = useI18n()
-  const [accounts, setAccounts] = useState<WeixinAccount[]>([])
+  const [accounts, setAccounts] = useState<WechatAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [loginIntent, setLoginIntent] = useState<LoginIntent | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
 
   const reload = useCallback(() => {
     setLoading(true)
-    api.weixin.listAccounts().then((r) => setAccounts(r.accounts)).catch((err) => {
-      console.error('[weixin] list failed:', err)
+    api.wechat.listAccounts().then((r) => setAccounts(r.accounts)).catch((err) => {
+      console.error('[wechat] list failed:', err)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -115,7 +115,7 @@ export function WeixinSettings() {
 }
 
 function AccountRow(props: {
-  account: WeixinAccount
+  account: WechatAccount
   editing: boolean
   onEdit: () => void
   onCancelEdit: () => void
@@ -144,7 +144,7 @@ function AccountRow(props: {
   async function save() {
     setBusy(true)
     try {
-      await api.weixin.updateAccount(account.accountId, { label, workspacePath, accessLevel, language })
+      await api.wechat.updateAccount(account.accountId, { label, workspacePath, accessLevel, language })
       onSaved()
     } catch (err) {
       alert(t('wx.saveFailed', { error: err instanceof Error ? err.message : String(err) }))
@@ -154,7 +154,7 @@ function AccountRow(props: {
   async function toggle() {
     setBusy(true)
     try {
-      await api.weixin.updateAccount(account.accountId, { enabled: !account.enabled })
+      await api.wechat.updateAccount(account.accountId, { enabled: !account.enabled })
       onToggled()
     } catch (err) {
       alert(t('wx.switchFailed', { error: err instanceof Error ? err.message : String(err) }))
@@ -165,7 +165,7 @@ function AccountRow(props: {
     if (!(await confirmAction(t('wx.confirmDelete', { name: account.label })))) return
     setBusy(true)
     try {
-      await api.weixin.deleteAccount(account.accountId)
+      await api.wechat.deleteAccount(account.accountId)
       onDeleted()
     } catch (err) {
       alert(t('wx.deleteFailed', { error: err instanceof Error ? err.message : String(err) }))
@@ -322,7 +322,7 @@ function LoginDialog(props: { intent: LoginIntent; onClose: () => void; onDone: 
     setMessage(t('wx.generatingQr'))
 
     try {
-      const { qrcodeUrl, sessionKey: key } = await api.weixin.startLogin()
+      const { qrcodeUrl, sessionKey: key } = await api.wechat.startLogin()
       if (cancelled.current) return
       if (!qrcodeUrl) {
         setStatus('error')
@@ -336,7 +336,7 @@ function LoginDialog(props: { intent: LoginIntent; onClose: () => void; onDone: 
       setStatus('waiting')
       setMessage(t('wx.scanPrompt'))
 
-      const result = await api.weixin.waitLogin({ sessionKey: key, workspacePath, label: label || undefined, accessLevel, language })
+      const result = await api.wechat.waitLogin({ sessionKey: key, workspacePath, label: label || undefined, accessLevel, language })
       if (cancelled.current) return
       if (result.connected) {
         setStatus('success')

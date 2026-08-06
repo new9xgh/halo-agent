@@ -1,6 +1,6 @@
 export const zh: Record<string, string> = {
   // ── Channels sidebar ──
-  'channels.weixin': '微信',
+  'channels.wechat': '微信',
 
   // ── Telegram settings ──
   'tg.title': 'Telegram Bot',

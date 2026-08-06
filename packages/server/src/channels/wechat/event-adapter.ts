@@ -20,17 +20,17 @@ import { extractMediaMessage } from '../shared/media.js'
  */
 const HARD_CHARS = 3500
 
-export interface WeixinResponderDeps {
+export interface WechatResponderDeps {
   sendText: (text: string) => Promise<void>
   sendMedia: (filePath: string) => Promise<void>
 }
 
-export class WeixinResponder {
+export class WechatResponder {
   private buffer = ''
-  private deps: WeixinResponderDeps
+  private deps: WechatResponderDeps
   private closed = false
 
-  constructor(deps: WeixinResponderDeps) {
+  constructor(deps: WechatResponderDeps) {
     this.deps = deps
   }
 
@@ -118,11 +118,11 @@ export class WeixinResponder {
 
     if (text) {
       try { await this.deps.sendText(text) }
-      catch (err) { console.log(`[weixin] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[wechat] sendText failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
     for (const p of mediaPaths) {
       try { await this.deps.sendMedia(p) }
-      catch (err) { console.log(`[weixin] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
+      catch (err) { console.log(`[wechat] sendMedia ${p} failed: ${err instanceof Error ? err.message : String(err)}`) }
     }
   }
 }

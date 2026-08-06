@@ -5,14 +5,14 @@
  * Order here is the order the sidebar renders.
  */
 import type { AdminChannelDescriptor } from './registry'
-import { weixinAdminDescriptor } from '@/features/weixin/descriptor'
+import { wechatAdminDescriptor } from '@/features/wechat/descriptor'
 import { telegramAdminDescriptor } from '@/features/telegram/descriptor'
 import { webAdminDescriptor } from '@/features/web/descriptor'
 import { slackAdminDescriptor } from '@/features/slack/descriptor'
 import { feishuAdminDescriptor } from '@/features/feishu/descriptor'
 
 export const defaultAdminChannelDescriptors: ReadonlyArray<AdminChannelDescriptor> = [
-  weixinAdminDescriptor,
+  wechatAdminDescriptor,
   telegramAdminDescriptor,
   webAdminDescriptor,
   slackAdminDescriptor,

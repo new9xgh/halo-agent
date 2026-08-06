@@ -248,7 +248,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     // The lexical check above doesn't follow symlinks — a link inside the
     // workspace pointing outside (ws/escape -> /etc) passes startsWith yet
     // readFileSync reads out of bounds. Resolve symlinks and re-check against
-    // the realpath'd root (same pattern as show.ts / assertPathAllowed).
+    // the realpath'd root (same pattern as halo-city.ts / assertPathAllowed).
     let real: string
     let realRoot: string
     try {

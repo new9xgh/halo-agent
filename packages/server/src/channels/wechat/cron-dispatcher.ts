@@ -48,7 +48,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
   // block the rest.
   for (const filePath of media?.paths ?? []) {
     if (!isMediaPathAllowed(filePath, media!.workspacePath)) {
-      console.log(`[weixin] cron sendMediaFile blocked: ${filePath} not under ${media!.workspacePath}`)
+      console.log(`[wechat] cron sendMediaFile blocked: ${filePath} not under ${media!.workspacePath}`)
       out.push({ channelType: 'wechat', accountId, chatId, ok: false, error: `media path not under job workspace: ${filePath}` })
       continue
     }
@@ -60,7 +60,7 @@ async function dispatch(accountId: string, text: string, explicitChatId?: string
       out.push({ channelType: 'wechat', accountId, chatId, ok: true })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.log(`[weixin] cron sendMediaFile ${filePath} failed: ${msg}`)
+      console.log(`[wechat] cron sendMediaFile ${filePath} failed: ${msg}`)
       out.push({ channelType: 'wechat', accountId, chatId, ok: false, error: `media ${filePath}: ${msg}` })
     }
   }

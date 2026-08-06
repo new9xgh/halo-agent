@@ -1,6 +1,8 @@
 /**
  * MantleAgent — OpenAI models (GPT-5.6) on Amazon Bedrock via the
  * `bedrock-mantle` endpoint, which speaks the **OpenAI Responses API only**.
+ * This is the runtime for the `aws-bedrock-mantle` provider (selected in
+ * model-runtime.ts; registry template: templates/models/aws-bedrock-mantle.yaml).
  *
  *   POST <endpoint>/responses
  *   Authorization: Bearer <AWS_BEARER_TOKEN_BEDROCK>

@@ -4,14 +4,14 @@ import path from 'node:path'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
-import { readonlySessionCounts, dropRoReader } from './show.js'
+import { readonlySessionCounts, dropRoReader } from './halo-city.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionInfo } from '../agents/session-manager.js'
 
 /** Shared lockout bucket with the rest of the public web/show surface. */
 const TOKEN_BUCKET = 'web-token'
 
-/** Per-workspace session cap mirrored from show.ts — the snapshot is bounded so
+/** Per-workspace session cap mirrored from halo-city.ts — the snapshot is bounded so
  *  one runaway workspace can't make a scrape O(all sessions ever). */
 const SESSIONS_PER_WS = 500
 
@@ -24,7 +24,7 @@ function family(name: string, type: 'gauge' | 'counter', help: string, samples: 
 
 /** Discover every workspace a full-access scrape covers: live SessionManagers
  *  plus every channel-account-bound path. Deduped by realpath. (Same set
- *  show.ts surfaces, kept inline — the canonical copy is tied to show's route.) */
+ *  halo-city.ts surfaces, kept inline — the canonical copy is tied to halo-city's route.) */
 function discoverWorkspaces(registry: SessionManagerRegistry): Set<string> {
   const out = new Set<string>()
   const add = (p: string) => {
@@ -40,7 +40,7 @@ function discoverWorkspaces(registry: SessionManagerRegistry): Set<string> {
 export function createMetricsRoutes(registry: SessionManagerRegistry) {
   const app = new Hono()
 
-  /** Token auth mirroring show.ts. Metrics expose cross-workspace aggregates,
+  /** Token auth mirroring halo-city.ts. Metrics expose cross-workspace aggregates,
    *  so require a full-access token — a workspace-scoped one shouldn't learn
    *  the size of the whole deployment. */
   function auth(c: Context) {
@@ -78,7 +78,7 @@ export function createMetricsRoutes(registry: SessionManagerRegistry) {
 
     for (const wsPath of discoverWorkspaces(registry)) {
       try {
-        // peek, never getOrCreate — same rule as show.ts: this is a read-only
+        // peek, never getOrCreate — same rule as halo-city.ts: this is a read-only
         // surface, and constructing a SessionManager has write side effects
         // (ensureWorkspaceHalo scaffolds .halo/, reconcileOrphansOnBoot stamps
         // stoppedAt over live sub-session rows). No live runtime in this

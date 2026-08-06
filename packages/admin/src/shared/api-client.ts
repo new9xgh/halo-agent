@@ -695,7 +695,7 @@ export const api = {
     },
   },
 
-  weixin: {
+  wechat: {
     listAccounts() {
       return request<{ accounts: Array<{
         accountId: string
@@ -708,28 +708,28 @@ export const api = {
         language: 'en' | 'zh'
         createdAt: number
         updatedAt: number
-      }> }>('/weixin/accounts')
+      }> }>('/wechat/accounts')
     },
     startLogin(sessionKey?: string) {
       return request<{ qrcodeUrl?: string; message: string; sessionKey: string }>(
-        '/weixin/login/start',
+        '/wechat/login/start',
         { method: 'POST', body: JSON.stringify({ sessionKey }) },
       )
     },
     waitLogin(params: { sessionKey: string; workspacePath: string; label?: string; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string; timeoutMs?: number }) {
       return request<{ connected: boolean; accountId?: string; message: string }>(
-        '/weixin/login/wait',
+        '/wechat/login/wait',
         { method: 'POST', body: JSON.stringify(params) },
       )
     },
     updateAccount(accountId: string, patch: { label?: string; workspacePath?: string; enabled?: boolean; accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'; language?: string }) {
-      return request<{ ok: boolean }>(`/weixin/accounts/${encodeURIComponent(accountId)}`, {
+      return request<{ ok: boolean }>(`/wechat/accounts/${encodeURIComponent(accountId)}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
       })
     },
     deleteAccount(accountId: string) {
-      return request<{ ok: boolean }>(`/weixin/accounts/${encodeURIComponent(accountId)}`, {
+      return request<{ ok: boolean }>(`/wechat/accounts/${encodeURIComponent(accountId)}`, {
         method: 'DELETE',
       })
     },

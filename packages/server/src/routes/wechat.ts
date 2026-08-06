@@ -2,18 +2,18 @@
  * WeChat bot management API.
  *
  * Flow:
- *   POST /api/weixin/login/start       — generate a QR, return url + sessionKey
- *   POST /api/weixin/login/wait        — block until user scans + confirms,
+ *   POST /api/wechat/login/start       — generate a QR, return url + sessionKey
+ *   POST /api/wechat/login/wait        — block until user scans + confirms,
  *                                        then bind to workspace and start the
  *                                        long-poll loop
- *   GET  /api/weixin/accounts          — list registered bots
- *   PATCH /api/weixin/accounts/:id     — change label/workspace/enabled
- *   DELETE /api/weixin/accounts/:id    — stop + remove
+ *   GET  /api/wechat/accounts          — list registered bots
+ *   PATCH /api/wechat/accounts/:id     — change label/workspace/enabled
+ *   DELETE /api/wechat/accounts/:id    — stop + remove
  */
 import { Hono } from 'hono'
 import path from 'node:path'
 import type { ChannelDb } from '../db/channel-db.js'
-import type { WeixinChannel } from '../channels/wechat/handler.js'
+import type { WechatChannel } from '../channels/wechat/handler.js'
 import { startLogin, waitLogin } from '../channels/wechat/login.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, normalizeAccountId, updateAccount,
@@ -21,11 +21,11 @@ import {
 import { ensureWorkspaceHalo } from '../init.js'
 import fs from 'node:fs'
 
-export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel }) {
+export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel }) {
   const { db, channel } = deps
   const app = new Hono()
 
-  app.get('/weixin/accounts', (c) => {
+  app.get('/wechat/accounts', (c) => {
     const accounts = listAccounts(db).map((acc) => {
       return {
         ...stripSecrets(acc),
@@ -36,13 +36,13 @@ export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel
     return c.json({ accounts })
   })
 
-  app.post('/weixin/login/start', async (c) => {
+  app.post('/wechat/login/start', async (c) => {
     const body = await c.req.json().catch(() => ({})) as { sessionKey?: string; force?: boolean }
     const result = await startLogin({ sessionKey: body.sessionKey, force: body.force })
     return c.json(result)
   })
 
-  app.post('/weixin/login/wait', async (c) => {
+  app.post('/wechat/login/wait', async (c) => {
     const body = await c.req.json().catch(() => ({})) as {
       sessionKey?: string
       workspacePath?: string
@@ -95,7 +95,7 @@ export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel
     return c.json({ connected: true, accountId: normalized, message: result.message })
   })
 
-  app.patch('/weixin/accounts/:id', async (c) => {
+  app.patch('/wechat/accounts/:id', async (c) => {
     const id = c.req.param('id')
     const existing = getAccount(db, id)
     if (!existing) return c.json({ error: 'not found' }, 404)
@@ -136,7 +136,7 @@ export function createWeixinRoutes(deps: { db: ChannelDb; channel: WeixinChannel
     return c.json({ ok: true })
   })
 
-  app.delete('/weixin/accounts/:id', async (c) => {
+  app.delete('/wechat/accounts/:id', async (c) => {
     const id = c.req.param('id')
     if (!getAccount(db, id)) return c.json({ error: 'not found' }, 404)
     await channel.stopAccount(id)
