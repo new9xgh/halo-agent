@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
-import { eq, desc } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { getWorkspaceDb } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
-import { sessions, agentSessions } from '../db/schema.js'
+import { agentSessions } from '../db/schema.js'
 import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta } from '../sessions/session-store.js'
 import { findLatestGoal } from '../agents/goal-mode.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -154,31 +154,7 @@ function convertRawMessages(raw: RawMessage[], agentName: string): DisplayMessag
 export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
   const app = new Hono()
 
-  // GET /sessions?projectId=xxx — list sessions for a project
-  app.get('/sessions', (c) => {
-    const projectId = c.req.query('projectId')
-    if (!projectId) {
-      return c.json({ error: 'projectId query param required' }, 400)
-    }
-
-    const { db } = getWorkspaceDb(projectId)
-    const rows = db
-      .select({
-        id: sessions.id,
-        title: sessions.title,
-        messageCount: sessions.messageCount,
-        createdAt: sessions.createdAt,
-        updatedAt: sessions.updatedAt,
-      })
-      .from(sessions)
-      .orderBy(desc(sessions.updatedAt))
-      .all()
-
-    return c.json({ sessions: rows })
-  })
-
   // ── Session logs (db-driven listing, jsonl per-row enrichment) ──
-  //   Must come before /sessions/:id so '/logs' isn't captured as `:id`.
 
   // GET /sessions/logs?projectId=&cursor=&limit=&includeArchived=&parentId=
   //   - parentId omitted   → top-level only (parent_id IS NULL)
@@ -367,48 +343,6 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
         maxRounds: latest.state.caps.maxRounds,
       },
     })
-  })
-
-  // ── Regular sessions (SQLite-based) ──
-
-  // GET /sessions/:id?projectId=xxx — get full session with messages
-  app.get('/sessions/:id', (c) => {
-    const id = c.req.param('id')
-    const projectId = c.req.query('projectId')
-    if (!projectId) return c.json({ error: 'projectId required' }, 400)
-
-    const { db } = getWorkspaceDb(projectId)
-    const row = db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .get()
-
-    if (!row) {
-      return c.json({ error: 'Session not found' }, 404)
-    }
-
-    return c.json({
-      id: row.id,
-      title: row.title,
-      messages: JSON.parse(row.messages),
-      messageCount: row.messageCount,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    })
-  })
-
-  // DELETE /sessions/:id?projectId=xxx — delete a session
-  app.delete('/sessions/:id', (c) => {
-    const id = c.req.param('id')
-    const projectId = c.req.query('projectId')
-    if (!projectId) return c.json({ error: 'projectId required' }, 400)
-
-    const { db } = getWorkspaceDb(projectId)
-    db.delete(sessions)
-      .where(eq(sessions.id, id))
-      .run()
-    return c.json({ ok: true })
   })
 
   return app

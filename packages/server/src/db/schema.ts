@@ -1,14 +1,5 @@
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
 
-export const sessions = sqliteTable('sessions', {
-  id: text('id').primaryKey(),
-  title: text('title').notNull().default(''),
-  messages: text('messages').notNull(),
-  messageCount: integer('message_count').notNull().default(0),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
-})
-
 export const agentSessions = sqliteTable('agent_sessions', {
   id: text('id').primaryKey(),
   parentId: text('parent_id'),
