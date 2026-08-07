@@ -17,8 +17,6 @@ import path from 'node:path'
 import { WebSocket } from 'ws'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import type { AgentSessionEvent } from '../../agents/agent-events.js'
-import type { SessionManager } from '../../agents/session-manager.js'
 import { listEnabledAccounts, getAccount } from './accounts.js'
 import type { SlackAccount, SlackMessageEvent, SlackAppMentionEvent, SlackFile, SlackSocketEnvelope } from './types.js'
 import { SlackResponder } from './event-adapter.js'
@@ -26,13 +24,12 @@ import { downloadFile, postMessage, openSocketModeConnection, uploadFile } from 
 import { formatForSlack } from '../shared/markdown.js'
 import { isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
-import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { builtinCommandNames } from '../../commands/index.js'
 import { t, getLang } from '../shared/i18n.js'
-import { busyHint } from '../shared/busy-hint.js'
 
 /** Sandbox guard for outbound file references — only paths under the
  *  account's own workspace are allowed (or the temp dir, for assistant-
@@ -90,6 +87,13 @@ export interface SlackChannel {
   stopAll(): Promise<void>
 }
 
+/** Reply destination for a session, refreshed on every inbound message.
+ *  `replyTs` is the thread to post into (undefined in DMs → flat reply). */
+interface SlackRoute {
+  channelId: string
+  replyTs: string | undefined
+}
+
 interface AccountState {
   /** Open Socket Mode connection. Replaced on reconnect. */
   ws: WebSocket | null
@@ -99,24 +103,13 @@ interface AccountState {
   reconnectDelay: number
   /** Pending reconnect timer if any. */
   reconnectTimer: ReturnType<typeof setTimeout> | null
-  /** key = `${channel}:${rootTs}` (the session key). Each entry is the
-   *  unsubscribe fn for that thread's SessionManager event listener. */
-  unsubscribers: Map<string, () => void>
+  /** Session event-listener + reply-route bookkeeping (session id =
+   *  per-thread, see pickSessionKey). */
+  bridge: InboundBridge<SlackRoute>
   /** activeOverrides keyed per-user, same shape the shared command
    *  dispatcher uses. Lets `/new` etc. swap the active session without
    *  rewriting the tag→session map. */
   activeOverrides: Map<string, string>
-}
-
-function newAccountState(): AccountState {
-  return {
-    ws: null,
-    stopped: false,
-    reconnectDelay: 1000,
-    reconnectTimer: null,
-    unsubscribers: new Map(),
-    activeOverrides: new Map(),
-  }
 }
 
 /**
@@ -229,10 +222,71 @@ export function startSlackChannel(deps: {
   const { registry, db } = deps
   const states = new Map<string, AccountState>()
 
+  function newAccountState(accountId: string): AccountState {
+    // The responder reads the account row at creation time (equivalent to the
+    // old per-message closure capture: ensureListener runs inside
+    // handleInbound, right after the account was fetched and enabled-checked)
+    // and the reply route lazily at send time — so a listener registered once
+    // follows the conversation to wherever the LATEST message came from
+    // (audit A-M2).
+    const bridge: InboundBridge<SlackRoute> = new InboundBridge({
+      channel: 'slack',
+      makeResponder: (sessionId) => {
+        const account = getAccount(db, accountId)
+        return new SlackResponder({
+          sendText: async (chunk) => {
+            const route = bridge.getRoute(sessionId)
+            if (!account || !route) return
+            await postMessage({ botToken: account.botToken, channel: route.channelId, threadTs: route.replyTs, text: chunk })
+          },
+          sendMedia: async (filePath) => {
+            const route = bridge.getRoute(sessionId)
+            if (!account || !route) return
+            // Sandbox: only files inside the bound workspace (or /tmp for
+            // freshly-generated artifacts) are allowed. Without this guard
+            // a compromised agent could exfiltrate arbitrary host paths.
+            const resolved = path.resolve(filePath)
+            if (!isMediaPathAllowed(resolved, account.workspacePath)) {
+              console.log(`[slack] sendMedia blocked: ${filePath} not under workspace`)
+              return
+            }
+            try {
+              await uploadFile({
+                botToken: account.botToken,
+                channel: route.channelId,
+                threadTs: route.replyTs,
+                filePath: resolved,
+              })
+            } catch (err) {
+              console.log(`[slack] uploadFile ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
+              // Surface the failure to the user as text so they don't sit
+              // wondering why no attachment showed up.
+              await postMessage({
+                botToken: account.botToken, channel: route.channelId, threadTs: route.replyTs,
+                text: t('handler.upload_failed', getLang(account), {
+                  name: path.basename(filePath),
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              }).catch(() => { /* ignore */ })
+            }
+          },
+        })
+      },
+    })
+    return {
+      ws: null,
+      stopped: false,
+      reconnectDelay: 1000,
+      reconnectTimer: null,
+      bridge,
+      activeOverrides: new Map(),
+    }
+  }
+
   function ensureState(accountId: string): AccountState {
     let st = states.get(accountId)
     if (!st) {
-      st = newAccountState()
+      st = newAccountState(accountId)
       states.set(accountId, st)
     }
     return st
@@ -311,8 +365,7 @@ export function startSlackChannel(deps: {
       clearTimeout(st.reconnectTimer)
       st.reconnectTimer = null
     }
-    for (const unsub of st.unsubscribers.values()) unsub()
-    st.unsubscribers.clear()
+    st.bridge.closeAll()
     if (st.ws) {
       try { st.ws.close() } catch { /* ignore */ }
       st.ws = null
@@ -400,10 +453,6 @@ async function handleInbound(args: {
   }
 
   const { channelId, rootTs, replyTs } = pickSessionKey(event)
-  // Cron jobs created via this thread should target this channel/thread;
-  // remember it on the account row so dispatch finds it without manual
-  // configuration.
-  rememberLastActiveChat(db, account.accountId, `${channelId}:${rootTs}`)
 
   const cleanText = stripMention(event.text ?? '', account.botUserId)
 
@@ -423,7 +472,11 @@ async function handleInbound(args: {
     const normalized = '/' + cleanText.slice(1)
     const ctx = buildCmdCtx({ registry, account, userId, channelId, rootTs, state })
     if (ctx) {
-      const result = await dispatchCommand(ctx, normalized.split(/\s+/)[0]!, normalized.split(/\s+/).slice(1).join(' '), { channelName: 'slack' })
+      const result = await dispatchChannelCommand(ctx, normalized.split(/\s+/)[0]!, normalized.split(/\s+/).slice(1).join(' '), {
+        bridge: state.bridge,
+        route: { channelId, replyTs },
+        channelName: 'slack',
+      })
       if (result) {
         // Rewrite set = builtins + the active session's skill slash commands
         // (so skill slash commands in /help also become `!…`) + Slack
@@ -453,71 +506,32 @@ async function handleInbound(args: {
     return
   }
 
-  const sm = registry.getOrCreate(workspace)
-  const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
-  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
-  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateSessionForThread({ sm, channelId, rootTs, userId, accessLevel, state, workspacePath: workspace }))
-
-  // Hint only — the message is delivered either way (sendUserMessage queues a
-  // compacting/busy session).
-  const hint = busyHint(sm, sessionId, getLang(account))
-  if (hint) {
-    await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: hint })
-  }
-
-  // Wire the thread → SessionManager event bridge once. The same
-  // SlackResponder handles every subsequent stream chunk in this
-  // thread until the session is idle for long enough that we tear
-  // it down (the close path runs on stopAccount; in steady state the
-  // listener stays attached for the lifetime of the thread).
-  if (!state.unsubscribers.has(sessionId)) {
-    const responder = new SlackResponder({
-      sendText: async (chunk) => {
-        await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: chunk })
-      },
-      sendMedia: async (filePath) => {
-        // Sandbox: only files inside the bound workspace (or /tmp for
-        // freshly-generated artifacts) are allowed. Without this guard
-        // a compromised agent could exfiltrate arbitrary host paths.
-        const resolved = path.resolve(filePath)
-        if (!isMediaPathAllowed(resolved, workspace)) {
-          console.log(`[slack] sendMedia blocked: ${filePath} not under workspace`)
-          return
-        }
-        try {
-          await uploadFile({
-            botToken: account.botToken,
-            channel: channelId,
-            threadTs: replyTs,
-            filePath: resolved,
-          })
-        } catch (err) {
-          console.log(`[slack] uploadFile ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
-          // Surface the failure to the user as text so they don't sit
-          // wondering why no attachment showed up.
-          await postMessage({
-            botToken: account.botToken, channel: channelId, threadTs: replyTs,
-            text: t('handler.upload_failed', getLang(account), {
-              name: path.basename(filePath),
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          }).catch(() => { /* ignore */ })
-        }
-      },
-    })
-    const listener = (e: AgentSessionEvent): void => responder.handle(e)
-    const unsubscribe = sm.registerEventListener(sessionId, listener)
-    state.unsubscribers.set(sessionId, () => {
-      responder.close()
-      unsubscribe()
-    })
-  }
-
-  const agentInput = `[channel: slack | user: ${userId} | thread: ${rootTs}]\n${composedText}`
-  sm.appendUserMessage(sessionId, composedText)
-  sm.sendUserMessage(sessionId, agentInput, fileResult.images.length > 0 ? fileResult.images : undefined, accessLevel).catch((err) => {
-    console.log(`[slack] sendUserMessage ${sessionId}: ${String(err)}`)
+  await deliverInbound({
+    sm: registry.getOrCreate(workspace),
+    db,
+    accountId: account.accountId,
+    bridge: state.bridge,
+    // Cron jobs created via this thread should target this channel/thread;
+    // remember it on the account row so dispatch finds it without manual
+    // configuration.
+    chatKey: `${channelId}:${rootTs}`,
+    tagKey: `${userId}@${channelId}:${rootTs}`,
+    sessionPrefix: buildSessionPrefixForThread(channelId, rootTs),
+    activeOverrides: state.activeOverrides,
+    accountAccessLevel: account.accessLevel,
+    workspacePath: workspace,
+    sessionLabel: `Slack: ${channelId}/${rootTs}`,
+    setOverrideOnCreate: true,
+    route: { channelId, replyTs },
+    lang: getLang(account),
+    sendHint: async (hint) => {
+      await postMessage({ botToken: account.botToken, channel: channelId, threadTs: replyTs, text: hint })
+    },
+    uiText: composedText,
+    agentText: composedText,
+    userTag: userId,
+    threadTag: rootTs,
+    images: fileResult.images.length > 0 ? fileResult.images : undefined,
   })
 }
 
@@ -547,27 +561,4 @@ function buildCmdCtx(args: {
       chatId: `${channelId}:${rootTs}`,
     },
   }
-}
-
-async function getOrCreateSessionForThread(args: {
-  sm: SessionManager
-  channelId: string
-  rootTs: string
-  userId: string
-  accessLevel: 'readonly' | 'workspace' | null
-  state: AccountState
-  workspacePath: string
-}): Promise<string> {
-  const { sm, channelId, rootTs, userId, accessLevel, state, workspacePath } = args
-  const prefix = buildSessionPrefixForThread(channelId, rootTs)
-  const tagKey = `${userId}@${channelId}:${rootTs}`
-  const existing = sharedFindActive(sm, tagKey, prefix, state.activeOverrides, accessLevel === null ? 'full' : accessLevel)
-  if (existing) return existing
-  const newId = `${prefix}${Date.now().toString(36)}`
-  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
-  // agentName omitted → createSession resolves the real agent.yaml `name`.
-  const agentId = await resolveDefaultAgentId(sm, workspacePath)
-  await sm.createSession(agentId, null, `Slack: ${channelId}/${rootTs}`, undefined, newId, undefined, accessLevel)
-  state.activeOverrides.set(tagKey, newId)
-  return newId
 }

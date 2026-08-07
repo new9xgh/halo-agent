@@ -1,24 +1,29 @@
 import { Bot, InputFile } from 'grammy'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { listEnabledAccounts, getAccount, updateAccount } from './accounts.js'
 import type { TelegramAccount } from './types.js'
 import { TelegramResponder } from './event-adapter.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
-import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { type CommandContext } from '../shared/commands.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
-import { busyHint } from '../shared/busy-hint.js'
 import { builtinCommandNames } from '../../commands/index.js'
+
+/** Reply destination for a session, refreshed on every inbound message so a
+ *  session driven from a new chat (or switched to another user by a
+ *  full-access `/session switch`) replies to the CURRENT chat. */
+interface TgRoute {
+  chatId: number | string
+}
 
 interface AccountRunner {
   accountId: string
   bot: InstanceType<typeof Bot>
   abort: AbortController
   promise: Promise<void>
-  unsubscribers: Map<string, () => void>
+  bridge: InboundBridge<TgRoute>
   activeOverrides: Map<string, string>
 }
 
@@ -128,7 +133,6 @@ export function startTelegramChannel(deps: {
     }
 
     const abort = new AbortController()
-    const unsubscribers = new Map<string, () => void>()
     const activeOverrides = new Map<string, string>()
 
     const restartSelf = (): void => {
@@ -137,9 +141,35 @@ export function startTelegramChannel(deps: {
       })
     }
     const bot = new Bot(account.botToken)
-    const promise = runBot({ registry, db, account, bot, abort, unsubscribers, activeOverrides, restartSelf })
+    const bridge: InboundBridge<TgRoute> = new InboundBridge({
+      channel: 'telegram',
+      makeResponder: (sessionId) => new TelegramResponder({
+        sendText: async (chunk) => {
+          const route = bridge.getRoute(sessionId)
+          if (!route) return
+          await bot.api.sendMessage(route.chatId, chunk, { parse_mode: undefined })
+        },
+        sendMedia: async (filePath) => {
+          const route = bridge.getRoute(sessionId)
+          if (!route) return
+          if (!isMediaPathAllowed(filePath, account.workspacePath)) {
+            console.log(`[telegram] sendMedia blocked: ${filePath} not under workspace`)
+            return
+          }
+          const kind = inferMediaKind(filePath)
+          const file = new InputFile(filePath)
+          switch (kind) {
+            case 'photo': await bot.api.sendPhoto(route.chatId, file); break
+            case 'video': await bot.api.sendVideo(route.chatId, file); break
+            case 'voice': await bot.api.sendVoice(route.chatId, file); break
+            case 'document': await bot.api.sendDocument(route.chatId, file); break
+          }
+        },
+      }),
+    })
+    const promise = runBot({ registry, db, account, bot, abort, bridge, activeOverrides, restartSelf })
       .catch((err) => console.log(`[telegram] account ${accountId} bot crashed: ${String(err)}`))
-    runners.set(accountId, { accountId, bot, abort, promise, unsubscribers, activeOverrides })
+    runners.set(accountId, { accountId, bot, abort, promise, bridge, activeOverrides })
     console.log(`[telegram] account ${accountId} started (@${account.botUsername}, workspace=${account.workspacePath})`)
   }
 
@@ -147,8 +177,7 @@ export function startTelegramChannel(deps: {
     const runner = runners.get(accountId)
     if (!runner) return
     runner.abort.abort()
-    for (const unsub of runner.unsubscribers.values()) unsub()
-    runner.unsubscribers.clear()
+    runner.bridge.closeAll()
     runner.bot.stop()
     runners.delete(accountId)
     await runner.promise.catch(() => {})
@@ -170,11 +199,11 @@ async function runBot(args: {
   account: TelegramAccount
   bot: InstanceType<typeof Bot>
   abort: AbortController
-  unsubscribers: Map<string, () => void>
+  bridge: InboundBridge<TgRoute>
   activeOverrides: Map<string, string>
   restartSelf: () => void
 }): Promise<void> {
-  const { registry, db, account, bot, unsubscribers, activeOverrides, restartSelf } = args
+  const { registry, db, account, bot, bridge, activeOverrides, restartSelf } = args
 
   bot.catch((err) => {
     console.log(`[telegram] ${account.accountId} bot error: ${String(err)}`)
@@ -202,6 +231,17 @@ async function runBot(args: {
     }
   }
 
+  /** Route slash-command text through the shared dispatcher. Skill commands
+   *  kick an agent turn — dispatchChannelCommand wires the responder
+   *  listener so the reply isn't dropped (audit A-M5). */
+  async function runCommand(cmdCtx: CommandContext, command: string, arg: string, chatId: number | string | undefined) {
+    return dispatchChannelCommand(cmdCtx, command, arg, {
+      bridge,
+      route: chatId !== undefined ? { chatId } : undefined,
+      channelName: 'telegram',
+    })
+  }
+
   bot.command('start', async (ctx) => {
     await ctx.reply(t('handler.start_greeting', lang))
   })
@@ -212,7 +252,7 @@ async function runBot(args: {
     bot.command(cmd, async (ctx) => {
       const cmdCtx = buildCmdCtx(ctx.from?.id ?? 0, ctx.chat?.id)
       if (!cmdCtx) { await ctx.reply(t('handler.workspace_gone', lang)); return }
-      const result = await dispatchCommand(cmdCtx, `/${cmd}`, ctx.match?.trim() ?? '', { channelName: 'telegram' })
+      const result = await runCommand(cmdCtx, `/${cmd}`, ctx.match?.trim() ?? '', ctx.chat?.id)
       if (!result) return
       if (result.workspace) {
         updateAccount(db, account.accountId, { workspacePath: result.workspace.path })
@@ -249,7 +289,7 @@ async function runBot(args: {
         const space = text.indexOf(' ')
         const command = space === -1 ? text : text.slice(0, space)
         const arg = space === -1 ? '' : text.slice(space + 1).trim()
-        const result = await dispatchCommand(cmdCtx, command, arg, { channelName: 'telegram' })
+        const result = await runCommand(cmdCtx, command, arg, ctx.chat?.id)
         if (result) {
           if (result.workspace) {
             updateAccount(db, account.accountId, { workspacePath: result.workspace.path })
@@ -261,7 +301,7 @@ async function runBot(args: {
         // result null → not a known command; fall through to treat as chat.
       }
     }
-    await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text, lang, unsubscribers, activeOverrides })
+    await handleUserMessage({ registry, db, account, ctx, userId, workspace, text, lang, bridge, activeOverrides })
   })
 
   // Handle photo messages
@@ -293,7 +333,7 @@ async function runBot(args: {
       console.log(`[telegram] ${account.accountId} image download failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     const text = caption ? `${caption}\n${imageNote}` : imageNote
-    await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text, images, lang, unsubscribers, activeOverrides })
+    await handleUserMessage({ registry, db, account, ctx, userId, workspace, text, images, lang, bridge, activeOverrides })
   })
 
   // Handle document messages
@@ -319,7 +359,7 @@ async function runBot(args: {
       if (saved) fileNote = `[文件 "${doc.file_name ?? 'unknown'}" 已保存: ${saved.savedPath}]`
     }
     const text = caption ? `${caption}\n${fileNote}` : fileNote
-    await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text, lang, unsubscribers, activeOverrides })
+    await handleUserMessage({ registry, db, account, ctx, userId, workspace, text, lang, bridge, activeOverrides })
   })
 
   // Handle voice messages
@@ -342,7 +382,7 @@ async function runBot(args: {
       return
     }
     if (saved) voiceNote = `[语音 ${duration}s 已保存: ${saved.savedPath}]`
-    await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text: voiceNote, lang, unsubscribers, activeOverrides })
+    await handleUserMessage({ registry, db, account, ctx, userId, workspace, text: voiceNote, lang, bridge, activeOverrides })
   })
 
   // Handle video note (round video)
@@ -364,7 +404,7 @@ async function runBot(args: {
       return
     }
     if (saved) vnNote = `[视频消息 ${vn.duration}s 已保存: ${saved.savedPath}]`
-    await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text: vnNote, lang, unsubscribers, activeOverrides })
+    await handleUserMessage({ registry, db, account, ctx, userId, workspace, text: vnNote, lang, bridge, activeOverrides })
   })
 
   // Start polling
@@ -379,92 +419,36 @@ async function handleUserMessage(args: {
   registry: SessionManagerRegistry
   db: ChannelDb
   account: TelegramAccount
-  bot: InstanceType<typeof Bot>
   ctx: any
   userId: number
   workspace: string
   text: string
   images?: Array<{ data: string; mimeType: string }>
   lang: Lang
-  unsubscribers: Map<string, () => void>
+  bridge: InboundBridge<TgRoute>
   activeOverrides: Map<string, string>
 }): Promise<void> {
-  const { registry, db, account, bot, ctx, userId, workspace, text, images, lang, unsubscribers, activeOverrides } = args
+  const { registry, db, account, ctx, userId, workspace, text, images, lang, bridge, activeOverrides } = args
   const chatId = ctx.chat.id
 
-  // Cache the most-recent chat id on the account so cron jobs targeting this
-  // telegram account know where to deliver. Cheap config patch — only writes
-  // when the value actually changed (compare against existing field).
-  rememberLastActiveChat(db, account.accountId, String(chatId))
-
-  const sm = registry.getOrCreate(workspace)
-  const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
-  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
-  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, userId, activeOverrides, accessLevel, workspace))
-
-  // Hint only — the message is delivered either way (sendUserMessage queues a
-  // compacting/busy session).
-  const hint = busyHint(sm, sessionId, lang)
-  if (hint) await ctx.reply(hint)
-
-  if (!unsubscribers.has(sessionId)) {
-    const responder = new TelegramResponder({
-      sendText: async (chunk) => {
-        await bot.api.sendMessage(chatId, chunk, { parse_mode: undefined })
-      },
-      sendMedia: async (filePath) => {
-        if (!isMediaPathAllowed(filePath, workspace)) {
-          console.log(`[telegram] sendMedia blocked: ${filePath} not under workspace`)
-          return
-        }
-        const kind = inferMediaKind(filePath)
-        const file = new InputFile(filePath)
-        switch (kind) {
-          case 'photo': await bot.api.sendPhoto(chatId, file); break
-          case 'video': await bot.api.sendVideo(chatId, file); break
-          case 'voice': await bot.api.sendVoice(chatId, file); break
-          case 'document': await bot.api.sendDocument(chatId, file); break
-        }
-      },
-    })
-    const listener = (event: AgentSessionEvent): void => responder.handle(event)
-    const unsubscribe = sm.registerEventListener(sessionId, listener)
-    unsubscribers.set(sessionId, () => {
-      responder.close()
-      unsubscribe()
-    })
-  }
-
-  const agentInput = `[channel: telegram | user: ${userId}]\n${text}`
-  sm.appendUserMessage(sessionId, text)
-  sm.sendUserMessage(sessionId, agentInput, images?.length ? images : undefined, accessLevel).catch((err) => {
-    console.log(`[telegram] sendUserMessage ${sessionId}: ${String(err)}`)
+  await deliverInbound({
+    sm: registry.getOrCreate(workspace),
+    db,
+    accountId: account.accountId,
+    bridge,
+    chatKey: String(chatId),
+    tagKey: String(userId),
+    sessionPrefix: buildTgSessionPrefix(userId),
+    activeOverrides,
+    accountAccessLevel: account.accessLevel,
+    workspacePath: workspace,
+    sessionLabel: `Telegram: ${userId}`,
+    route: { chatId },
+    lang,
+    sendHint: async (hint) => { await ctx.reply(hint) },
+    uiText: text,
+    agentText: text,
+    userTag: String(userId),
+    images,
   })
-}
-
-function findActiveTgSession(
-  sm: import('../../agents/session-manager.js').SessionManager,
-  userId: number,
-  activeOverrides: Map<string, string>,
-  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer',
-): string | null {
-  return sharedFindActive(sm, String(userId), buildTgSessionPrefix(userId), activeOverrides, accessLevel)
-}
-
-async function getOrCreateActiveSession(
-  sm: import('../../agents/session-manager.js').SessionManager,
-  userId: number,
-  activeOverrides: Map<string, string>,
-  accessLevel: 'readonly' | 'workspace' | null,
-  workspacePath: string,
-): Promise<string> {
-  const existing = findActiveTgSession(sm, userId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
-  if (existing) return existing
-  const newId = `${buildTgSessionPrefix(userId)}${Date.now().toString(36)}`
-  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
-  // agentName omitted → createSession resolves the real agent.yaml `name`.
-  const agentId = await resolveDefaultAgentId(sm, workspacePath)
-  await sm.createSession(agentId, null, `Telegram: ${userId}`, undefined, newId, undefined, accessLevel)
-  return newId
 }

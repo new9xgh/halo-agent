@@ -22,8 +22,6 @@ import path from 'node:path'
 import * as Lark from '@larksuiteoapi/node-sdk'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import type { AgentSessionEvent } from '../../agents/agent-events.js'
-import type { SessionManager } from '../../agents/session-manager.js'
 import { listEnabledAccounts, getAccount } from './accounts.js'
 import type { FeishuAccount, FeishuMessageEvent, FeishuTextContent } from './types.js'
 import { FeishuResponder } from './event-adapter.js'
@@ -31,17 +29,24 @@ import { downloadResource, sendMessage, replyMessage, uploadImage, uploadFile } 
 import { formatForFeishu } from '../shared/markdown.js'
 import { classifyMedia, isMediaPathAllowed } from '../shared/media.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
-import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
-import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { resolveAccountWorkspace } from '../shared/accounts.js'
+import { type CommandContext } from '../shared/commands.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand } from '../shared/inbound.js'
 import { sessionPrefix as buildSessionPrefix } from '../shared/session-prefix.js'
 import { t, getLang } from '../shared/i18n.js'
-import { busyHint } from '../shared/busy-hint.js'
 
 export interface FeishuChannel {
   startAccount(accountId: string): void
   stopAccount(accountId: string): Promise<void>
   stopAll(): Promise<void>
+}
+
+/** Reply destination for a session, refreshed on every inbound message so
+ *  replies land on the LATEST message's thread (group) / chat (p2p). */
+interface FeishuRoute {
+  inboundMessageId: string
+  isP2P: boolean
+  chatId: string
 }
 
 interface AccountState {
@@ -50,17 +55,10 @@ interface AccountState {
    *  handle so we can close it on stopAccount. */
   wsClient: Lark.WSClient | null
   stopped: boolean
-  unsubscribers: Map<string, () => void>
+  /** Session event-listener + reply-route bookkeeping (session id =
+   *  per-thread, see pickSessionKey). */
+  bridge: InboundBridge<FeishuRoute>
   activeOverrides: Map<string, string>
-}
-
-function newAccountState(): AccountState {
-  return {
-    wsClient: null,
-    stopped: false,
-    unsubscribers: new Map(),
-    activeOverrides: new Map(),
-  }
 }
 
 function buildSessionPrefixForThread(chatId: string, rootId: string): string {
@@ -205,10 +203,55 @@ export function startFeishuChannel(deps: {
   const { registry, db } = deps
   const states = new Map<string, AccountState>()
 
+  function newAccountState(accountId: string): AccountState {
+    // Account row read at responder-creation time, reply route read lazily at
+    // send time — same rationale as the slack handler (audit A-M2).
+    const bridge: InboundBridge<FeishuRoute> = new InboundBridge({
+      channel: 'feishu',
+      makeResponder: (sessionId) => {
+        const account = getAccount(db, accountId)
+        return new FeishuResponder({
+          sendText: async (chunk) => {
+            const route = bridge.getRoute(sessionId)
+            if (!account || !route) return
+            await replyToInbound({ account, ...route, text: chunk })
+          },
+          sendMedia: async (filePath) => {
+            const route = bridge.getRoute(sessionId)
+            if (!account || !route) return
+            const resolved = path.resolve(filePath)
+            if (!isMediaPathAllowed(resolved, account.workspacePath)) {
+              console.log(`[feishu] sendMedia blocked: ${filePath} not under workspace`)
+              return
+            }
+            try {
+              await sendFeishuMedia({ account, ...route, filePath: resolved })
+            } catch (err) {
+              console.log(`[feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
+              await replyToInbound({
+                account, ...route,
+                text: t('handler.upload_failed', getLang(account), {
+                  name: path.basename(filePath),
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              }).catch(() => { /* ignore */ })
+            }
+          },
+        })
+      },
+    })
+    return {
+      wsClient: null,
+      stopped: false,
+      bridge,
+      activeOverrides: new Map(),
+    }
+  }
+
   function ensureState(accountId: string): AccountState {
     let st = states.get(accountId)
     if (!st) {
-      st = newAccountState()
+      st = newAccountState(accountId)
       states.set(accountId, st)
     }
     return st
@@ -277,8 +320,7 @@ export function startFeishuChannel(deps: {
     const st = states.get(accountId)
     if (!st) return
     st.stopped = true
-    for (const unsub of st.unsubscribers.values()) unsub()
-    st.unsubscribers.clear()
+    st.bridge.closeAll()
     if (st.wsClient) {
       try { (st.wsClient as unknown as { close?: () => void }).close?.() } catch { /* ignore */ }
       st.wsClient = null
@@ -313,8 +355,6 @@ async function handleInbound(args: {
   const { chatId, rootId, inboundMessageId } = pickSessionKey(event)
   const isP2P = event.message.chat_type === 'p2p'
 
-  rememberLastActiveChat(db, account.accountId, `${chatId}:${rootId}`)
-
   const parsed = parseContent(event)
   const cleanText = stripMention(parsed.text, account.botOpenId)
 
@@ -325,7 +365,11 @@ async function handleInbound(args: {
   if (isP2P && cleanText.startsWith('/')) {
     const ctx = buildCmdCtx({ registry, account, userId, chatId, rootId, state })
     if (ctx) {
-      const result = await dispatchCommand(ctx, cleanText.split(/\s+/)[0]!, cleanText.split(/\s+/).slice(1).join(' '), { channelName: 'feishu' })
+      const result = await dispatchChannelCommand(ctx, cleanText.split(/\s+/)[0]!, cleanText.split(/\s+/).slice(1).join(' '), {
+        bridge: state.bridge,
+        route: { inboundMessageId, isP2P, chatId },
+        channelName: 'feishu',
+      })
       if (result) {
         await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: formatForFeishu(result.text) })
         return
@@ -344,58 +388,29 @@ async function handleInbound(args: {
   const composedText = [cleanText, ...imgResult.notes, ...fileNotes].filter(Boolean).join('\n')
   if (!composedText && imgResult.images.length === 0) return
 
-  const sm = registry.getOrCreate(workspace)
-  const accessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
-  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
-  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateSessionForThread({ sm, chatId, rootId, userId, accessLevel, state, workspacePath: workspace }))
-
-  // Hint only — the message is delivered either way (sendUserMessage queues a
-  // compacting/busy session).
-  const hint = busyHint(sm, sessionId, getLang(account))
-  if (hint) {
-    await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: hint })
-  }
-
-  if (!state.unsubscribers.has(sessionId)) {
-    const responder = new FeishuResponder({
-      sendText: async (chunk) => {
-        await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: chunk })
-      },
-      sendMedia: async (filePath) => {
-        const resolved = path.resolve(filePath)
-        if (!isMediaPathAllowed(resolved, workspace)) {
-          console.log(`[feishu] sendMedia blocked: ${filePath} not under workspace`)
-          return
-        }
-        try {
-          await sendFeishuMedia({
-            account, inboundMessageId, isP2P, chatId, filePath: resolved,
-          })
-        } catch (err) {
-          console.log(`[feishu] sendMedia ${filePath} failed: ${err instanceof Error ? err.message : String(err)}`)
-          await replyToInbound({
-            account, inboundMessageId, isP2P, chatId,
-            text: t('handler.upload_failed', getLang(account), {
-              name: path.basename(filePath),
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          }).catch(() => { /* ignore */ })
-        }
-      },
-    })
-    const listener = (e: AgentSessionEvent): void => responder.handle(e)
-    const unsubscribe = sm.registerEventListener(sessionId, listener)
-    state.unsubscribers.set(sessionId, () => {
-      responder.close()
-      unsubscribe()
-    })
-  }
-
-  const agentInput = `[channel: feishu | user: ${userId} | thread: ${rootId}]\n${composedText}`
-  sm.appendUserMessage(sessionId, composedText)
-  sm.sendUserMessage(sessionId, agentInput, imgResult.images.length > 0 ? imgResult.images : undefined, accessLevel).catch((err) => {
-    console.log(`[feishu] sendUserMessage ${sessionId}: ${String(err)}`)
+  await deliverInbound({
+    sm: registry.getOrCreate(workspace),
+    db,
+    accountId: account.accountId,
+    bridge: state.bridge,
+    chatKey: `${chatId}:${rootId}`,
+    tagKey: `${userId}@${chatId}:${rootId}`,
+    sessionPrefix: buildSessionPrefixForThread(chatId, rootId),
+    activeOverrides: state.activeOverrides,
+    accountAccessLevel: account.accessLevel,
+    workspacePath: workspace,
+    sessionLabel: `Feishu: ${chatId}/${rootId}`,
+    setOverrideOnCreate: true,
+    route: { inboundMessageId, isP2P, chatId },
+    lang: getLang(account),
+    sendHint: async (hint) => {
+      await replyToInbound({ account, inboundMessageId, isP2P, chatId, text: hint })
+    },
+    uiText: composedText,
+    agentText: composedText,
+    userTag: userId,
+    threadTag: rootId,
+    images: imgResult.images.length > 0 ? imgResult.images : undefined,
   })
 }
 
@@ -551,27 +566,4 @@ function buildCmdCtx(args: {
       chatId: `${chatId}:${rootId}`,
     },
   }
-}
-
-async function getOrCreateSessionForThread(args: {
-  sm: SessionManager
-  chatId: string
-  rootId: string
-  userId: string
-  accessLevel: 'readonly' | 'workspace' | null
-  state: AccountState
-  workspacePath: string
-}): Promise<string> {
-  const { sm, chatId, rootId, userId, accessLevel, state, workspacePath } = args
-  const prefix = buildSessionPrefixForThread(chatId, rootId)
-  const tagKey = `${userId}@${chatId}:${rootId}`
-  const existing = sharedFindActive(sm, tagKey, prefix, state.activeOverrides, accessLevel === null ? 'full' : accessLevel)
-  if (existing) return existing
-  const newId = `${prefix}${Date.now().toString(36)}`
-  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
-  // agentName omitted → createSession resolves the real agent.yaml `name`.
-  const agentId = await resolveDefaultAgentId(sm, workspacePath)
-  await sm.createSession(agentId, null, `Feishu: ${chatId}/${rootId}`, undefined, newId, undefined, accessLevel)
-  state.activeOverrides.set(tagKey, newId)
-  return newId
 }

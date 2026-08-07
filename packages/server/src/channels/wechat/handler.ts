@@ -10,11 +10,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionManagerRegistry } from '../../agents/session-manager-registry.js'
 import type { ChannelDb } from '../../db/channel-db.js'
-import type { AgentSessionEvent } from '../../agents/agent-events.js'
 import { getUpdates, sendMessage, notifyStart, notifyStop } from './api.js'
 import { MessageItemType, MessageState, MessageType, type WechatMessage, type MessageItem, type SendMessageReq } from './types.js'
 import { listEnabledAccounts, getAccount, insertAccount, saveSyncBuf, updateAccount, normalizeAccountId, type WechatAccount, type AccessLevel } from './accounts.js'
-import { resolveAccountWorkspace, rememberLastActiveChat } from '../shared/accounts.js'
+import { resolveAccountWorkspace } from '../shared/accounts.js'
 import { WechatResponder } from './event-adapter.js'
 import { downloadAndDecrypt, downloadPlain } from './cdn.js'
 import { saveInboundMedia, inferImageMime } from '../shared/media-store.js'
@@ -22,21 +21,45 @@ import { isMediaPathAllowed, tempDir } from '../shared/media.js'
 import { sendMediaFile } from './send-media.js'
 import { startLogin, waitLogin } from './login.js'
 import QRCode from 'qrcode'
-import { findActiveSessionId as sharedFindActive, dispatchCommand, resolveDefaultAgentId, type CommandContext } from '../shared/commands.js'
-import { resolveGoalRoute } from '../../agents/goal-mode.js'
+import { findActiveSessionId as sharedFindActive, type CommandContext } from '../shared/commands.js'
+import { InboundBridge, deliverInbound, dispatchChannelCommand, type RouteInit } from '../shared/inbound.js'
 import { t, getLang, type Lang } from '../shared/i18n.js'
-import { busyHint } from '../shared/busy-hint.js'
 
 const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 
+/**
+ * Reply destination for a session, refreshed on EVERY inbound message
+ * (audit A-M2 — the old responder closure captured `fromUserId` at listener-
+ * registration time, so a session later driven by another user kept replying
+ * to the first one; and the separate `sessionContextTokens` map was never
+ * cleaned up).
+ *
+ * `contextToken` is WeChat's passive-reply-window credential: present on the
+ * inbound message, valid for a limited window. Kept per-session and only
+ * carried over between messages of the SAME user — when a different user
+ * takes over the session, the old token must not be replayed against the
+ * new recipient.
+ */
+interface WxRoute {
+  fromUserId: string
+  contextToken?: string
+}
+
+export function wxRoute(fromUserId: string, contextToken: string | undefined): RouteInit<WxRoute> {
+  return (prev) => ({
+    fromUserId,
+    contextToken: contextToken ?? (prev?.fromUserId === fromUserId ? prev.contextToken : undefined),
+  })
+}
+
 interface AccountRunner {
   accountId: string
   abort: AbortController
   promise: Promise<void>
-  /** Unsubscribe fns per WeChat user's sessionId (so we can tear down on stop) */
-  unsubscribers: Map<string, () => void>
+  /** Listener + reply-route bookkeeping per session (torn down on stop). */
+  bridge: InboundBridge<WxRoute>
   /** User-selected active session override (fromUserId → sessionId). Set by /switch and /new; read by findActiveSessionId. */
   activeOverrides: Map<string, string>
 }
@@ -69,18 +92,39 @@ export function startWechatChannel(deps: {
       return
     }
     const abort = new AbortController()
-    const unsubscribers = new Map<string, () => void>()
     const activeOverrides = new Map<string, string>()
-    const sessionContextTokens = new Map<string, string>()
+    const bridge: InboundBridge<WxRoute> = new InboundBridge({
+      channel: 'wechat',
+      makeResponder: (sessionId) => new WechatResponder({
+        sendText: async (chunk) => {
+          const route = bridge.getRoute(sessionId)
+          if (!route) return
+          await sendToUser({ account, toUserId: route.fromUserId, text: chunk, contextToken: route.contextToken })
+        },
+        sendMedia: async (filePath) => {
+          const route = bridge.getRoute(sessionId)
+          if (!route) return
+          if (!isMediaPathAllowed(filePath, account.workspacePath)) {
+            console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
+            return
+          }
+          await sendMediaFile({
+            baseUrl: account.baseUrl, token: account.botToken,
+            toUserId: route.fromUserId, contextToken: route.contextToken,
+            filePath,
+          })
+        },
+      }),
+    })
     // Debounce re-entrant restarts so the in-loop /ws command can safely schedule one.
     const restartSelf = (): void => {
       queueMicrotask(() => {
         void stopAccount(accountId).then(() => { startAccount(accountId) })
       })
     }
-    const promise = runAccountLoop({ registry, db, account, abort: abort.signal, unsubscribers, activeOverrides, sessionContextTokens, restartSelf, startNewAccount: startAccount })
+    const promise = runAccountLoop({ registry, db, account, abort: abort.signal, bridge, activeOverrides, restartSelf, startNewAccount: startAccount })
       .catch((err) => console.log(`[wechat] account ${accountId} loop crashed: ${String(err)}`))
-    runners.set(accountId, { accountId, abort, promise, unsubscribers, activeOverrides })
+    runners.set(accountId, { accountId, abort, promise, bridge, activeOverrides })
     console.log(`[wechat] account ${accountId} started (workspace=${account.workspacePath})`)
   }
 
@@ -88,8 +132,7 @@ export function startWechatChannel(deps: {
     const runner = runners.get(accountId)
     if (!runner) return
     runner.abort.abort()
-    for (const unsubscribe of runner.unsubscribers.values()) unsubscribe()
-    runner.unsubscribers.clear()
+    runner.bridge.closeAll()
     runners.delete(accountId)
     await runner.promise.catch(() => {})
 
@@ -120,13 +163,12 @@ async function runAccountLoop(args: {
   db: ChannelDb
   account: WechatAccount
   abort: AbortSignal
-  unsubscribers: Map<string, () => void>
+  bridge: InboundBridge<WxRoute>
   activeOverrides: Map<string, string>
-  sessionContextTokens: Map<string, string>
   restartSelf: () => void
   startNewAccount: (accountId: string) => void
 }): Promise<void> {
-  const { registry, db, account, abort, unsubscribers, activeOverrides, sessionContextTokens, restartSelf, startNewAccount } = args
+  const { registry, db, account, abort, bridge, activeOverrides, restartSelf, startNewAccount } = args
 
   try {
     await notifyStart({ baseUrl: account.baseUrl, token: account.botToken })
@@ -173,7 +215,7 @@ async function runAccountLoop(args: {
       }
 
       for (const msg of resp.msgs ?? []) {
-        await handleInbound({ registry, db, account, msg, unsubscribers, activeOverrides, sessionContextTokens, restartSelf, startNewAccount })
+        await handleInbound({ registry, db, account, msg, bridge, activeOverrides, restartSelf, startNewAccount })
       }
     } catch (err) {
       if (abort.aborted) return
@@ -305,44 +347,17 @@ function buildWxSessionPrefix(fromUserId: string): string {
   return buildSessionPrefix('wx', normalizeAccountId(fromUserId))
 }
 
-function findActiveWxSession(
-  sm: import('../../agents/session-manager.js').SessionManager,
-  fromUserId: string,
-  activeOverrides: Map<string, string>,
-  accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer',
-): string | null {
-  return sharedFindActive(sm, fromUserId, buildWxSessionPrefix(fromUserId), activeOverrides, accessLevel)
-}
-
-async function getOrCreateActiveSession(
-  sm: import('../../agents/session-manager.js').SessionManager,
-  fromUserId: string,
-  activeOverrides: Map<string, string>,
-  accessLevel: 'readonly' | 'workspace' | null,
-  workspacePath: string,
-): Promise<string> {
-  const existing = findActiveWxSession(sm, fromUserId, activeOverrides, accessLevel === null ? 'full' : accessLevel)
-  if (existing) return existing
-  const newId = `${buildWxSessionPrefix(fromUserId)}${Date.now().toString(36)}`
-  // agentId resolved by priority (highest non-disabled, non-internal agent wins);
-  // agentName omitted → createSession resolves the real agent.yaml `name`.
-  const agentId = await resolveDefaultAgentId(sm, workspacePath)
-  await sm.createSession(agentId, null, `WeChat: ${fromUserId}`, undefined, newId, undefined, accessLevel)
-  return newId
-}
-
 async function handleInbound(args: {
   registry: SessionManagerRegistry
   db: ChannelDb
   account: WechatAccount
   msg: WechatMessage
-  unsubscribers: Map<string, () => void>
+  bridge: InboundBridge<WxRoute>
   activeOverrides: Map<string, string>
-  sessionContextTokens: Map<string, string>
   restartSelf: () => void
   startNewAccount: (accountId: string) => void
 }): Promise<void> {
-  const { registry, db, account: storedAccount, msg, unsubscribers, activeOverrides, sessionContextTokens, restartSelf, startNewAccount } = args
+  const { registry, db, account: storedAccount, msg, bridge, activeOverrides, restartSelf, startNewAccount } = args
   const fromUserId = msg.from_user_id ?? ''
   if (!fromUserId) return
   const lang = getLang(storedAccount)
@@ -372,69 +387,38 @@ async function handleInbound(args: {
   if (trimmedText.startsWith('/')) {
     const handled = await handleSlashCommand({
       text: text.trim(), account, db, fromUserId, contextToken: msg.context_token, restartSelf, startNewAccount,
-      registry, activeOverrides, unsubscribers, sessionContextTokens, lang,
+      registry, activeOverrides, bridge, lang,
     })
     console.log(`[wechat] ${account.accountId} slash handled=${handled}`)
     if (handled) return
-  }
-
-  // Cache the most-recent fromUserId on the account so cron jobs targeting
-  // this wechat account know who to deliver to. Cheap config patch.
-  rememberLastActiveChat(db, account.accountId, fromUserId)
-
-  const sm = registry.getOrCreate(account.workspacePath)
-  const sessionAccessLevel = account.accessLevel === 'full' ? null : account.accessLevel === 'workspace' ? 'workspace' : 'readonly'
-  // Goal-mode overlay: a goal-bound worker's inbound chat diverts to its goal
-  // session (the binding rows above are untouched — see docs/plans/loop-mode.md).
-  const sessionId = resolveGoalRoute(sm.getDb(), await getOrCreateActiveSession(sm, fromUserId, activeOverrides, sessionAccessLevel, account.workspacePath))
-
-  // If the session is currently compacting or mid-turn, send an immediate hint
-  // so the WeChat user doesn't stare at a silent chat for 30+ seconds. Hint
-  // only — delivery continues either way (sendUserMessage queues it).
-  const hint = busyHint(sm, sessionId, lang)
-  if (hint) {
-    await sendToUser({
-      account, toUserId: fromUserId, contextToken: msg.context_token,
-      text: hint,
-    })
-  }
-
-  // Always update the latest context token so the listener uses a fresh one
-  if (msg.context_token) sessionContextTokens.set(sessionId, msg.context_token)
-
-  if (!unsubscribers.has(sessionId)) {
-    const responder = new WechatResponder({
-      sendText: (chunk) => sendToUser({
-        account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
-      }),
-      sendMedia: async (filePath) => {
-        if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-          console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
-          return
-        }
-        await sendMediaFile({
-          baseUrl: account.baseUrl, token: account.botToken,
-          toUserId: fromUserId, contextToken: sessionContextTokens.get(sessionId),
-          filePath,
-        })
-      },
-    })
-    const listener = (event: AgentSessionEvent): void => responder.handle(event)
-    const unsubscribe = sm.registerEventListener(sessionId, listener)
-    unsubscribers.set(sessionId, () => {
-      responder.close()
-      unsubscribe()
-    })
   }
 
   const userText = text || (images.length > 0 ? '[图片]' : '')
   // UI log keeps the clean text. The message actually sent to the agent has
   // a short channel hint prepended so it knows replies are going to WeChat
   // (and can use the send-file skill's MEDIA: marker).
-  const agentInput = `[channel: wechat | user: ${fromUserId}]\n${userText}`
-  sm.appendUserMessage(sessionId, userText || '[仅图片]')
-  sm.sendUserMessage(sessionId, agentInput, images.length > 0 ? images : undefined, sessionAccessLevel).catch((err) => {
-    console.log(`[wechat] sendUserMessage ${sessionId}: ${String(err)}`)
+  await deliverInbound({
+    sm: registry.getOrCreate(account.workspacePath),
+    db,
+    accountId: account.accountId,
+    bridge,
+    // Cron jobs targeting this wechat account deliver to the last openId seen.
+    chatKey: fromUserId,
+    tagKey: fromUserId,
+    sessionPrefix: buildWxSessionPrefix(fromUserId),
+    activeOverrides,
+    accountAccessLevel: account.accessLevel,
+    workspacePath: account.workspacePath,
+    sessionLabel: `WeChat: ${fromUserId}`,
+    route: wxRoute(fromUserId, msg.context_token),
+    lang,
+    // If the session is currently compacting or mid-turn, send an immediate
+    // hint so the WeChat user doesn't stare at a silent chat for 30+ seconds.
+    sendHint: (hint) => sendToUser({ account, toUserId: fromUserId, contextToken: msg.context_token, text: hint }),
+    uiText: userText || '[仅图片]',
+    agentText: userText,
+    userTag: fromUserId,
+    images: images.length > 0 ? images : undefined,
   })
 }
 
@@ -450,35 +434,11 @@ async function handleSlashCommand(args: {
   startNewAccount: (accountId: string) => void
   registry: SessionManagerRegistry
   activeOverrides: Map<string, string>
-  unsubscribers: Map<string, () => void>
-  sessionContextTokens: Map<string, string>
+  bridge: InboundBridge<WxRoute>
   lang: Lang
 }): Promise<boolean> {
-  const { text, account, db, fromUserId, contextToken, restartSelf, startNewAccount, registry, activeOverrides, unsubscribers, sessionContextTokens, lang } = args
+  const { text, account, db, fromUserId, contextToken, restartSelf, startNewAccount, registry, activeOverrides, bridge, lang } = args
   const reply = (msg: string) => sendToUser({ account, toUserId: fromUserId, text: msg, contextToken })
-
-  function ensureListener(sm: ReturnType<SessionManagerRegistry['getOrCreate']>, sessionId: string): void {
-    if (unsubscribers.has(sessionId)) return
-    const responder = new WechatResponder({
-      sendText: (chunk) => sendToUser({
-        account, toUserId: fromUserId, text: chunk, contextToken: sessionContextTokens.get(sessionId),
-      }),
-      sendMedia: async (filePath) => {
-        if (!isMediaPathAllowed(filePath, account.workspacePath)) {
-          console.log(`[wechat] sendMedia blocked: ${filePath} not under workspace`)
-          return
-        }
-        await sendMediaFile({
-          baseUrl: account.baseUrl, token: account.botToken,
-          toUserId: fromUserId, contextToken: sessionContextTokens.get(sessionId),
-          filePath,
-        })
-      },
-    })
-    const listener = (event: AgentSessionEvent): void => responder.handle(event)
-    const unsubscribe = sm.registerEventListener(sessionId, listener)
-    unsubscribers.set(sessionId, () => { responder.close(); unsubscribe() })
-  }
 
   const [cmd, ...rest] = text.split(/\s+/)
   const arg = rest.join(' ').trim()
@@ -508,7 +468,9 @@ async function handleSlashCommand(args: {
   if (account.accessLevel === 'full') {
     helpExtras.push({ head: '/qr [level]', desc: t('cmd.qr', lang) })
   }
-  const result = await dispatchCommand(ctx, cmd, arg, {
+  const result = await dispatchChannelCommand(ctx, cmd, arg, {
+    bridge,
+    route: wxRoute(fromUserId, contextToken),
     channelName: 'wechat',
     extraHelpLines: helpExtras,
   })
@@ -521,10 +483,10 @@ async function handleSlashCommand(args: {
       if (result.switchTo) {
         const oldSid = sharedFindActive(sm, fromUserId, ctx.sessionPrefix, activeOverrides, ctx.accessLevel)
         if (oldSid && oldSid !== result.switchTo) {
-          unsubscribers.get(oldSid)?.()
-          unsubscribers.delete(oldSid)
+          bridge.dropListener(oldSid)
         }
-        ensureListener(sm, result.switchTo)
+        bridge.setRoute(result.switchTo, wxRoute(fromUserId, contextToken))
+        bridge.ensureListener(sm, result.switchTo)
       }
       await reply(result.text)
     }
