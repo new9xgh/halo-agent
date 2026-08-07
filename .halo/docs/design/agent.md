@@ -47,6 +47,17 @@ Each provider's SDK client and config details are encapsulated inside its runtim
 
 See [prompt-system.md](prompt-system.md).
 
+### When agent.yaml changes take effect
+
+`agent.yaml` is read **only at agent-instance build time** — a running session keeps its in-memory `ModelRuntime` across turns and never re-reads the yaml per turn. Rebuild (and thus config pickup) happens at exactly four points in `SessionManager`:
+
+1. **`createSession`** — every new session builds fresh, so yaml edits affect new sessions immediately
+2. **`ensureSession`** — a session not in the in-memory Map (server restart, eviction) rebuilds on next access
+3. **Access-level change** — `sendUserMessage` with a different `accessLevel` rebuilds in place (messages preserved)
+4. **`resetAgent`** — post-compact rebuild (messages preserved)
+
+Practical consequence: you can edit `agent.yaml` (e.g. swap `model.id`), start a session, then revert the edit — the running session keeps the swapped model for its whole lifetime **unless** it hits trigger 2–4, at which point it silently picks up the reverted config. Compact (trigger 4) is the one that fires unprompted on long sessions.
+
 ## Session tools
 
 Agents manage other sessions with these tools. The whole 8-tool bundle is granted automatically by a non-empty `team` in `agent.yaml` (listing them under `tools:` has no effect); the `team` ids also scope who's reachable. Full schema in [dev/tools.md](../dev/tools.md#session-tools), gating in [prompt-system.md](prompt-system.md#agent-roster).
