@@ -266,7 +266,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         return state
       }
       const mainBefore = state.messages.filter(isMainConversationMessage).length
-      console.log(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${mainBefore}+${isMainConversationMessage(message) ? 1 : 0}`)
+      console.debug(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${mainBefore}+${isMainConversationMessage(message) ? 1 : 0}`)
       return {
         messages: [...state.messages, message],
         isStreaming: (msg.streaming && !msg.taskId) ? true : state.isStreaming,
@@ -469,7 +469,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setMessages(messages: ChatMessage[]) {
     const prev = get().messages
-    console.log(`[ChatStore:setMessages] ${prev.length} -> ${messages.length}`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
+    console.debug(`[ChatStore:setMessages] ${prev.length} -> ${messages.length}`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
     set({ messages })
   },
 
@@ -552,7 +552,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clear() {
-    console.log(`[ChatStore:clear] dropping ${get().messages.length} messages`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
+    console.debug(`[ChatStore:clear] dropping ${get().messages.length} messages`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
     // Preserve selectedAgentId — once the user picked an agent (or it was
     // promoted from priority), the next "new session" should still use it.
     // Resetting it back to 'default' here would override that choice every

@@ -54,11 +54,28 @@ export function confirmAction(message: string): Promise<boolean> {
   return Promise.resolve(window.confirm(message))
 }
 
-export function formatTimestamp(ts: number): string {
-  return new Date(ts).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+/**
+ * Relative-time formatter — the single implementation behind every
+ * "{n}m ago" label (session lists, git graph, evolution runs…).
+ *
+ * Pass the i18n `t` (from `useT()`) to render in the active language via the
+ * `time.*` keys; without it the English literals are used — kept for callers
+ * that render outside a component context. Beyond 30 days an absolute
+ * locale date is shown instead of an ever-growing day count.
+ */
+export function formatRelativeTime(
+  date: string | number,
+  t?: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  const ms = typeof date === 'number' ? date : new Date(date).getTime()
+  const minutes = Math.floor((Date.now() - ms) / 60_000)
+  if (minutes < 1) return t ? t('time.justNow') : 'just now'
+  if (minutes < 60) return t ? t('time.minutes', { n: minutes }) : `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t ? t('time.hours', { n: hours }) : `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return t ? t('time.days', { n: days }) : `${days}d ago`
+  return new Date(ms).toLocaleDateString()
 }
 
 export function getLanguageFromPath(path: string): string {

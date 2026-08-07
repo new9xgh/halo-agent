@@ -4,11 +4,12 @@ import { useState, useRef, useEffect } from 'react'
 import { Plus, Trash2, Pencil, Loader2 } from 'lucide-react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionList } from '@/shared/use-session-list'
-import { timeAgo, SessionHistoryLink } from '@/shared/components/session-list-dropdown'
+import { SessionHistoryLink } from '@/shared/components/session-list-dropdown'
 import type { SessionMeta } from '@/shared/components/session-list-dropdown'
 import { api } from '@/shared/api-client'
 import { bumpSessionBus } from '@/shared/session-bus'
-import { cn } from '@/shared/utils'
+import { cn, formatRelativeTime } from '@/shared/utils'
+import { useT } from '@/shared/i18n'
 
 /**
  * Hook: manages explorer session list for the main chat.
@@ -48,6 +49,7 @@ export function SessionSidebar({
   hasMore,
   loadingMore,
 }: SessionSidebarProps) {
+  const t = useT()
   const activeProject = useProjectStore((s) => s.activeProject)
 
   // Inline title rename. `editingId` is the session whose title is being
@@ -148,7 +150,7 @@ export function SessionSidebar({
                   </p>
                 )}
                 <p className="text-[9px] text-[var(--muted-foreground)]">
-                  {s.messageCount} msgs · {timeAgo(s.updatedAt)}
+                  {s.messageCount} msgs · {formatRelativeTime(s.updatedAt, t)}
                   {typeof s.agentSnapshot?.model === 'string' && (
                     <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
                   )}

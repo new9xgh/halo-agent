@@ -18,6 +18,9 @@ interface TermInstance {
   term: XTerm
   fit: FitAddon
   container: HTMLDivElement
+  /** Held so closeTerminal / unmount cleanup can disconnect it — otherwise
+   *  the observer keeps the detached container (and xterm buffers) alive. */
+  ro: ResizeObserver
   ready: boolean
   exited: boolean
 }
@@ -187,9 +190,6 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
       wsClient.send({ type: 'terminal:input', data, terminalId: id })
     })
 
-    const inst: TermInstance = { id, name, term, fit, container, ready: false, exited: false }
-    instancesRef.current.set(id, inst)
-
     // Resize observer
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
@@ -200,6 +200,9 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
       }, 150)
     })
     ro.observe(container)
+
+    const inst: TermInstance = { id, name, term, fit, container, ro, ready: false, exited: false }
+    instancesRef.current.set(id, inst)
 
     // Start on server — prefer explicit cwd (right-click "Open in Terminal"),
     // then panel-level customCwd (e.g. skill dir), then project path, then
@@ -228,6 +231,7 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
     if (!inst) return
 
     wsClient.send({ type: 'terminal:close', terminalId: id })
+    inst.ro.disconnect()
     inst.term.dispose()
     inst.container.remove()
     instancesRef.current.delete(id)
@@ -249,6 +253,23 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
   // Switch active terminal
   const switchTo = useCallback((id: string) => {
     setActiveId(id)
+  }, [])
+
+  // Unmount cleanup (bottom-panel remounts us with a fresh key on every WS
+  // disconnect): dispose local xterm instances + observers so detached
+  // containers and 10k-line scrollback buffers don't pile up across remounts.
+  // Deliberately NO `terminal:close` — the server keeps the PTYs in its
+  // detached pool and the freshly mounted panel reattaches to them.
+  useEffect(() => {
+    const instances = instancesRef.current
+    return () => {
+      for (const inst of instances.values()) {
+        inst.ro.disconnect()
+        inst.term.dispose()
+        inst.container.remove()
+      }
+      instances.clear()
+    }
   }, [])
 
   // Show/hide containers based on active ID
@@ -369,7 +390,7 @@ export function TerminalPanel({ headerless, cwd: customCwd }: TerminalPanelProps
         })
         ro.observe(container)
 
-        const inst: TermInstance = { id, name, term, fit, container, ready: true, exited: false }
+        const inst: TermInstance = { id, name, term, fit, container, ro, ready: true, exited: false }
         instancesRef.current.set(id, inst)
         setTabs((prev) => [...prev, { id, name }])
         setActiveId((prev) => prev ?? id)

@@ -6,8 +6,8 @@ import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
-import { cn, confirmAction } from '@/shared/utils'
-import { timeAgo } from '@/shared/components/session-list-dropdown'
+import { cn, confirmAction, formatRelativeTime } from '@/shared/utils'
+import { useT } from '@/shared/i18n'
 import { Bot, Trash2, ChevronRight, MessageSquare, Loader2, StopCircle, Archive, RefreshCw, Pencil } from 'lucide-react'
 import type { ChatMessage } from '@/shared/types'
 import { wsClient } from '@/shared/ws-client'
@@ -127,6 +127,7 @@ function SessionTree({
   onCommitRename: (sid: string) => void
   onCancelRename: () => void
 }) {
+  const t = useT()
   const pl = 12 + depth * 16
   return (
     <>
@@ -195,7 +196,7 @@ function SessionTree({
                   )}
                 </div>
                 <p className="text-[9px] text-[var(--muted-foreground)]">
-                  {sub.messageCount} msgs · {timeAgo(sub.updatedAt)}
+                  {sub.messageCount} msgs · {formatRelativeTime(sub.updatedAt, t)}
                 </p>
               </div>
               {editingId !== sub.id && (
@@ -243,6 +244,7 @@ function flattenTree(roots: SessionNode[]): SessionNode[] {
 }
 
 export function AgentSessionsSidebar() {
+  const t = useT()
   const isStreaming = useChatStore((s) => s.isStreaming)
   const currentSessionId = useChatStore((s) => s.sessionId)
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -405,14 +407,10 @@ export function AgentSessionsSidebar() {
     }
   }, [tree, selectedSessionId, loadingGroups, clearSelection, activeProject?.id])
 
-  // Refresh when streaming completes — silent reconcile, no spinner flash.
-  const prevStreamingRef = useRef(isStreaming)
-  useEffect(() => {
-    if (prevStreamingRef.current && !isStreaming) {
-      setTimeout(() => reloadFirstPage({ showSpinner: false }), 500)
-    }
-    prevStreamingRef.current = isStreaming
-  }, [isStreaming, reloadFirstPage])
+  // No streaming-completion refresh: the server broadcasts `session:changed`
+  // when a root turn settles (after its final persist — session-ui-store
+  // emitEvent), which bumps the session bus and re-runs the effect above.
+  // The old 500ms timer here just duplicated that push with a guess.
 
   const toggleExpand = useCallback((sessionId: string) => {
     setExpanded((prev) => {
@@ -698,7 +696,7 @@ export function AgentSessionsSidebar() {
                       )}
                     </div>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
-                      {main.messageCount} msgs · {timeAgo(main.updatedAt)}
+                      {main.messageCount} msgs · {formatRelativeTime(main.updatedAt, t)}
                     </p>
                   </div>
                   {editingId !== main.id && (

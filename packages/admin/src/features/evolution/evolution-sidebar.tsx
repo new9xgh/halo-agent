@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Sparkles } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
-import { cn } from '@/shared/utils'
+import { cn, formatRelativeTime } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 import { useEvolutionStore } from './evolution-store'
 
@@ -228,7 +228,7 @@ function RunListRow({ run, selected, onClick }: { run: RunListItem; selected: bo
         {run.userHint ?? <span className="italic">{t('evolution.list.noHint')}</span>}
       </div>
       <div className="flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
-        <span>{formatRelative(run.createdAt, t)}</span>
+        <span>{formatRelativeTime(run.createdAt, t)}</span>
         <span>•</span>
         <span title={run.workspacePath} className="truncate">
           {run.workspacePath.split('/').pop()}
@@ -265,15 +265,4 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: 'bg-red-700 text-red-50',
   failed: 'bg-red-800 text-red-100',
   timeout: 'bg-orange-700 text-orange-100',
-}
-
-function formatRelative(ts: number, t: (key: string, params?: Record<string, string | number>) => string): string {
-  const diff = Date.now() - ts
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return t('evolution.time.justNow')
-  if (mins < 60) return t('evolution.time.minutes', { n: mins })
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return t('evolution.time.hours', { n: hrs })
-  const days = Math.floor(hrs / 24)
-  return t('evolution.time.days', { n: days })
 }

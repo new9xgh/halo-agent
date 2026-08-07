@@ -527,10 +527,11 @@ export const zh: Record<string, string> = {
   'evolution.logs.title': '运行日志',
   'evolution.logs.wrapper': 'wrapper.log（编排层）',
   'evolution.logs.subCli': 'sub-cli.log（evo / score / dry-run 的标准输出）',
-  'evolution.time.justNow': '刚刚',
-  'evolution.time.minutes': '{n} 分钟前',
-  'evolution.time.hours': '{n} 小时前',
-  'evolution.time.days': '{n} 天前',
+  // 共享相对时间标签(shared/utils formatRelativeTime)
+  'time.justNow': '刚刚',
+  'time.minutes': '{n} 分钟前',
+  'time.hours': '{n} 小时前',
+  'time.days': '{n} 天前',
 
   // ── 工作区（桌面端）──
   'workspace.pin': '窗口置顶',

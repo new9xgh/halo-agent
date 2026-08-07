@@ -612,6 +612,9 @@ export function createEditorStore() {
         set((state) => {
           const cur = state.buffers[path]
           if (!cur) return state
+          // Re-check after the await: the user may have started typing during
+          // the fetch window — overwriting now would silently drop their edit.
+          if (cur.modified) return state
           const buffers = { ...state.buffers, [path]: { ...cur, content: data.content, originalContent: data.content, mtime: data.modifiedAt, size: data.size ?? cur.size, createdAt: data.createdAt ?? cur.createdAt } }
           const next = { ...state, buffers }
           return { buffers, ...deriveActiveView(next) }

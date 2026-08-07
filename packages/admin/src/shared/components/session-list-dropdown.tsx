@@ -2,7 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { History, Trash2, Loader2 } from 'lucide-react'
-import { cn } from '@/shared/utils'
+import { cn, formatRelativeTime } from '@/shared/utils'
+import { useT } from '@/shared/i18n'
+
+/** Compat alias — the implementation moved to shared/utils
+ *  (formatRelativeTime). Kept so existing `timeAgo` imports
+ *  (session-chat-panel, git-graph) keep working; migrate them to
+ *  `formatRelativeTime` and drop this on next touch. */
+export { formatRelativeTime as timeAgo } from '@/shared/utils'
 
 export interface SessionMeta {
   id: string
@@ -18,19 +25,6 @@ export interface SessionMeta {
   /** Goal-mode back-pointer: non-null while this session is the bound worker
    *  of an active goal → 🎯 badge. */
   goalSessionId?: string | null
-}
-
-export function timeAgo(date: string | number): string {
-  const ms = typeof date === 'number' ? date : new Date(date).getTime()
-  const seconds = Math.floor((Date.now() - ms) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return new Date(ms).toLocaleDateString()
 }
 
 /** Dropdown showing recent sessions for an agent.
@@ -60,6 +54,7 @@ export function SessionListDropdown({
   onToggle?: () => void
   direction?: 'up' | 'down'
 }) {
+  const t = useT()
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const onToggle = controlledToggle ?? (() => setInternalOpen((v) => !v))
@@ -134,7 +129,7 @@ export function SessionListDropdown({
                       {s.title}
                     </p>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
-                      {s.messageCount} msgs · {timeAgo(s.updatedAt)}
+                      {s.messageCount} msgs · {formatRelativeTime(s.updatedAt, t)}
                       {typeof s.agentSnapshot?.model === 'string' && (
                         <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
                       )}

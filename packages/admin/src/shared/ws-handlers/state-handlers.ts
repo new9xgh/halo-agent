@@ -4,6 +4,7 @@ import { refreshGoal } from '@/features/chat/goal-store'
 import { useTaskStore } from '@/shared/stores/task-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { bumpSessionBus } from '@/shared/session-bus'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import type { WsSnapshotMsg, ChatMessage } from '@/shared/types'
 
 export function registerStateHandlers(wsClient: WsClient): () => void {
@@ -98,6 +99,12 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   unsubs.push(
     wsClient.on('session:changed', () => bumpSessionBus()),
   )
+
+  // A `session:changed` emitted while the socket was down is lost — a turn
+  // that settles mid-drop would leave every list stale until the next
+  // unrelated bump. Reconcile on reconnect, same pattern as the other
+  // push-fed panels.
+  unsubs.push(onWsReconnect(wsClient, () => bumpSessionBus()))
 
   // Goal-mode state transition (create/attach/round/pause/halt/done/clear —
   // every writeGoalState broadcasts). The event carries the new state, but we

@@ -527,10 +527,11 @@ export const en: Record<string, string> = {
   'evolution.logs.title': 'Run logs',
   'evolution.logs.wrapper': 'wrapper.log (orchestration)',
   'evolution.logs.subCli': 'sub-cli.log (evo / score / dry-run stdout+stderr)',
-  'evolution.time.justNow': 'just now',
-  'evolution.time.minutes': '{n}m ago',
-  'evolution.time.hours': '{n}h ago',
-  'evolution.time.days': '{n}d ago',
+  // Shared relative-time labels (shared/utils formatRelativeTime)
+  'time.justNow': 'just now',
+  'time.minutes': '{n}m ago',
+  'time.hours': '{n}h ago',
+  'time.days': '{n}d ago',
 
   // ── Workspace (desktop) ──
   'workspace.pin': 'Keep window on top',

@@ -1,6 +1,7 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore, noteLinkDrop, takeReplaySnapshot } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
+import { bumpSessionBus } from '@/shared/session-bus'
 import { generateId } from '@/shared/utils'
 import { postToFace } from '@/features/editor/face-bridge'
 
@@ -29,6 +30,19 @@ const handledCaptureMsgIds = new Set<string>()
  *  `chat:complete` events from queue drain. */
 const handledShowKeys = new Set<string>()
 
+/** Both dedup sets above only ever guard the CURRENT session's replies —
+ *  message ids from other sessions are never looked up again. Clearing on
+ *  session switch keeps them bounded instead of growing for the tab's
+ *  lifetime. Within one session they stay put: duplicate `chat:complete`s
+ *  from queue drain are exactly what they exist to absorb. */
+let dedupSessionId: string | null = null
+function resetDedupOnSessionSwitch(sessionId: string | null): void {
+  if (sessionId === dedupSessionId) return
+  dedupSessionId = sessionId
+  handledCaptureMsgIds.clear()
+  handledShowKeys.clear()
+}
+
 /**
  * On turn completion, forward any `<<<SHOW: …>>>` payloads in the just-finished
  * assistant reply to the live face preview, in order. Each (message, occurrence)
@@ -37,6 +51,7 @@ const handledShowKeys = new Set<string>()
  */
 function maybeHandleShow(): void {
   const store = useChatStore.getState()
+  resetDedupOnSessionSwitch(store.sessionId)
   const last = [...store.messages].reverse().find((m) => m.role === 'assistant' && !m.taskId)
   if (!last) return
   let i = 0
@@ -68,6 +83,7 @@ async function maybeHandleCapture(wsClient: WsClient): Promise<void> {
   const bridge = isCamera ? w.haloCamera : w.haloCapture
   if (!bridge) return
 
+  resetDedupOnSessionSwitch(store.sessionId)
   // Find the most recent assistant bubble (just completed) and check its text.
   const last = [...store.messages].reverse().find((m) => m.role === 'assistant' && !m.taskId)
   if (!last || handledCaptureMsgIds.has(last.id)) return
@@ -291,6 +307,10 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
       if (store.messages.length > 0 || store.sessionId) {
         store.clear()
       }
+      // The server sends this reply AFTER persisting the cleared session's
+      // file, so it's the earliest correct moment for session lists to
+      // refetch — replaces chat-panel's old setTimeout(300) guess.
+      bumpSessionBus()
     }),
   )
 

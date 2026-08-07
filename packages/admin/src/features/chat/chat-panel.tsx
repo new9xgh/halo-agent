@@ -12,7 +12,6 @@ import { Plus, Loader2, MessageSquare, Bot, ChevronDown, History } from 'lucide-
 import { wsClient } from '@/shared/ws-client'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { bumpSessionBus } from '@/shared/session-bus'
 import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
@@ -61,10 +60,16 @@ function AgentSelector() {
         store.setSelectedAgentId(opts[0].id)
       }
     }).catch(() => {})
-    // Slash-command popup needs to filter by the agent's `skills:` whitelist.
-    // When a session is live, key off sessionId. When the user is still in
-    // pre-session mode (just selecting an agent in the dropdown), key off
-    // selectedAgentId so the popup matches what they're about to start.
+  }, [activeProject?.path, busVersion])
+
+  // Slash-command popup needs to filter by the agent's `skills:` whitelist.
+  // When a session is live, key off sessionId. When the user is still in
+  // pre-session mode (just selecting an agent in the dropdown), key off
+  // selectedAgentId so the popup matches what they're about to start.
+  // Separate effect from the list fetch above: the agent list only varies
+  // with path/busVersion, so session/agent switches must not refetch it.
+  useEffect(() => {
+    if (!activeProject?.path) return
     refreshCommands(activeProject.path, sessionId ?? undefined, selectedAgentId ?? undefined).catch(() => {})
   }, [activeProject?.path, sessionId, selectedAgentId, busVersion])
 
@@ -139,7 +144,7 @@ export function ChatPanel() {
     if (typeof window === 'undefined') return true
     return localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
   })
-  const { sessions, refresh: refreshSessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
+  const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
 
   const setSidebar = useCallback((open: boolean) => {
     setSidebarOpen(open)
@@ -190,10 +195,10 @@ export function ChatPanel() {
     setLoadingSessionId(null)
     setSlowLoading(false)
     clearSession()
-    // Give the server a moment to persist the new session row, then notify
-    // every session-list consumer (this panel, the Sessions sidebar, …).
-    setTimeout(() => { refreshSessions(); bumpSessionBus() }, 300)
-  }, [clearSession, refreshSessions])
+    // Session lists refresh on the server's `session:cleared` reply (bus bump
+    // in chat-handlers) — it lands after the cleared session is persisted, so
+    // no timer guess is needed here.
+  }, [clearSession])
 
   const handleDeleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -202,14 +207,10 @@ export function ChatPanel() {
     await removeSession(sid)
   }, [deleteSession, removeSession])
 
-  // Refresh session list when streaming completes
-  const prevStreamingRef = useRef(isStreaming)
-  useEffect(() => {
-    if (prevStreamingRef.current && !isStreaming) {
-      setTimeout(() => refreshSessions(), 500)
-    }
-    prevStreamingRef.current = isStreaming
-  }, [isStreaming, refreshSessions])
+  // No streaming-completion refresh here: the server broadcasts
+  // `session:changed` when a root turn settles (after its final persist —
+  // see session-ui-store.emitEvent), which bumps the session bus and
+  // refetches every list, replacing the old 500ms timer guess.
 
   const mainMessages = useMemo(() =>
     messages.filter(isMainConversationMessage),
