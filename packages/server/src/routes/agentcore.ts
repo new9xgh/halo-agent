@@ -280,6 +280,10 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
               sm,
               userId: runtimeSessionId,
               sessionPrefix: 'agentcore_',
+              // Every slash command is open in this mode — by design: auth
+              // terminates upstream at AgentCore (SigV4/OAuth, see file header),
+              // so anyone who reaches this socket is already an authorized
+              // owner of their isolated per-user workspace.
               accessLevel: 'full',
               channelLabel: 'AgentCore Runtime',
               activeOverrides,
@@ -336,6 +340,11 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
     ws.on('close', () => {
       unsubscribe?.()
       unsubscribe = null
+      // The override only matters while this socket is open (it's the "current
+      // session" for its slash commands), and a reconnect re-resolves from the
+      // session id — so drop it here rather than letting the map grow one entry
+      // per runtime session for the container's lifetime.
+      activeOverrides.delete(runtimeSessionId)
     })
 
     console.log(`[AgentCore] ws connected — session ${sessionId}`)

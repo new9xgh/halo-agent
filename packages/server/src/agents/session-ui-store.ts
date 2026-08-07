@@ -445,5 +445,9 @@ export class SessionUIStore {
       this.persistTimers.delete(id)
     }
     this.eventListeners.delete(id)
+    // The cache is keyed by session id (roots and sub-sessions alike) and the
+    // manager calls purge for every id in the deleted tree, so this evicts the
+    // whole subtree's entries.
+    this.agentIdCache.delete(id)
   }
 }

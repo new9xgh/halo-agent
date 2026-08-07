@@ -53,18 +53,24 @@ export function setEvoSpawner(fn: EvoSpawner): void { _spawner = fn }
 const TICK_INTERVAL_MS = 30_000
 
 let _interval: NodeJS.Timeout | null = null
+let _startupTimer: NodeJS.Timeout | null = null
 
 export function startEvoTicker(): void {
   if (_interval) return
   // First tick fires soon after startup so any in-flight `running` rows from
   // a previous server process get cleaned up promptly. Subsequent ticks at
-  // the regular interval.
-  setTimeout(() => { runTick().catch(logTickError) }, 2_000)
+  // the regular interval. Handle kept so a shutdown within those 2s doesn't
+  // leave a tick firing after stop().
+  _startupTimer = setTimeout(() => { _startupTimer = null; runTick().catch(logTickError) }, 2_000)
   _interval = setInterval(() => { runTick().catch(logTickError) }, TICK_INTERVAL_MS)
   console.log(`[evo-ticker] started (interval: ${TICK_INTERVAL_MS / 1000}s)`)
 }
 
 export function stopEvoTicker(): void {
+  if (_startupTimer) {
+    clearTimeout(_startupTimer)
+    _startupTimer = null
+  }
   if (_interval) {
     clearInterval(_interval)
     _interval = null

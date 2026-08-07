@@ -94,6 +94,11 @@ interface ConnectedClient {
    *  tick. Protocol-level pongs deliberately don't count (a kernel answers
    *  those long after the browser stopped reading the socket). */
   lastClientPingAt: number
+  /** Per-connection key into `wsActiveOverrides` (the shared-command layer's
+   *  "which session is this user on" map). One key per socket, not a single
+   *  global `'ws'`: two admin tabs on different sessions would otherwise
+   *  overwrite each other's active session and misroute slash commands. */
+  commandUserId: string
 }
 
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
@@ -172,14 +177,19 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
   // ── Event listener factory ────────────────────────────────────────
 
+  // Active-session overrides for the shared command layer, keyed by
+  // `client.commandUserId` (one entry per open connection, removed on
+  // teardown) — handler scope because the map itself is shared, per-connection
+  // keys because each tab has its own current session.
   const wsActiveOverrides = new Map<string, string>()
+  let nextCommandUserId = 1
 
   function buildSharedCommandContext(client: ConnectedClient): SharedCommandContext {
     const sid = client.sessionId ?? ''
-    if (sid) wsActiveOverrides.set('ws', sid)
+    if (sid) wsActiveOverrides.set(client.commandUserId, sid)
     return {
       sm: client.sessionManager!,
-      userId: 'ws',
+      userId: client.commandUserId,
       sessionPrefix: '',
       accessLevel: 'full',
       channelLabel: 'WS',
@@ -341,6 +351,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       backgroundSaves: new Map(),
       unsubscribeEvents: null,
       lastClientPingAt: Date.now(),
+      commandUserId: `ws-${nextCommandUserId++}`,
     }
 
     fileWatcher.setCallback((evt) => {
@@ -556,6 +567,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
       if (!clients.delete(client)) return
       clearInterval(keepaliveTimer)
       terminalManager.detachAll()
+      wsActiveOverrides.delete(client.commandUserId)
 
       const sm = client.sessionManager
       const sid = client.sessionId

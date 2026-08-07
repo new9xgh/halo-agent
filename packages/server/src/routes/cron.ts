@@ -226,11 +226,12 @@ export function createCronRoutes(): Hono {
   })
 
   // POST /api/cron/jobs/:id/run-now — fire the job immediately.
-  // Returns the runId; caller polls /runs to see status flip.
+  // Returns `{ok:true}` as soon as the run is dispatched; status flips reach
+  // the UI over WS (`cron:run_changed`), no polling.
   router.post('/cron/jobs/:id/run-now', async (c) => {
     const id = c.req.param('id')
-    // Don't await runJob — the cli can take minutes. Fire-and-forget +
-    // return runId so the UI can poll for completion.
+    // Don't await runJob — the cli can take minutes. Fire-and-forget; the
+    // runner broadcasts cron:run_changed as the run progresses.
     runJob(id, 'manual').catch((err) => {
       console.log(`[cron] run-now ${id} crashed: ${err instanceof Error ? err.message : String(err)}`)
     })

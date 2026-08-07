@@ -11,8 +11,10 @@ import type { SessionInfo } from '../agents/session-manager.js'
 /** Shared lockout bucket with the rest of the public web/show surface. */
 const TOKEN_BUCKET = 'web-token'
 
-/** Per-workspace session cap mirrored from halo-city.ts — the snapshot is bounded so
- *  one runaway workspace can't make a scrape O(all sessions ever). */
+/** Per-workspace session cap — the snapshot is bounded so one runaway workspace
+ *  can't make a scrape O(all sessions ever). Deliberately higher than
+ *  halo-city.ts's 80 (that one caps what a *human* can watch on screen; a
+ *  Prometheus scrape wants near-complete counts). */
 const SESSIONS_PER_WS = 500
 
 /** Render one Prometheus metric family: HELP + TYPE header then sample lines. */

@@ -265,25 +265,25 @@ export function createEvolutionRoutes(): Hono {
       return c.json({ error: `cannot approve run in status=${row.status}` }, 409)
     }
 
-    // Two writes in sequence — sqlite better-sqlite3 is synchronous so they're
-    // effectively atomic from the UI's perspective. Using a transaction would
-    // be marginally safer but drizzle-sqlite's tx wrapper is awkward and the
-    // failure mode (run flipped, apply not inserted) is recoverable via the
-    // ticker (it'll surface the run as approved-but-not-queued).
-    db.update(evolutionRuns)
-      .set({ status: 'approved' })
-      .where(eq(evolutionRuns.id, id))
-      .run()
-
+    // Both writes in one transaction: "run approved" and "apply queued" are a
+    // single reviewer decision, and half of it (run flipped, apply missing)
+    // strands the run in a status the ticker will never advance.
     const applyId = `apply-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    db.insert(evolutionApplies).values({
-      id: applyId,
-      workspacePath: row.workspacePath,
-      status: 'pending',
-      sourceRunIds: JSON.stringify([id]),
-      reviewerHint,
-      createdAt: Date.now(),
-    }).run()
+    db.transaction((tx) => {
+      tx.update(evolutionRuns)
+        .set({ status: 'approved' })
+        .where(eq(evolutionRuns.id, id))
+        .run()
+
+      tx.insert(evolutionApplies).values({
+        id: applyId,
+        workspacePath: row.workspacePath,
+        status: 'pending',
+        sourceRunIds: JSON.stringify([id]),
+        reviewerHint,
+        createdAt: Date.now(),
+      }).run()
+    })
 
     broadcast({ type: 'evolution:run_changed', id, status: 'approved' })
     broadcast({ type: 'evolution:apply_changed', id: applyId, status: 'pending' })

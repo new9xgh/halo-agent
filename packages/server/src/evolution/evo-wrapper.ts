@@ -1231,8 +1231,9 @@ async function runMode(id: string, logFd: number): Promise<void> {
   resetRunArtifacts(runDir, logFd)
 
   // Heartbeat loop runs for the whole orchestration, regardless of phase.
-  // 60s interval; ticker default timeout is 5min so a single missed
-  // heartbeat tolerates a slow LLM call.
+  // 60s interval; the ticker's default run timeout is 12min
+  // (config.evolution.runTimeoutMinutes) so several missed heartbeats are
+  // tolerated across a slow LLM call.
   const hb = setInterval(() => {
     try {
       getEvoDb().update(evolutionRuns)
@@ -2079,6 +2080,10 @@ async function main(): Promise<void> {
     writeLog(fd, `[wrapper] fatal: ${msg}\n`)
     try {
       const now = Date.now()
+      // Run mode only. An apply-mode crash that escaped finalizeApply
+      // deliberately leaves the row in running/syncing: the ticker reclaims it
+      // on heartbeat loss (recovery delay = applyTimeoutMinutes) and that path
+      // also rolls the sandbox back, which a bare status flip here would skip.
       if (mode === 'run') {
         getEvoDb().update(evolutionRuns)
           .set({ status: 'failed', failureReason: `wrapper crash: ${msg}`, completedAt: now })

@@ -284,6 +284,7 @@ export async function runArchivePass(): Promise<ArchiveSummary> {
 // ─────────────────────────────────────────────
 
 let _archiveTimer: NodeJS.Timeout | null = null
+let _startupTimer: NodeJS.Timeout | null = null
 
 /** Start a daily archive pass. Runs once at startup, then every 24h. */
 export function startArchiveDaemon(): void {
@@ -299,13 +300,18 @@ export function startArchiveDaemon(): void {
     })
   }
   // Run shortly after server boot so any rows already past the threshold
-  // are processed without waiting a full day.
-  setTimeout(() => pass('startup'), 60_000) // 1 minute after boot
+  // are processed without waiting a full day. Handle kept so a shutdown
+  // inside that first minute doesn't leave a pass firing after stop().
+  _startupTimer = setTimeout(() => { _startupTimer = null; pass('startup') }, 60_000) // 1 minute after boot
 
   _archiveTimer = setInterval(() => pass('daily'), DAY_MS)
 }
 
 export function stopArchiveDaemon(): void {
+  if (_startupTimer) {
+    clearTimeout(_startupTimer)
+    _startupTimer = null
+  }
   if (_archiveTimer) {
     clearInterval(_archiveTimer)
     _archiveTimer = null
