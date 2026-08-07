@@ -119,6 +119,9 @@ const messages: Record<string, Record<Lang, string>> = {
   // filename is already delimited by the surrounding punctuation.
   'handler.upload_failed': { zh: '⚠️ 文件上传失败：{name} — {error}', en: '⚠️ Failed to upload {name}: {error}' },
   'handler.workspace_gone': { zh: '⚠️ workspace 不存在，请到 web 端更新绑定', en: '⚠️ Workspace does not exist, please update binding in web' },
+  // Telegram Bot API's getFile caps downloads at 20MB — larger files can't be
+  // pulled into the workspace, so tell the user instead of failing silently.
+  'handler.file_too_big': { zh: '⚠️ 文件超过 20MB（Telegram Bot API 下载上限），无法接收。请改用其他方式传输，比如放到 workspace 里', en: '⚠️ File exceeds 20MB (Telegram Bot API download limit) and cannot be received. Please transfer it another way, e.g. put it in the workspace' },
   'handler.not_allowed': { zh: '⚠️ 你不在这个 bot 的允许列表中', en: '⚠️ You are not in this bot\'s allowed list' },
   'handler.start_greeting': { zh: '👋 Halo bot 已就绪。直接发消息开始对话。发 /help 查看可用命令。', en: '👋 Halo bot ready. Send a message to start. /help for commands.' },
 

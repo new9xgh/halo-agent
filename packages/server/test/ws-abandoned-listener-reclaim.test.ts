@@ -276,6 +276,48 @@ describe('reclaiming abandoned connections', () => {
   })
 })
 
+describe('session:clear listener lifecycle (audit A-H1)', () => {
+  /** One clear round trip: send session:clear, resolve on session:cleared. */
+  function clearSession(ws: WebSocket, sessionId: string): Promise<void> {
+    return new Promise((resolve) => {
+      const onMsg = (raw: Buffer) => {
+        if ((JSON.parse(raw.toString('utf-8')) as { type?: string }).type === 'session:cleared') {
+          ws.off('message', onMsg)
+          resolve()
+        }
+      }
+      ws.on('message', onMsg)
+      ws.send(JSON.stringify({ type: 'session:clear', sessionId }))
+    })
+  }
+
+  it('clear releases the listener — repeated New-session clicks must not accumulate', async () => {
+    // The old handler re-registered a background bgHandler on every clear and
+    // threw away its unsubscribe (and nothing ever drained its pendingEvents),
+    // so each admin "New session" click leaked one listener on the old session
+    // — the accumulation confirmed by production probes (3 listeners on one
+    // session). A cleared session needs NO listener: the admin wipes its chat
+    // store on session:cleared, SessionUIStore folds + persists a running
+    // session's events with zero listeners, and a later re-open subscribes
+    // fresh from the snapshot.
+    const ws = await connect()
+    await subscribe(ws, SID)
+    expect(listenerCount(SID)).toBe(1)
+
+    await clearSession(ws, SID)
+    expect(listenerCount(SID)).toBe(0)
+
+    // Subscribe→clear ×3 (the production accumulation signature): count must
+    // return to zero every time, not grow by one per cycle.
+    for (let i = 0; i < 3; i++) {
+      await subscribe(ws, SID)
+      expect(listenerCount(SID)).toBe(1)
+      await clearSession(ws, SID)
+    }
+    expect(listenerCount(SID)).toBe(0)
+  })
+})
+
 describe('self-heal after reclaim', () => {
   // A reclaimed-but-alive connection (renderer frozen >3min, network process
   // still answering pings) has NO path back on its own: the server keeps

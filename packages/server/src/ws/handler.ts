@@ -179,13 +179,18 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const prevSessionId = msg.sessionId ?? client.sessionId
     saveSession(client)
     if (prevSessionId && client.sessionId && client.sessionManager) {
+      // Release the listener and register NOTHING in its place. A cleared
+      // session is deliberately abandoned — the admin wipes its chat store on
+      // `session:cleared` — so no one on this connection consumes buffered
+      // notifications for it. Unlike the close-detach path (which buffers for
+      // a reconnect within the grace window), there is no reattach expecting
+      // stream continuity: SessionUIStore keeps folding + persisting a
+      // still-running session's events with zero listeners, and a later
+      // re-open subscribes fresh and gets the full snapshot. The bgHandler
+      // this used to register (unsubscribe discarded, pendingEvents never
+      // drained) leaked one listener per "New session" click — audit A-H1.
       client.unsubscribeEvents?.()
       client.unsubscribeEvents = null
-      const pendingEvents: Array<Record<string, unknown>> = []
-      const bgHandler = (_event: AgentSessionEvent, _state: UIState, _turnId: string) => {
-        bufferDetachedNotification(_event, pendingEvents)
-      }
-      client.sessionManager.registerEventListener(client.sessionId, bgHandler)
       client.backgroundSaves.set(prevSessionId, () => saveSession(client))
     }
     client.sessionId = null

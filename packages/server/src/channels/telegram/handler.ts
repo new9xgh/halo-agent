@@ -47,6 +47,48 @@ async function downloadTelegramFile(botToken: string, filePath: string): Promise
   return Buffer.from(await resp.arrayBuffer())
 }
 
+/** Telegram Bot API's getFile refuses files larger than 20MB ("file is too
+ *  big") — check `file_size` up front so the user gets a readable hint
+ *  instead of a generic API error. */
+const MAX_TG_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+/**
+ * Download a Telegram file and persist it under the workspace's inbound
+ * assets — the same flow the photo handler uses. Returns the saved absolute
+ * path, 'too_big' when the file exceeds the Bot API download cap, or null
+ * when the download failed.
+ *
+ * The note fed to the agent must only ever contain the returned LOCAL path:
+ * a getFile URL embeds the botToken, and that text is persisted verbatim
+ * into the session log (UI log + LLM context + disk) — audit A-H2.
+ */
+async function fetchAndSaveTelegramFile(args: {
+  ctx: any
+  account: TelegramAccount
+  workspace: string
+  fileId: string
+  fileSize?: number
+  kind: 'voice' | 'video' | 'file'
+  mimeType?: string
+  originalFilename?: string
+}): Promise<{ savedPath: string } | 'too_big' | null> {
+  const { ctx, account, workspace, fileId, fileSize, kind, mimeType, originalFilename } = args
+  if ((fileSize ?? 0) > MAX_TG_DOWNLOAD_BYTES) return 'too_big'
+  try {
+    const file = await ctx.api.getFile(fileId)
+    if (!file.file_path) return null
+    const buf = await downloadTelegramFile(account.botToken, file.file_path)
+    const savedPath = await saveInboundMedia({
+      workspacePath: workspace, accountId: account.accountId, channel: 'telegram',
+      buffer: buf, kind, mimeType, originalFilename,
+    })
+    return { savedPath }
+  } catch (err) {
+    console.log(`[telegram] ${account.accountId} ${kind} download failed: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
+}
+
 function isUserAllowed(account: TelegramAccount, userId: number, username?: string): boolean {
   const raw = account.allowedUsers.trim()
   if (!raw) return true
@@ -265,14 +307,17 @@ async function runBot(args: {
     const doc = ctx.message.document
     const caption = ctx.message.caption ?? ''
     let fileNote = `[文件: ${doc?.file_name ?? 'unknown'}]`
-    try {
-      if (doc) {
-        const file = await ctx.api.getFile(doc.file_id)
-        if (file.file_path) {
-          fileNote = `[文件 "${doc.file_name}": https://api.telegram.org/file/bot${account.botToken}/${file.file_path}]`
-        }
+    if (doc) {
+      const saved = await fetchAndSaveTelegramFile({
+        ctx, account, workspace, fileId: doc.file_id, fileSize: doc.file_size,
+        kind: 'file', mimeType: doc.mime_type, originalFilename: doc.file_name,
+      })
+      if (saved === 'too_big') {
+        await ctx.reply(t('handler.file_too_big', lang))
+        return
       }
-    } catch {}
+      if (saved) fileNote = `[文件 "${doc.file_name ?? 'unknown'}" 已保存: ${saved.savedPath}]`
+    }
     const text = caption ? `${caption}\n${fileNote}` : fileNote
     await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text, lang, unsubscribers, activeOverrides })
   })
@@ -288,12 +333,15 @@ async function runBot(args: {
     const voice = ctx.message.voice
     const duration = voice.duration
     let voiceNote = `[语音 ${duration}s]`
-    try {
-      const file = await ctx.api.getFile(voice.file_id)
-      if (file.file_path) {
-        voiceNote = `[语音 ${duration}s: https://api.telegram.org/file/bot${account.botToken}/${file.file_path}]`
-      }
-    } catch {}
+    const saved = await fetchAndSaveTelegramFile({
+      ctx, account, workspace, fileId: voice.file_id, fileSize: voice.file_size,
+      kind: 'voice', mimeType: voice.mime_type,
+    })
+    if (saved === 'too_big') {
+      await ctx.reply(t('handler.file_too_big', lang))
+      return
+    }
+    if (saved) voiceNote = `[语音 ${duration}s 已保存: ${saved.savedPath}]`
     await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text: voiceNote, lang, unsubscribers, activeOverrides })
   })
 
@@ -307,12 +355,15 @@ async function runBot(args: {
 
     const vn = ctx.message.video_note
     let vnNote = `[视频消息 ${vn.duration}s]`
-    try {
-      const file = await ctx.api.getFile(vn.file_id)
-      if (file.file_path) {
-        vnNote = `[视频消息 ${vn.duration}s: https://api.telegram.org/file/bot${account.botToken}/${file.file_path}]`
-      }
-    } catch {}
+    const saved = await fetchAndSaveTelegramFile({
+      ctx, account, workspace, fileId: vn.file_id, fileSize: vn.file_size,
+      kind: 'video', mimeType: 'video/mp4',
+    })
+    if (saved === 'too_big') {
+      await ctx.reply(t('handler.file_too_big', lang))
+      return
+    }
+    if (saved) vnNote = `[视频消息 ${vn.duration}s 已保存: ${saved.savedPath}]`
     await handleUserMessage({ registry, db, account, bot, ctx, userId, workspace, text: vnNote, lang, unsubscribers, activeOverrides })
   })
 
