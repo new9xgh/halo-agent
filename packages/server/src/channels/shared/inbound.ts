@@ -50,7 +50,10 @@ import type { Lang } from './i18n.js'
  *  (TelegramResponder / WechatResponder / SlackResponder / FeishuResponder). */
 export interface ChannelResponder {
   handle(event: AgentSessionEvent): void
-  close(): void
+  /** May return a promise that settles once every buffered chunk has been
+   *  sent (slack / feishu serialize their sends — audit A-L3). The bridge
+   *  keeps the reply route alive until it settles. */
+  close(): void | Promise<void>
 }
 
 /** A route value, or an updater deriving the next route from the previous one
@@ -100,10 +103,19 @@ export class InboundBridge<Route> {
     const unsubscribe = sm.registerEventListener(sessionId, (event: AgentSessionEvent) => responder.handle(event))
     this.unsubscribers.set(sessionId, () => {
       // close() flushes the pending buffer — it must still see the route, so
-      // the route entry is deleted after, not before.
-      responder.close()
+      // the route entry is deleted after, not before. Slack/feishu send their
+      // chunks serially and hand back a drain promise, so "after" means after
+      // that settles; dropping the route synchronously would strand the tail
+      // of a split reply with nowhere to send.
+      const drained = responder.close()
       unsubscribe()
-      this.routes.delete(sessionId)
+      if (drained) {
+        drained
+          .catch(() => { /* responders log their own send failures */ })
+          .finally(() => this.routes.delete(sessionId))
+      } else {
+        this.routes.delete(sessionId)
+      }
     })
   }
 
@@ -116,12 +128,14 @@ export class InboundBridge<Route> {
     unsub()
   }
 
-  /** Tear down everything — stopAccount path. */
+  /** Tear down everything — stopAccount path. Each unsubscriber drops its own
+   *  route once its responder has drained (see `ensureListener`), so there is
+   *  deliberately no blanket `routes.clear()` here: it would delete the routes
+   *  the still-in-flight sends are about to read. */
   closeAll(): void {
     const fns = [...this.unsubscribers.values()]
     this.unsubscribers.clear()
     for (const fn of fns) fn()
-    this.routes.clear()
   }
 }
 

@@ -25,6 +25,8 @@ export class FeishuResponder {
   private buffer = ''
   private deps: FeishuResponderDeps
   private closed = false
+  /** Tail of the per-responder send chain — see `enqueueChunk`. */
+  private sendTail: Promise<void> = Promise.resolve()
 
   constructor(deps: FeishuResponderDeps) {
     this.deps = deps
@@ -41,13 +43,13 @@ export class FeishuResponder {
       case 'system':
         if (event.text) {
           this.flushBuffer()
-          void this.dispatchChunk(`ℹ️ ${event.text}`)
+          this.enqueueChunk(`ℹ️ ${event.text}`)
         }
         break
       case 'error':
         if (event.error) {
           this.flushBuffer()
-          void this.dispatchChunk(`❌ ${event.error}`)
+          this.enqueueChunk(`❌ ${event.error}`)
         }
         break
       case 'complete':
@@ -56,10 +58,13 @@ export class FeishuResponder {
     }
   }
 
-  close(): void {
-    if (this.closed) return
+  /** Returns the drain promise so the bridge keeps the reply route alive
+   *  until the last queued chunk has actually been sent. */
+  close(): Promise<void> {
+    if (this.closed) return this.sendTail
     this.flushBuffer()
     this.closed = true
+    return this.sendTail
   }
 
   private flushBuffer(): void {
@@ -68,12 +73,12 @@ export class FeishuResponder {
       const cut = this.findSplitPoint(this.buffer, HARD_CHARS)
       const chunk = this.buffer.slice(0, cut)
       this.buffer = this.buffer.slice(cut).trimStart()
-      void this.dispatchChunk(chunk)
+      this.enqueueChunk(chunk)
     }
     if (this.buffer) {
       const text = this.buffer
       this.buffer = ''
-      void this.dispatchChunk(text)
+      this.enqueueChunk(text)
     }
   }
 
@@ -82,6 +87,20 @@ export class FeishuResponder {
     const lastPara = window.lastIndexOf('\n\n')
     if (lastPara > limit / 2) return lastPara + 2
     return limit
+  }
+
+  /**
+   * Serialize sends per responder — same rationale as the Slack adapter
+   * (audit A-L3): `flushBuffer` emits several chunks in one synchronous
+   * loop, and firing their HTTP sends concurrently gave arrival order no
+   * guarantee. Each chunk waits for the previous send to settle; the
+   * `catch` keeps a rejected link from stalling the rest (dispatchChunk
+   * already logs per-send failures).
+   */
+  private enqueueChunk(chunk: string): void {
+    this.sendTail = this.sendTail
+      .then(() => this.dispatchChunk(chunk))
+      .catch(() => { /* already logged in dispatchChunk */ })
   }
 
   private async dispatchChunk(chunk: string): Promise<void> {
