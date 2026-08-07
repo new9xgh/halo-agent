@@ -57,6 +57,9 @@ const LOCKOUT_MS = 15 * 60 * 1000
 const loginAttempts = new Map()
 
 function getClientIp(req) {
+  // Trusts the first x-forwarded-for hop. Only meaningful behind a trusted
+  // reverse proxy that overwrites the header; exposed directly, a client can
+  // forge it to dodge lockout or lock out others' IPs — see README.
   const forwarded = req.headers['x-forwarded-for']
   if (forwarded) return forwarded.split(',')[0].trim()
   return req.socket?.remoteAddress || 'unknown'
@@ -207,6 +210,8 @@ app.get('/file', authMiddleware, async (req, res) => {
     if (cd) res.setHeader('content-disposition', cd)
 
     const reader = upstream.body.getReader()
+    req.on('close', () => reader.cancel())
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) { res.end(); return }

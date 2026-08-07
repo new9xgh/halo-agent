@@ -81,6 +81,19 @@ describe('resolveRefs', () => {
     expect(out.warnings[0]).toContain('truncated')
   })
 
+  it('truncation is byte-accurate for multi-byte text (no over-read, no split char)', () => {
+    // '你' is 3 bytes in UTF-8 but 1 UTF-16 code unit: a code-unit slice of an
+    // oversized CJK file would over-read ~3× the byte budget.
+    const MAX_FILE_BYTES = 100 * 1024
+    fs.writeFileSync(path.join(ws, 'cjk.txt'), '你'.repeat(50 * 1024)) // 150KB on disk
+    const out = resolveRefs('@file cjk.txt', ws)
+    const body = out.text.match(/<file[^>]*>\n([\s\S]*?)\n\[truncated:/)?.[1] ?? ''
+    expect(Buffer.byteLength(body, 'utf-8')).toBeLessThanOrEqual(MAX_FILE_BYTES)
+    expect(Buffer.byteLength(body, 'utf-8')).toBeGreaterThan(MAX_FILE_BYTES - 8) // still ~full budget
+    expect(body).not.toContain('\uFFFD') // no torn multi-byte sequence at the cut
+    expect(out.warnings).toHaveLength(1)
+  })
+
   it('resolves multiple refs in one message', () => {
     fs.writeFileSync(path.join(ws, 'a.txt'), 'AAA')
     fs.writeFileSync(path.join(ws, 'b.txt'), 'BBB')

@@ -292,9 +292,12 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   function destroy(): void {
+    // Only release our own handle — unsubPersistent tracks the current
+    // session across /switch migrations. A blanket
+    // sm.unregisterEventListener(sessionId) would also kill any *other*
+    // listener on the same session (e.g. a future viewer attachment).
     state.unsubPersistent()
     eventHandlers.clear()
-    state.sm.unregisterEventListener(state.sessionId)
   }
 
   function getSessionTree(): SessionTreeNode | null {

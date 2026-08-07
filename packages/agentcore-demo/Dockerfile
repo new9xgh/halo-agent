@@ -15,9 +15,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Install halo from a pre-built pnpm deploy directory (includes all workspace
-# deps resolved). `pnpm --filter @turmind/halo-cli deploy deploy-out --prod --legacy`
-# produces the directory. Native modules must be rebuilt for ARM64 since the
-# deploy was produced on the host (likely x86_64).
+# deps resolved). From the repo root:
+#   pnpm deploy --legacy --filter @turmind/halo-cli --prod packages/agentcore-demo/deploy
+# deploy/ is a manually regenerated artifact — run scripts/check-deploy-fresh.mjs
+# before a manual `docker build` (cdk synth/deploy runs it automatically) so a
+# stale tree can't be baked into the image. Native modules must be rebuilt for
+# ARM64 since the deploy was produced on the host (likely x86_64).
 COPY deploy/ /opt/halo
 RUN cd /opt/halo \
   && npm rebuild better-sqlite3 \

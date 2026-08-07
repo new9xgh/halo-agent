@@ -39,6 +39,9 @@ const CLI_PUB = path.join(CLI_DIR, 'dist-pub')
 // were prebuilt against — see packages/server/package.json deps and the
 // engines field in repo root.
 const NODE_VERSION = 'v22.11.0'
+// Bare version for prebuild-install --target etc. — keep every effective
+// use of the version derived from NODE_VERSION so a bump can't miss one.
+const NODE_VERSION_BARE = NODE_VERSION.slice(1)
 
 // Early gate: the build host's node major must match the bundled node's. The
 // staged native modules (better-sqlite3) come from `pnpm deploy` hard-linking
@@ -344,15 +347,16 @@ function fetchTargetArchNatives() {
   // better-sqlite3's prebuild is NODE_MODULE_VERSION-specific. pnpm deploy
   // hard-links whatever ABI the build host's *active* node produced — e.g. ABI
   // 131 (node 23) on a machine where a homebrew node shadows the pinned 22.
-  // The bundled runtime is node 22.11.0 (ABI 127), so a node-23-built .node
-  // crashes at dlopen ("NODE_MODULE_VERSION 131 ... requires 127"). Re-fetch the
-  // 22.11.0 prebuild UNCONDITIONALLY — not just when cross-staging — so the ABI
-  // always matches the bundled node regardless of the build host's active node.
+  // The bundled runtime is NODE_VERSION (node 22 = ABI 127), so e.g. a
+  // node-23-built .node crashes at dlopen ("NODE_MODULE_VERSION 131 ... requires
+  // 127"). Re-fetch the pinned-version prebuild UNCONDITIONALLY — not just when
+  // cross-staging — so the ABI always matches the bundled node regardless of
+  // the build host's active node.
   // Re-fetch into every copy node might load (flat + .pnpm).
   for (const pkg of resolvePkgDirs('better-sqlite3')) {
-    console.log(`[stage] prebuild-install better-sqlite3 (node 22.11.0, ${TARGET_PLATFORM}-${TARGET_ARCH}) in ${pkg}`)
+    console.log(`[stage] prebuild-install better-sqlite3 (node ${NODE_VERSION_BARE}, ${TARGET_PLATFORM}-${TARGET_ARCH}) in ${pkg}`)
     execSync(
-      `npx --yes prebuild-install --runtime=node --target=22.11.0 --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
+      `npx --yes prebuild-install --runtime=node --target=${NODE_VERSION_BARE} --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
       { cwd: pkg, stdio: 'inherit' },
     )
   }
@@ -513,15 +517,15 @@ function stageCliRuntime() {
   // 4. Native fixup for the target. better-sqlite3's prebuild is ABI-specific;
   //    npm installed whatever the build host's active node produced (e.g. ABI
   //    131 on a node-23 host), which crashes on the bundled node 22 — so always
-  //    re-fetch the 22.11.0 prebuild, not just when cross-staging (same root
-  //    cause as server-runtime; see fetchTargetArchNatives). node-pty ships all
-  //    platforms' prebuilds; just trim to the target.
+  //    re-fetch the pinned NODE_VERSION prebuild, not just when cross-staging
+  //    (same root cause as server-runtime; see fetchTargetArchNatives).
+  //    node-pty ships all platforms' prebuilds; just trim to the target.
   const keepPlat = `${TARGET_PLATFORM}-${TARGET_ARCH}`
   const sqlDir = path.join(CLI_RT, 'node_modules', 'better-sqlite3')
   if (fs.existsSync(sqlDir)) {
-    console.log(`[stage] prebuild-install better-sqlite3 (node 22.11.0, ${keepPlat}) in cli-runtime`)
+    console.log(`[stage] prebuild-install better-sqlite3 (node ${NODE_VERSION_BARE}, ${keepPlat}) in cli-runtime`)
     execSync(
-      `npx --yes prebuild-install --runtime=node --target=22.11.0 --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
+      `npx --yes prebuild-install --runtime=node --target=${NODE_VERSION_BARE} --arch=${TARGET_ARCH} --platform=${TARGET_PLATFORM}`,
       { cwd: sqlDir, stdio: 'inherit' },
     )
     fs.rmSync(path.join(sqlDir, 'deps'), { recursive: true, force: true })
@@ -661,7 +665,7 @@ function smokeTestNativeAddons() {
       const detail = (err.stderr?.toString() || err.message).split('\n').find((l) => /NODE_MODULE_VERSION|ERR_DLOPEN|Error:/.test(l)) || err.message
       console.error(`[stage] FATAL: staged better-sqlite3 in ${path.basename(rt)} fails to load on the bundled node — the dmg would crash on launch.`)
       console.error(`[stage]   ${detail.trim()}`)
-      console.error('[stage]   This is an ABI mismatch. Re-run a full stage (HALO_STAGE_FULL=1) so prebuild-install re-fetches the node 22.11.0 binary.')
+      console.error(`[stage]   This is an ABI mismatch. Re-run a full stage (HALO_STAGE_FULL=1) so prebuild-install re-fetches the node ${NODE_VERSION_BARE} binary.`)
       process.exit(1)
     }
   }

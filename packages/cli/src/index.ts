@@ -818,6 +818,13 @@ async function cmdTui(flags: HarnessFlags): Promise<void> {
     process.stdout.write('\x1b[?2004h')
     process.stdin.on('data', onEarlyData)
     buffering = true
+    // Backstop: turn bracketed paste off on ANY exit. The success path relies
+    // on ink's teardown and failures route through restoreTty(), but an ink
+    // crash outside our catch would otherwise leave the shell pasting
+    // `200~…201~` garbage. Idempotent, so overlapping the other paths is fine.
+    process.on('exit', () => {
+      try { process.stdout.write('\x1b[?2004l') } catch { /* stdout gone */ }
+    })
   }
   /** Boot failed — detach and restore cooked mode so the shell is usable.
    *  NOTE: never stdin.pause() on the success path — pause() stops the uv

@@ -143,14 +143,27 @@ function resolveVersion() {
 }
 
 function configHasPassword() {
-  // Cheap regex over secrets/config.yaml. We don't pull in a yaml parser
-  // here; the field is "      value: \"...\"" right under "  password:" and
-  // is empty on first run. Treat any non-empty quoted value as "set".
   const cfgPath = path.join(HALO_HOME, 'secrets', 'config.yaml')
   if (!fs.existsSync(cfgPath)) return false
   const txt = fs.readFileSync(cfgPath, 'utf8')
-  const m = txt.match(/^\s*password:\s*\n\s*value:\s*"([^"]*)"/m)
-  return !!(m && m[1] && m[1].length > 0)
+  // Parse with the server's own yaml lib — always resolvable, since the
+  // desktop can't boot without the staged server-runtime (dev: the server
+  // package's node_modules). The previous cheap regex required a
+  // double-quoted value; the yaml Document API that `halo setup` /
+  // change-password write through emits the scrypt hash plain (unquoted) or
+  // escape-folded across lines depending on prior scalar style, and the
+  // unquoted form regexed as "no password" → re-showed first-run setup.
+  try {
+    const YAML = require(path.join(resolveRuntimePaths().serverCwd, 'node_modules', 'yaml'))
+    const v = YAML.parse(txt)?.server?.password?.value
+    return typeof v === 'string' && v.length > 0
+  } catch {
+    // yaml lib unresolvable or file unparsable — legacy regex as a last
+    // resort, extended to also accept unquoted scalar values.
+    const m = txt.match(/^\s*password:\s*\n\s*value:\s*(?:"([^"]*)"|(\S+))/m)
+    const v = m ? (m[1] ?? m[2] ?? '') : ''
+    return v.length > 0
+  }
 }
 
 function runHelper(args, stdin) {
@@ -640,6 +653,40 @@ function setDockIconIfDev() {
 // The launcher is a tiny shell script (not a symlink): it must invoke the
 // bundled node against the cli-runtime bundle, both living inside the .app, so
 // a single-file symlink wouldn't carry the node+entry pairing.
+//
+// The inlined paths go stale when the user moves the app after installing
+// (Downloads → /Applications is the common case), so the script probes them at
+// run time: stale but the app sits at the standard /Applications location →
+// self-heal; otherwise fail with a "re-install from the app menu" hint instead
+// of exec's cryptic "no such file or directory".
+function buildCliLauncher(nodeBin, cliEntry) {
+  if (!app.isPackaged) {
+    // Dev: nodeBin may be a bare PATH lookup ("node") and resourcesPath points
+    // into electron/dist — no meaningful .app location to self-heal against.
+    return `#!/bin/sh\nexec "${nodeBin}" "${cliEntry}" "$@"\n`
+  }
+  const appBundle = path.resolve(process.resourcesPath, '..', '..')
+  const stdRes = path.join('/Applications', path.basename(appBundle), 'Contents', 'Resources')
+  const stdNode = path.join(stdRes, path.basename(nodeBin))
+  const stdCli = path.join(stdRes, 'cli-runtime', 'dist', 'index.js')
+  return [
+    '#!/bin/sh',
+    `NODE="${nodeBin}"`,
+    `CLI="${cliEntry}"`,
+    'if [ ! -x "$NODE" ] || [ ! -f "$CLI" ]; then',
+    `  NODE="${stdNode}"`,
+    `  CLI="${stdCli}"`,
+    'fi',
+    'if [ ! -x "$NODE" ] || [ ! -f "$CLI" ]; then',
+    '  echo "halo: Halo.app not found (moved or removed since this command was installed)." >&2',
+    '  echo "Open Halo and re-run \\"Install \'halo\' Command in PATH\\" from the app menu." >&2',
+    '  exit 127',
+    'fi',
+    'exec "$NODE" "$CLI" "$@"',
+    '',
+  ].join('\n')
+}
+
 function installCliCommand() {
   const { nodeBin, cliEntry } = resolveRuntimePaths()
   if (!fs.existsSync(cliEntry)) {
@@ -647,7 +694,7 @@ function installCliCommand() {
     return
   }
   const target = '/usr/local/bin/halo'
-  const script = `#!/bin/sh\nexec "${nodeBin}" "${cliEntry}" "$@"\n`
+  const script = buildCliLauncher(nodeBin, cliEntry)
 
   // Try a plain write first (works when /usr/local/bin exists and is user-
   // writable, e.g. Homebrew on Apple Silicon chowns it). Fall back to an

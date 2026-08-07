@@ -97,6 +97,14 @@ Prerequisites:
 - Amazon Bedrock model access enabled in your region (e.g. Claude)
 
 ```bash
+# 1. Stage the halo tree the Docker image COPYes (deploy/ is gitignored —
+#    regenerate it after every halo change you want in the image):
+pnpm build
+rm -rf packages/agentcore-demo/deploy
+pnpm deploy --legacy --filter @turmind/halo-cli --prod packages/agentcore-demo/deploy
+
+# 2. Deploy the stack (cdk synth/deploy fails fast if deploy/ is missing or
+#    holds an older cli version than the workspace):
 cd packages/agentcore-demo
 npm install          # installs aws-cdk-lib etc. for the cdk app
 cd cdk
