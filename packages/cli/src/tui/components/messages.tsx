@@ -52,7 +52,9 @@ function Block({ block }: { block: ChatBlock }): React.ReactElement {
     case 'thinking':
       return (
         <Box marginTop={1} marginLeft={2}>
-          <Text color="gray" dimColor>{block.text}</Text>
+          {/* dimColor on the default color (no explicit gray): gray+dim stacked two
+            * weakenings and was near-invisible on black-background terminals. */}
+          <Text dimColor>{block.text}</Text>
         </Box>
       )
     case 'tool':
@@ -60,18 +62,18 @@ function Block({ block }: { block: ChatBlock }): React.ReactElement {
         <Box flexDirection="column" marginLeft={2}>
           <Text color="yellow">
             ⚙ {block.toolName}
-            {block.toolArg ? <Text color="gray" dimColor>{` ${block.toolArg}`}</Text> : null}
+            {block.toolArg ? <Text dimColor>{` ${block.toolArg}`}</Text> : null}
             {block.durationMs != null ? ` ${block.durationMs}ms` : ''}
           </Text>
           {block.toolInput ? (
             <Box marginLeft={2}>
-              <Text color="gray" dimColor>{`args: ${block.toolInput}`}</Text>
+              <Text dimColor>{`args: ${block.toolInput}`}</Text>
             </Box>
           ) : null}
           {block.toolResult ? (
             <Box marginLeft={2} flexDirection="column">
               {block.toolResult.split('\n').map((line, i) => (
-                <Text key={i} color="gray" dimColor>{`│ ${line}`}</Text>
+                <Text key={i} dimColor>{`│ ${line}`}</Text>
               ))}
             </Box>
           ) : null}
@@ -99,14 +101,14 @@ function Block({ block }: { block: ChatBlock }): React.ReactElement {
       return (
         <Box marginTop={1} marginLeft={2}>
           <Text color="blue">{`╭─ ▶ ${block.subAgentName ?? 'sub'}`}</Text>
-          {block.text ? <Text color="gray" dimColor>{` · ${block.text}`}</Text> : null}
+          {block.text ? <Text dimColor>{` · ${block.text}`}</Text> : null}
         </Box>
       )
     case 'sub-done':
       return (
         <Box marginLeft={2}>
           <Text color="blue">{`╰─ ✓ ${block.subAgentName ?? 'sub'}`}</Text>
-          <Text color="gray" dimColor>
+          <Text dimColor>
             {` · ${block.subToolCount ?? 0} tool${(block.subToolCount ?? 0) === 1 ? '' : 's'}`}
             {block.durationMs != null ? ` · ${(block.durationMs / 1000).toFixed(1)}s` : ''}
           </Text>

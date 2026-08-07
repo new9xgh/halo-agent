@@ -57,7 +57,9 @@ export function Streaming({ spinnerLabel, liveText, liveThinking, activeSubs, tu
     <Box flexDirection="column" marginTop={1} marginLeft={2}>
       {liveThinking ? (
         <Box marginBottom={liveText ? 1 : 0}>
-          <Text color="gray" dimColor>{liveThinking}</Text>
+          {/* dim on default color, not gray+dim — matches the committed thinking
+            * block; gray+dim was near-invisible on black-background terminals. */}
+          <Text dimColor>{liveThinking}</Text>
         </Box>
       ) : null}
 
@@ -72,7 +74,7 @@ export function Streaming({ spinnerLabel, liveText, liveThinking, activeSubs, tu
         <Box key={sub.taskId}>
           <Text color="blue"><Spinner type="dots" /></Text>
           <Text color="blue">{` ${sub.agentName}`}</Text>
-          <Text color="gray" dimColor>
+          <Text dimColor>
             {sub.currentTool ? ` · ${sub.currentTool}` : ''}
             {` · ${sub.toolCount} tool${sub.toolCount === 1 ? '' : 's'}`}
           </Text>
@@ -82,9 +84,9 @@ export function Streaming({ spinnerLabel, liveText, liveThinking, activeSubs, tu
       {spinnerLabel && activeSubs.length === 0 ? (
         <Box>
           <Text color="cyan"><Spinner type="dots" /></Text>
-          <Text color="gray" dimColor>{` ${spinnerLabel}`}</Text>
+          <Text dimColor>{` ${spinnerLabel}`}</Text>
           {turnStartedAt != null && elapsed >= 3 ? (
-            <Text color="gray" dimColor>{` · ${fmtElapsed(elapsed)}`}</Text>
+            <Text dimColor>{` · ${fmtElapsed(elapsed)}`}</Text>
           ) : null}
         </Box>
       ) : null}

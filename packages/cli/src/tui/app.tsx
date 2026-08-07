@@ -203,12 +203,14 @@ function messagesToLogLines(messages: unknown[]): LogLine[] {
       lines.push({ text: `${tsStr} ${ANSI.yellow}⚙ ${m.toolName}${ANSI.reset}${dur}` })
       if (m.toolInput !== undefined) {
         const args = safeJson(m.toolInput, 200)
-        lines.push({ text: `         ${ANSI.gray}args: ${args}${ANSI.reset}` })
+        // dim on default color, not gray: matches the main chat view's tool
+        // rendering and stays readable on black-background terminals.
+        lines.push({ text: `         ${ANSI.dim}args: ${args}${ANSI.reset}` })
       }
       if (m.toolOutput !== undefined) {
         const out = typeof m.toolOutput === 'string' ? m.toolOutput : safeJson(m.toolOutput, 600)
         for (const line of out.split('\n').slice(0, 8)) {
-          lines.push({ text: `         ${ANSI.gray}│ ${line}${ANSI.reset}` })
+          lines.push({ text: `         ${ANSI.dim}│ ${line}${ANSI.reset}` })
         }
       }
       continue
@@ -249,7 +251,9 @@ function messagesToLogLines(messages: unknown[]): LogLine[] {
             headerWritten = true
           }
           for (const l of block.text.split('\n')) {
-            lines.push({ text: `         ${ANSI.magenta}${ANSI.dim}${l}${ANSI.reset}` })
+            // Body in plain dim (header keeps the magenta accent) — matches the
+            // main view's thinking block; magenta+dim was hard to read.
+            lines.push({ text: `         ${ANSI.dim}${l}${ANSI.reset}` })
           }
         }
       }
