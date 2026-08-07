@@ -793,6 +793,15 @@ async function cmdSessions(flags: HarnessFlags): Promise<void> {
 }
 
 async function cmdTui(flags: HarnessFlags): Promise<void> {
+  // The TUI needs a keyboard: ink's useInput throws "Raw mode is not supported"
+  // when stdin isn't a TTY (CI, `halo tui < file`, `echo x | halo tui`). Fail
+  // here instead of after ~2s of harness init with ink's own wording.
+  if (!process.stdin.isTTY) {
+    process.stderr.write('halo tui needs an interactive terminal (stdin is not a TTY).\nFor pipes, CI, or scripts use `halo cli "<prompt>"` instead.\n')
+    process.exitCode = 1
+    return
+  }
+
   const { initRuntime } = await import('./harness.js')
   const { runTui } = await import('./tui.js')
 

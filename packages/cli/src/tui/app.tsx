@@ -9,6 +9,7 @@ import type { ChatBlock } from './types.js'
 import { Messages } from './components/messages.js'
 import { Streaming } from './components/streaming.js'
 import { loadHistory, appendHistory } from './history.js'
+import { sanitizeToolOutput } from './terminal-text.js'
 import { StatusBar } from './components/status-bar.js'
 import { InputBox } from './components/input-box.js'
 import { LogNavigator } from './components/log-navigator.js'
@@ -150,8 +151,11 @@ function summarizeToolInput(toolName: string, input: unknown): string | null {
   }
 }
 
-function truncateLines(s: string, maxLines: number, maxLineLen: number): string {
-  const lines = s.split('\n')
+/** Tool output → a capped, terminal-safe block body. Sanitize first: `\r`
+ *  folds into a real line break here, so the line cap counts the lines the
+ *  user will actually see. */
+export function truncateLines(s: string, maxLines: number, maxLineLen: number): string {
+  const lines = sanitizeToolOutput(s).split('\n')
   const head = lines.slice(0, maxLines).map((l) => truncate(l, maxLineLen))
   if (lines.length > maxLines) head.push(`… (+${lines.length - maxLines} lines)`)
   return head.join('\n')
@@ -174,7 +178,7 @@ const ANSI = {
  * message expands to one timestamp/header line plus zero or more body lines,
  * with ANSI colors per message kind.
  */
-function messagesToLogLines(messages: unknown[]): LogLine[] {
+export function messagesToLogLines(messages: unknown[]): LogLine[] {
   const lines: LogLine[] = []
   for (const raw of messages) {
     const m = raw as {
@@ -208,7 +212,9 @@ function messagesToLogLines(messages: unknown[]): LogLine[] {
         lines.push({ text: `         ${ANSI.dim}args: ${args}${ANSI.reset}` })
       }
       if (m.toolOutput !== undefined) {
-        const out = typeof m.toolOutput === 'string' ? m.toolOutput : safeJson(m.toolOutput, 600)
+        // safeJson escapes control chars already; a raw string result needs the
+        // same sanitizing the chat blocks get (see terminal-text.ts).
+        const out = typeof m.toolOutput === 'string' ? sanitizeToolOutput(m.toolOutput) : safeJson(m.toolOutput, 600)
         for (const line of out.split('\n').slice(0, 8)) {
           lines.push({ text: `         ${ANSI.dim}│ ${line}${ANSI.reset}` })
         }
@@ -606,6 +612,9 @@ export function App({ harness, verbose }: AppProps): ReactElement {
   const [viewer, setViewer] = useState<{ sessionId: string; title: string; lines: LogLine[]; live: boolean } | null>(null)
   /** Last esc-press timestamp so repeated esc doesn't spam "interrupting…". */
   const lastInterruptRef = useRef(0)
+  /** Whether InputBox is showing a completion popup — Esc closes it there, so
+   *  the interrupt handler below must not also fire (see the useInput comment). */
+  const [popupOpen, setPopupOpen] = useState(false)
   /** Slash command list — refreshed on mount + on /ws switch. */
   const [commands, setCommands] = useState<SlashItem[]>([])
   /** Real context window size for the current session's agent — fetched once
@@ -684,12 +693,19 @@ export function App({ harness, verbose }: AppProps): ReactElement {
   // It lists the whole session tree (root + every sub-agent) from the DB, so
   // sub-agents survive a resume and stopped ones still show, unlike the old
   // in-memory picker. (Shift+Tab is unusable — Windows cmd eats it as backtab.)
+  //
+  // ink has no key capture/bubbling — every key reaches every mounted useInput
+  // handler — so anything that owns Esc for itself must be excluded here by
+  // hand: the log viewer / navigator close on Esc, and InputBox dismisses its
+  // completion popup on Esc. Without these guards, watching a running
+  // session's live log and pressing Esc to leave silently killed the turn (the
+  // navigator's own header even advertises "Esc/q to cancel").
   useInput((input, key) => {
     if (key.ctrl && input === 'o' && !navTree && !viewer) {
       openLog()
       return
     }
-    if (key.escape && state.running) {
+    if (key.escape && state.running && !viewer && !navTree && !popupOpen) {
       const now = Date.now()
       // Interrupt (not stop): abort the in-flight turn at once — including a
       // command mid-run — then the server folds any queued messages into one
@@ -939,6 +955,7 @@ export function App({ harness, verbose }: AppProps): ReactElement {
             hint={hint}
             commands={commands}
             workspace={harness.workspace}
+            onPopupOpenChange={setPopupOpen}
           />
         </Box>
       )}

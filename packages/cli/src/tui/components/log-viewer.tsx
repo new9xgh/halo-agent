@@ -37,7 +37,6 @@ export function LogViewer({ title, lines, live, onClose }: Props): React.ReactEl
   // Reserve rows: 1 header + 1 footer + 1 spacer = 3. Leave some breathing room
   // for the chat area above (approx 6 rows total taken by the rest of the App).
   const viewportRows = Math.max(8, (stdout?.rows ?? 30) - 14)
-  const cols = Math.max(40, (stdout?.columns ?? 100) - 4)
 
   // Open at the bottom (most recent), mirroring the admin chat the user asked
   // this to match: a live log is opened to watch the tail, and starting at the
@@ -101,7 +100,12 @@ export function LogViewer({ title, lines, live, onClose }: Props): React.ReactEl
           <Text color="gray" dimColor>(empty)</Text>
         ) : (
           visible.map((line, i) => (
-            <Text key={top + i}>{truncateForCols(line.text, cols)}</Text>
+            // wrap="truncate-end": ink's own cli-truncate pass is width-aware
+            // (CJK counts as 2 columns, ANSI escapes as 0, surrogate pairs stay
+            // intact), so every line occupies exactly one row and the fixed
+            // viewport height below holds. A hand-rolled code-unit cut used to
+            // let a CJK line wrap to two rows and push the footer out of frame.
+            <Text key={top + i} wrap="truncate-end">{line.text}</Text>
           ))
         )}
       </Box>
@@ -113,28 +117,4 @@ export function LogViewer({ title, lines, live, onClose }: Props): React.ReactEl
       </Box>
     </Box>
   )
-}
-
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\x1b\[[0-9;]*m/g
-
-/** Hard-cut a single line to fit terminal width, counting only visible chars
- *  (ANSI escape sequences don't take screen space). Preserves all escapes
- *  encountered before the cutoff so colors render correctly, then resets. */
-function truncateForCols(s: string, cols: number): string {
-  let visible = 0
-  let i = 0
-  while (i < s.length && visible < cols) {
-    ANSI_RE.lastIndex = i
-    const match = ANSI_RE.exec(s)
-    if (match && match.index === i) {
-      i = ANSI_RE.lastIndex
-      continue
-    }
-    visible++
-    i++
-  }
-  if (i >= s.length) return s
-  // Cut and re-terminate any open color.
-  return s.slice(0, i - 1) + '…\x1b[0m'
 }

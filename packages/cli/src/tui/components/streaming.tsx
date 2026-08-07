@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, useStdout } from 'ink'
 import Spinner from 'ink-spinner'
+import { tailByRows } from '../terminal-text.js'
 
 interface ActiveSub {
   taskId: string
@@ -49,9 +50,21 @@ function fmtElapsed(s: number): string {
  * static history and the input box.
  */
 export function Streaming({ spinnerLabel, liveText, liveThinking, activeSubs, turnStartedAt }: Props): React.ReactElement | null {
+  const { stdout } = useStdout()
   const elapsed = useElapsedSeconds((spinnerLabel || activeSubs.length > 0) ? turnStartedAt : null)
   const hasContent = spinnerLabel || liveText || liveThinking || activeSubs.length > 0
   if (!hasContent) return null
+
+  // Cap the live zone to the terminal's own height: this zone is outside
+  // <Static> and re-renders per token, so once the whole live frame reaches
+  // `rows` ink falls back to clearTerminal every frame — which includes ESC 3J
+  // and wipes the user's scrollback (see tailByRows). Reserve ~10 rows for the
+  // rest of the frame (status bar + input box + spinner + margins). The full
+  // reply is committed into <Static> on usage/complete, so only the on-screen
+  // preview is trimmed — same tail-window behavior other agent TUIs use.
+  const rows = stdout?.rows ?? 24
+  const gutterCols = Math.max(20, (stdout?.columns ?? 80) - 4)
+  const visibleLiveText = liveText ? tailByRows(liveText, gutterCols, Math.max(6, rows - 10)) : liveText
 
   return (
     <Box flexDirection="column" marginTop={1} marginLeft={2}>
@@ -66,7 +79,7 @@ export function Streaming({ spinnerLabel, liveText, liveThinking, activeSubs, tu
       {liveText ? (
         <Box flexDirection="row">
           <Box marginRight={1}><Text color="cyan">┃</Text></Box>
-          <Box flexGrow={1}><Text>{liveText}</Text></Box>
+          <Box flexGrow={1}><Text>{visibleLiveText}</Text></Box>
         </Box>
       ) : null}
 

@@ -77,9 +77,13 @@ export function LogNavigator({ tree, onPick, onCancel }: Props): React.ReactElem
               </Text>
               <Text color="gray" dimColor>{row.prefix}</Text>
               <Text color={sg.color}>{sg.glyph} </Text>
-              <Text color={selected ? 'cyan' : 'white'} bold={selected}>{row.node.agentName}</Text>
+              {/* Unselected rows use the terminal's default foreground, not an
+                * explicit white — white is unreadable on a light background. */}
+              <Text color={selected ? 'cyan' : undefined} bold={selected}>{row.node.agentName}</Text>
               {row.node.archived && <Text color="yellow" dimColor> ▢ archived</Text>}
-              <Text color="gray" dimColor>{`  ${id8}${desc}`}</Text>
+              {/* id + description are content the user picks by: single dim, no
+                * stacked gray (same call as bfa8758 in the chat blocks). */}
+              <Text dimColor>{`  ${id8}${desc}`}</Text>
             </Box>
           )
         })}

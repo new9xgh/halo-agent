@@ -49,7 +49,11 @@ export function SlashSuggest({ items, selectedIdx, maxWidth = 80 }: Props): Reac
               {`${selected ? '▶ ' : '  '}${slashPad}`}
             </Text>
             <Text color="gray" dimColor>{arg}</Text>
-            <Text color={selected ? 'white' : 'gray'} dimColor={!selected}>{`  ${desc}`}</Text>
+            {/* The description is what the user reads to pick a command, so it's
+              * content, not chrome: single dim on the default foreground (gray+dim
+              * stacked two weakenings and vanished on black; an explicit white
+              * vanished on light backgrounds). */}
+            <Text dimColor={!selected}>{`  ${desc}`}</Text>
           </Box>
         )
       })}

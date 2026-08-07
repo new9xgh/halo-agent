@@ -32,6 +32,13 @@ interface Props {
   commands?: SlashItem[]
   /** Workspace root, used for `@file` path completion. */
   workspace: string
+  /**
+   * Reports whether a completion popup is showing. ink dispatches every key to
+   * ALL active useInput handlers, so the app-level Esc handler has no way to
+   * know this key was consumed by the popup — without it, dismissing the popup
+   * during a running turn also interrupts the turn.
+   */
+  onPopupOpenChange?: (open: boolean) => void
 }
 
 /** Filter the command list by the typed slash prefix (case-insensitive). */
@@ -75,7 +82,7 @@ function filterVerbs(items: SlashItem[], rawValue: string): SlashItem[] {
  * (typing AND pasting land at the cursor, not appended at the end). The
  * cursorKey remount hack died with ink-text-input.
  */
-export function InputBox({ enabled, placeholder, history, onSubmit, hint, commands = [], workspace }: Props): React.ReactElement {
+export function InputBox({ enabled, placeholder, history, onSubmit, hint, commands = [], workspace, onPopupOpenChange }: Props): React.ReactElement {
   const [edit, setEdit] = useState<EditState>({ value: '', cursor: 0 })
   const { value, cursor } = edit
   const [historyIdx, setHistoryIdx] = useState<number | null>(null)
@@ -146,6 +153,13 @@ export function InputBox({ enabled, placeholder, history, onSubmit, hint, comman
   useEffect(() => {
     if (pathIdx >= pathScan.items.length) setPathIdx(0)
   }, [pathScan.items.length, pathIdx])
+
+  // Lift popup state so the app's Esc handler can tell "Esc dismissed a popup"
+  // from "Esc interrupts the turn".
+  const popupOpen = suggestOpen || pathOpen
+  useEffect(() => {
+    onPopupOpenChange?.(popupOpen)
+  }, [popupOpen, onPopupOpenChange])
 
   /** Replace the in-flight @ref before the caret with the picked path; the
    *  text after the caret stays put. */
