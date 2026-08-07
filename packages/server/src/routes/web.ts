@@ -1,7 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import crypto from 'node:crypto'
-import path from 'node:path'
 import fs from 'node:fs'
 import { imageMimeFromExt } from '@turmind/halo-core'
 import type { ChannelDb } from '../db/channel-db.js'
