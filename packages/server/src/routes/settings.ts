@@ -4,6 +4,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { loadSettingsSchema, type SchemaSection, type SchemaField } from '../settings-schema.js'
+import { resolveProjectPath } from './workspace-path.js'
 
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
@@ -51,6 +52,14 @@ export function onSettingsChange(fn: SettingsChangeListener): void {
 
 function notifySettingsChange(): void {
   for (const fn of _changeListeners) fn()
+}
+
+/** Dotted-key write/delete walks `target[part]` layer by layer — a part of
+ *  `__proto__` / `constructor` / `prototype` would step into
+ *  `Object.prototype` and the assignment at the leaf pollutes every object
+ *  in the process. Reject those segments outright. */
+function isForbiddenKeySegment(part: string): boolean {
+  return part === '__proto__' || part === 'constructor' || part === 'prototype'
 }
 
 /** Read a dotted leaf from a YAML tree. Values are flat scalars now —
@@ -278,9 +287,13 @@ export function createSettingsRoutes() {
 
     if (body.scope === 'workspace') {
       if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
+      // Same projectId contract as files.ts: absolute path that exists on
+      // disk. Without it this endpoint writes `<anything>/.halo/settings.yaml`.
+      const projectPath = await resolveProjectPath(body.projectId)
+      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
       const offending = rejectGlobalOnlyAtWorkspace('workspace', flattenDotted(body.settings))
       if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
-      const wsPath = path.join(body.projectId, '.halo', 'settings.yaml')
+      const wsPath = path.join(projectPath, '.halo', 'settings.yaml')
       await writeSettingsFile(wsPath, body.settings)
     } else {
       await writeSettingsFile(GLOBAL_SETTINGS_PATH, body.settings)
@@ -302,9 +315,11 @@ export function createSettingsRoutes() {
     let filePath: string
     if (body.scope === 'workspace') {
       if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
+      const projectPath = await resolveProjectPath(body.projectId)
+      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
       const offending = rejectGlobalOnlyAtWorkspace('workspace', [body.key])
       if (offending) return c.json({ error: `${offending} is global-only and cannot be set per workspace` }, 400)
-      filePath = path.join(body.projectId, '.halo', 'settings.yaml')
+      filePath = path.join(projectPath, '.halo', 'settings.yaml')
     } else {
       filePath = GLOBAL_SETTINGS_PATH
     }
@@ -312,6 +327,7 @@ export function createSettingsRoutes() {
     const current = await readSettingsFile(filePath)
 
     const parts = body.key.split('.')
+    if (parts.some(isForbiddenKeySegment)) return c.json({ error: 'Invalid key' }, 400)
     let target: Record<string, unknown> = current
     for (let i = 0; i < parts.length - 1; i++) {
       if (!target[parts[i]] || typeof target[parts[i]] !== 'object') {
@@ -337,7 +353,9 @@ export function createSettingsRoutes() {
     let filePath: string
     if (body.scope === 'workspace') {
       if (!body.projectId) return c.json({ error: 'projectId required for workspace settings' }, 400)
-      filePath = path.join(body.projectId, '.halo', 'settings.yaml')
+      const projectPath = await resolveProjectPath(body.projectId)
+      if (!projectPath) return c.json({ error: 'Project not found' }, 404)
+      filePath = path.join(projectPath, '.halo', 'settings.yaml')
     } else {
       filePath = GLOBAL_SETTINGS_PATH
     }
@@ -345,6 +363,7 @@ export function createSettingsRoutes() {
     const current = await readSettingsFile(filePath)
 
     const parts = body.key.split('.')
+    if (parts.some(isForbiddenKeySegment)) return c.json({ error: 'Invalid key' }, 400)
     let target: Record<string, unknown> = current
     for (let i = 0; i < parts.length - 1; i++) {
       if (!target[parts[i]] || typeof target[parts[i]] !== 'object') return c.json({ ok: true })

@@ -288,6 +288,11 @@ export function sweepOrphanRuns(opts?: { graceMs?: number }): void {
  * running get torn down and re-created so the in-memory state matches db
  * (used after CRUD via the `reload` hook from REST routes).
  */
+/** Daemon-owned interval handles (log prune + db reconcile), saved so
+ *  stopCronDaemon can clear them — otherwise reconcileFromDb keeps
+ *  resurrecting schedules after shutdown started. */
+let _daemonTimers: NodeJS.Timeout[] = []
+
 export function startCronDaemon(): void {
   fs.mkdirSync(logsDir(), { recursive: true })
   // Reap the previous server generation's leftovers BEFORE croner is
@@ -297,16 +302,18 @@ export function startCronDaemon(): void {
   sweepOrphanRuns()
   reloadAll()
   // Daily log prune. Cheap; keep WAL bloat down.
-  setInterval(pruneOldLogs, DAY_MS)
+  _daemonTimers.push(setInterval(pruneOldLogs, DAY_MS))
   // Db-poll reconcile: every 10s, scan cron_jobs for adds / removes /
   // updates and patch the in-memory schedule map. Keeps us in sync with
   // out-of-band edits (a skill's `sqlite3 cron.db UPDATE …`, manual
   // psql sessions, future server-side tools that don't go through the
   // REST routes). Cheap — small table, few rows, syncronous queries.
-  setInterval(reconcileFromDb, 10_000)
+  _daemonTimers.push(setInterval(reconcileFromDb, 10_000))
 }
 
 export function stopCronDaemon(): void {
+  for (const t of _daemonTimers) clearInterval(t)
+  _daemonTimers = []
   for (const a of _active.values()) {
     try { a.cron.stop() } catch { /* best effort */ }
   }

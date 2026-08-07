@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import YAML from 'yaml'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
+import { isSafeIdSegment } from './workspace-path.js'
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
 /** Default settings entry for a newly created skill (self-describing format) */
@@ -226,6 +227,10 @@ export function createSkillRoutes() {
   // DELETE /skills/:id?scope=workspace&projectId=xxx
   app.delete('/skills/:id', async (c) => {
     const id = c.req.param('id')
+    // Guard before path.join — Hono decodes %2F/%2e into :id, so a raw
+    // param can carry `../..` and turn the rm below into an arbitrary
+    // recursive delete.
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid skill id' }, 400)
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 

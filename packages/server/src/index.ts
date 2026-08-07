@@ -31,7 +31,7 @@ import { setBroadcastWss } from './ws/broadcast.js'
 import { SessionManagerRegistry } from './agents/session-manager-registry.js'
 import { createChannelDb, setChannelDb } from './db/channel-db.js'
 import { createCronDb, setCronDb } from './db/cron-db.js'
-import { startCronDaemon } from './cron/runner.js'
+import { startCronDaemon, stopCronDaemon } from './cron/runner.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createEvoDb, setEvoDb } from './db/evo-db.js'
 import { setEvoSpawner, startEvoTicker, stopEvoTicker } from './evolution/ticker.js'
@@ -518,6 +518,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   stopEvoTicker()
   stopArchiveDaemon()
+  // Before channels drain: the 10s reconcile poll would otherwise rebuild
+  // schedules (and fire new runs) while we're mid-shutdown.
+  stopCronDaemon()
 
   // Drain every booted channel via its descriptor's optional `shutdown`.
   // Errors are logged per-channel inside shutdownChannels — never thrown.

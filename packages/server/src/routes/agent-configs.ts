@@ -8,6 +8,7 @@ import { createDraftTool } from '../tools/draft-tool.js'
 import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
+import { isSafeIdSegment } from './workspace-path.js'
 
 /** List available tools with name + description */
 let _cachedTools: Array<{ name: string; description: string }> | null = null
@@ -407,6 +408,10 @@ export function createAgentConfigRoutes() {
   // DELETE /agent-configs/:id?scope=xxx&projectId=xxx
   app.delete('/agent-configs/:id', async (c) => {
     const id = c.req.param('id')
+    // Guard before path.join — Hono decodes %2F/%2e into :id, so a raw
+    // param can carry `../..` and turn the rm below into an arbitrary
+    // recursive delete.
+    if (!isSafeIdSegment(id)) return c.json({ error: 'Invalid agent id' }, 400)
     const scope = c.req.query('scope') ?? 'global'
     const projectId = c.req.query('projectId')
 
@@ -543,6 +548,7 @@ export function createAgentConfigRoutes() {
   // GET /agent-configs/:id/sessions?source=test-chat&projectId= — list sessions for an agent
   app.get('/agent-configs/:id/sessions', async (c) => {
     const agentId = c.req.param('id')
+    if (!isSafeIdSegment(agentId)) return c.json({ error: 'Invalid agent id' }, 400)
     const projectId = c.req.query('projectId')
     const source = c.req.query('source') || 'test-chat'
 
@@ -582,6 +588,9 @@ export function createAgentConfigRoutes() {
   app.get('/agent-configs/:id/sessions/:sessionId', async (c) => {
     const agentId = c.req.param('id')
     const sessionId = c.req.param('sessionId')
+    if (!isSafeIdSegment(agentId) || !isSafeIdSegment(sessionId)) {
+      return c.json({ error: 'Invalid id' }, 400)
+    }
     const projectId = c.req.query('projectId')
     const source = c.req.query('source') || 'test-chat'
 
@@ -598,14 +607,18 @@ export function createAgentConfigRoutes() {
   // POST /agent-configs/:id/sessions — save/update a session
   app.post('/agent-configs/:id/sessions', async (c) => {
     const agentId = c.req.param('id')
+    if (!isSafeIdSegment(agentId)) return c.json({ error: 'Invalid agent id' }, 400)
     const body = await c.req.json<Record<string, unknown>>()
     const projectId = body.projectId as string | undefined
     const source = (body.source as string) || 'test-chat'
 
+    const sessionId = (body.id as string) ?? `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    // body.id is joined into the write path below — same traversal shape
+    // as the :param case (`"id": "../../../home/x"` → arbitrary JSON write).
+    if (!isSafeIdSegment(sessionId)) return c.json({ error: 'Invalid session id' }, 400)
+
     const dir = getSessionsDir(agentId, source, projectId || undefined)
     await ensureDir(dir)
-
-    const sessionId = (body.id as string) ?? `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const now = new Date().toISOString()
     const messages = (body.messages as unknown[]) ?? []
 
@@ -631,6 +644,9 @@ export function createAgentConfigRoutes() {
   // DELETE /agent-configs/:id/sessions?all=1&source=&projectId= — bulk delete all sessions
   app.delete('/agent-configs/:id/sessions', async (c) => {
     const agentId = c.req.param('id')
+    // Same traversal family: agentId lands in getSessionsDir's path.join,
+    // and this endpoint rm's every .json in the resolved directory.
+    if (!isSafeIdSegment(agentId)) return c.json({ error: 'Invalid agent id' }, 400)
     const projectId = c.req.query('projectId')
     const source = c.req.query('source') || 'test-chat'
 
@@ -651,6 +667,9 @@ export function createAgentConfigRoutes() {
   app.delete('/agent-configs/:id/sessions/:sessionId', async (c) => {
     const agentId = c.req.param('id')
     const sessionId = c.req.param('sessionId')
+    if (!isSafeIdSegment(agentId) || !isSafeIdSegment(sessionId)) {
+      return c.json({ error: 'Invalid id' }, 400)
+    }
     const projectId = c.req.query('projectId')
     const source = c.req.query('source') || 'test-chat'
 
