@@ -7,17 +7,11 @@ import { imageMimeFromExt } from '@turmind/halo-core'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { WebChannel } from '../channels/web/handler.js'
 import {
-  deleteAccount, getAccount, getAccountByToken, insertAccount, listAccounts, updateAccount,
+  deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/web/accounts.js'
+import type { WebAccount } from '../channels/web/types.js'
 import { accessLevelError, ACCOUNT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
-import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
-
-/** Bucket name for the brute-force tracker — keeps this surface's
- *  lockouts independent of admin-login lockouts. The token space is
- *  256 random bits so we can't really be "guessed", but a noisy
- *  attacker hammering bad tokens at /api/web/chat (which opens an SSE
- *  stream) eats real server capacity. 5 strikes / 15 min lockout. */
-const TOKEN_BUCKET = 'web-token'
+import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
 
 export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   const { db, channel } = deps
@@ -128,35 +122,17 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   }
 
   /**
-   * Authenticate a token-bearing public web request. Returns the
-   * resolved account on success, or a Response object the route should
-   * return verbatim on failure. Centralizes:
-   *   - token header / query parsing
-   *   - missing-token rejection
-   *   - per-IP brute-force counter (5 strikes / 15 min)
-   *   - bad-token / disabled-account rejection
-   *   - successful clears
-   * Every public token route (chat / stop / history / subscribe / file)
-   * goes through this so the lockout state is consistent across them.
+   * Authenticate a token-bearing public web request. Wraps the shared
+   * `resolveTokenAuth` (token parsing + account lookup + brute-force
+   * bookkeeping — see middleware/web-token.ts) into this surface's JSON
+   * error shape. Every public token route (chat / stop / history /
+   * subscribe / file) goes through it so the lockout state is consistent
+   * across them.
    */
-  function authToken(c: Context): { ok: true; token: string; account: ReturnType<typeof getAccountByToken> } | { ok: false; response: Response } {
-    const ip = getClientIp(c)
-    if (isLockedOut(TOKEN_BUCKET, ip)) {
-      return { ok: false, response: c.json({ error: 'too many failed attempts, try again later' }, 429) }
-    }
-    const token = c.req.header('x-token') || c.req.query('token')
-    if (!token) {
-      // Don't count "no token" as a strike — a misconfigured curl
-      // shouldn't lock out a whole NAT IP; only actual bad tokens count.
-      return { ok: false, response: c.json({ error: 'token required' }, 401) }
-    }
-    const account = getAccountByToken(db, token)
-    if (!account || !account.enabled) {
-      recordFailure(TOKEN_BUCKET, ip)
-      return { ok: false, response: c.json({ error: 'invalid token' }, 401) }
-    }
-    clearFailures(TOKEN_BUCKET, ip)
-    return { ok: true, token, account }
+  function authToken(c: Context): { ok: true; token: string; account: WebAccount } | { ok: false; response: Response } {
+    const auth = resolveTokenAuth(c, db)
+    if (!auth.ok) return { ok: false, response: tokenAuthJsonError(c, auth.reason) }
+    return auth
   }
 
   app.post('/web/chat', async (c) => {
@@ -233,7 +209,7 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
   app.get('/web/file', async (c) => {
     const auth = authToken(c)
     if (!auth.ok) return auth.response
-    const account = auth.account!
+    const account = auth.account
 
     const filePath = c.req.query('path')
     if (!filePath) return c.json({ error: 'path required' }, 400)

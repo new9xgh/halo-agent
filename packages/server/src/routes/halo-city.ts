@@ -8,8 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { channelAccounts, getChannelDb } from '../db/channel-db.js'
-import { getAccountByToken } from '../channels/web/accounts.js'
-import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
+import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
 import { createMtimeCache } from './mtime-cache.js'
@@ -17,11 +16,6 @@ import type { SessionManagerRegistry } from '../agents/session-manager-registry.
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import type { TurnState } from '../sessions/ui-log-builder.js'
-
-/** Shared lockout bucket with the rest of the public web surface — an attacker
- *  hammering bad tokens here is the same threat as at /api/web/chat, so the
- *  strike counter is intentionally common. Canonical auth lives in web.ts. */
-const TOKEN_BUCKET = 'web-token'
 
 /** Max live characters surfaced per room. Busy workspaces accumulate hundreds
  *  of stopped sessions; we show the most-recently-active slice and report the
@@ -397,22 +391,13 @@ export function discoverWorkspaces(registry: SessionManagerRegistry): Map<string
 export function createShowRoutes(registry: SessionManagerRegistry) {
   const app = new Hono()
 
-  /** Compact token auth mirroring web.ts's authToken (kept inline — the
-   *  canonical version is tied to the web route's closure). */
+  /** Token auth over the shared core in middleware/web-token.ts, rendered in
+   *  this surface's JSON error shape (identical to the web channel's — they
+   *  share `tokenAuthJsonError`). */
   function auth(c: Context) {
-    const ip = getClientIp(c)
-    if (isLockedOut(TOKEN_BUCKET, ip)) {
-      return { ok: false as const, response: c.json({ error: 'too many failed attempts, try again later' }, 429) }
-    }
-    const token = c.req.header('x-token') || c.req.query('token')
-    if (!token) return { ok: false as const, response: c.json({ error: 'token required' }, 401) }
-    const account = getAccountByToken(getChannelDb(), token)
-    if (!account || !account.enabled) {
-      recordFailure(TOKEN_BUCKET, ip)
-      return { ok: false as const, response: c.json({ error: 'invalid token' }, 401) }
-    }
-    clearFailures(TOKEN_BUCKET, ip)
-    return { ok: true as const, account }
+    const a = resolveTokenAuth(c, getChannelDb())
+    if (!a.ok) return { ok: false as const, response: tokenAuthJsonError(c, a.reason) }
+    return { ok: true as const, account: a.account }
   }
 
   // GET /api/show/state — cross-workspace world snapshot for halo-city.

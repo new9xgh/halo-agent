@@ -1,13 +1,17 @@
 import { Hono, type Context } from 'hono'
 import { getChannelDb } from '../db/channel-db.js'
-import { getAccountByToken } from '../channels/web/accounts.js'
-import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
+import { resolveTokenAuth, TOKEN_AUTH_STATUS, type TokenAuthFailure } from '../middleware/web-token.js'
 import { readonlySessionCounts, dropRoReader, discoverWorkspaces } from './halo-city.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionInfo } from '../agents/session-manager.js'
 
-/** Shared lockout bucket with the rest of the public web/show surface. */
-const TOKEN_BUCKET = 'web-token'
+/** Prometheus-comment wording per auth failure — this surface's own error shape
+ *  (the web/show pair render the same failures as JSON). */
+const TEXT_ERROR: Record<TokenAuthFailure, string> = {
+  locked_out: 'too many failed attempts',
+  missing_token: 'token required',
+  invalid_token: 'invalid token',
+}
 
 /** Per-workspace session cap — the snapshot is bounded so one runaway workspace
  *  can't make a scrape O(all sessions ever). Deliberately higher than
@@ -25,26 +29,19 @@ function family(name: string, type: 'gauge' | 'counter', help: string, samples: 
 export function createMetricsRoutes(registry: SessionManagerRegistry) {
   const app = new Hono()
 
-  /** Token auth mirroring halo-city.ts. Metrics expose cross-workspace aggregates,
-   *  so require a full-access token — a workspace-scoped one shouldn't learn
-   *  the size of the whole deployment. */
+  /** Token auth over the shared core in middleware/web-token.ts, rendered as
+   *  Prometheus comment lines (a scraper gets text/plain, never JSON) — the
+   *  reason why this surface maps the failure itself instead of reusing the
+   *  web/show JSON renderer. */
   function auth(c: Context) {
-    const ip = getClientIp(c)
-    if (isLockedOut(TOKEN_BUCKET, ip)) {
-      return { ok: false as const, response: c.text('# too many failed attempts\n', 429) }
+    const a = resolveTokenAuth(c, getChannelDb())
+    if (!a.ok) {
+      return { ok: false as const, response: c.text(`# ${TEXT_ERROR[a.reason]}\n`, TOKEN_AUTH_STATUS[a.reason]) }
     }
-    const token = c.req.header('x-token') || c.req.query('token')
-    if (!token) return { ok: false as const, response: c.text('# token required\n', 401) }
-    const account = getAccountByToken(getChannelDb(), token)
-    if (!account || !account.enabled) {
-      recordFailure(TOKEN_BUCKET, ip)
-      return { ok: false as const, response: c.text('# invalid token\n', 401) }
-    }
-    clearFailures(TOKEN_BUCKET, ip)
     // Metrics span all workspaces, so require a globally-scoped token: full, or
     // observer — the read-only global role minted exactly for dashboards/scrapes
     // (a workspace-scoped token shouldn't learn deployment-wide size).
-    if (account.accessLevel !== 'full' && account.accessLevel !== 'observer') {
+    if (a.account.accessLevel !== 'full' && a.account.accessLevel !== 'observer') {
       return { ok: false as const, response: c.text('# global-scope token (full or observer) required\n', 403) }
     }
     return { ok: true as const }
