@@ -14,6 +14,7 @@ import { FilePreview, isHeavyPreview, registeredExtensions } from './previews/Fi
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
 import {
@@ -365,6 +366,12 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [refreshActiveTab])
+
+  // Reconnect reconciliation — a `change` event lost while the socket was down
+  // leaves an open tab stale (see shared/ws-reconnect). Active tab only: the
+  // effect on [activeTab] above re-checks a background tab the moment it's
+  // switched to, so refreshing every open tab here would be wasted round-trips.
+  useEffect(() => onWsReconnect(wsClient, refreshActiveTab), [refreshActiveTab])
 
   const handleFileSelect = useCallback(
     async (path: string) => {

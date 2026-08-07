@@ -6,6 +6,7 @@ import { useSessionViewStore } from './agent-sessions-sidebar'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import type { ChatMessage } from '@/shared/types'
 import { MessageList } from '@/shared/components/message-list'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
@@ -77,6 +78,16 @@ export function SessionChatPanel() {
   useEffect(() => {
     if (!selectedSessionId || !activeProject?.path) return
     if (selectedSessionId === currentSessionId) return // live session — WS handles updates
+    const refetch = () => {
+      api.sessionLogs.get(selectedSessionId, activeProject.path)
+        .then((res) => {
+          const fresh = (res.messages as unknown as ChatMessage[]) ?? []
+          const prev = useSessionViewStore.getState().loadedMessages
+          const next = reconcileMessages(prev, fresh)
+          if (next !== prev) setLoadedMessages(next)
+        })
+        .catch(() => {})
+    }
     // Session files are named by the last segment of the id (e.g. full id
     // "root>sid_abc" → file "sid_abc.json"), so match on basename not full id.
     const fileBase = selectedSessionId.split('>').pop() ?? selectedSessionId
@@ -87,16 +98,12 @@ export function SessionChatPanel() {
       if (msg.action !== 'change' && msg.action !== 'add') return
       if (!msg.path.startsWith('.halo/sessions/')) return
       if (!msg.path.endsWith(`/${fileBase}.json`)) return
-      api.sessionLogs.get(selectedSessionId, activeProject.path)
-        .then((res) => {
-          const fresh = (res.messages as unknown as ChatMessage[]) ?? []
-          const prev = useSessionViewStore.getState().loadedMessages
-          const next = reconcileMessages(prev, fresh)
-          if (next !== prev) setLoadedMessages(next)
-        })
-        .catch(() => {})
+      refetch()
     })
-    return unsub
+    // Reconnect reconciliation — a session write while the socket was down
+    // emits no delta, leaving the transcript stale. See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, refetch)
+    return () => { unsub(); unsubReconnect() }
   }, [selectedSessionId, currentSessionId, activeProject?.path, setLoadedMessages])
 
   // Determine which messages to show

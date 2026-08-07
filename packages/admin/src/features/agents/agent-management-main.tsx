@@ -15,6 +15,7 @@ import { EditorPanel } from '@/features/editor/editor-panel'
 import { EditorStoreProvider } from '@/shared/stores/editor-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useAgentBus, bumpAgentBus } from '@/shared/agent-bus'
 
 interface AgentMeta {
@@ -108,7 +109,10 @@ export function AgentManagementMain() {
       if (!msg.path.startsWith('.halo/agents/')) return
       bumpAgentBus()
     })
-    return unsub
+    // Reconnect reconciliation — agent add/unlink events lost while the socket
+    // was down would otherwise leave the list stale. See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, bumpAgentBus)
+    return () => { unsub(); unsubReconnect() }
   }, [projectId])
 
   useEffect(() => {

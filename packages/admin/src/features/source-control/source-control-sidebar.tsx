@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { isSessionLogEvent } from '@/shared/file-events'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { cn } from '@/shared/utils'
@@ -102,7 +103,10 @@ export function SourceControlSidebar() {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void refresh() }, 400)
     })
-    return () => { if (timer) clearTimeout(timer); unsub() }
+    // Reconnect reconciliation — events lost while the socket was down would
+    // otherwise leave the CHANGES list stale. See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
+    return () => { if (timer) clearTimeout(timer); unsub(); unsubReconnect() }
   }, [projectId, refresh])
 
   const files = status?.files ?? []

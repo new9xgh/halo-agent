@@ -6,6 +6,7 @@ import { api } from '@/shared/api-client'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSkillBus, bumpSkillBus } from '@/shared/skill-bus'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { cn, promptInput, confirmAction } from '@/shared/utils'
 import type { Skill } from '@/shared/types'
 import { Zap, Plus, Trash2, Globe, FolderOpen, ChevronRight, ToggleLeft, ToggleRight, RefreshCw } from 'lucide-react'
@@ -102,7 +103,10 @@ export function SkillsSidebar() {
       if (!msg.path.startsWith('.halo/skills/')) return
       bumpSkillBus()
     })
-    return unsub
+    // Reconnect reconciliation — skill add/unlink events lost while the socket
+    // was down would otherwise leave the list stale. See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, bumpSkillBus)
+    return () => { unsub(); unsubReconnect() }
   }, [projectId])
 
   // Refresh when the window regains focus — covers global skill changes that

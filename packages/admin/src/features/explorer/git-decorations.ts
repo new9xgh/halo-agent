@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { isSessionLogEvent } from '@/shared/file-events'
 import { isStagedChar, isWorkingChar } from '@/features/source-control/status-meta'
 
@@ -194,10 +195,16 @@ export function useGitDecorationsSync(projectId: string | null): void {
       timer = setTimeout(() => { void refresh() }, 400)
     })
 
+    // Reconnect reconciliation — `file:changed` events emitted while the
+    // socket was down are lost, leaving stale decorations until the next
+    // unrelated event (or forever). See shared/ws-reconnect.
+    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
+
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
       unsub()
+      unsubReconnect()
       clearProject(projectId)
       // Drop the repo signal too, so switching workspaces falls back to
       // 'unknown' (show) rather than leaking the old workspace's true/false.

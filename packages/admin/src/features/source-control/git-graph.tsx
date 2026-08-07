@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { GitBranch, Tag } from 'lucide-react'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
+import { onWsReconnect } from '@/shared/ws-reconnect'
 import { isSessionLogEvent } from '@/shared/file-events'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
 import { useT } from '@/shared/i18n'
@@ -173,7 +174,10 @@ export function GitGraph({ projectId }: { projectId: string }) {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void refresh() }, 400)
     })
-    return () => { if (timer) clearTimeout(timer); unsub() }
+    // Reconnect reconciliation — a commit made while the socket was down (e.g.
+    // command-line git during a network drop) would otherwise never appear.
+    const unsubReconnect = onWsReconnect(wsClient, () => { void refresh() })
+    return () => { if (timer) clearTimeout(timer); unsub(); unsubReconnect() }
   }, [refresh])
 
   // Auto-load older commits when the bottom sentinel scrolls into view. Only
