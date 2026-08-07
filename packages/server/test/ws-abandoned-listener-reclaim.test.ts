@@ -318,6 +318,82 @@ describe('session:clear listener lifecycle (audit A-H1)', () => {
   })
 })
 
+describe('error-path cleanup (audit A-M1)', () => {
+  // ws normally follows 'error' with 'close', but nothing guarantees it. The
+  // old error handler only stopped the watchers — an error that never produced
+  // a close leaked the keepalive interval, the event listener, unflushed
+  // background saves and attached PTYs. Both handlers now share one idempotent
+  // cleanup; these tests emit 'error' WITHOUT a close (a bare EventEmitter
+  // emit closes nothing) to pin the error path on its own.
+
+  it("an 'error' without a 'close' runs the full cleanup (listener released, keepalive stopped)", async () => {
+    const ws = await connect()
+    await subscribe(ws, SID)
+    expect(listenerCount(SID)).toBe(1)
+
+    // The keepalive interval is observable from the client: it pings every
+    // 10s. Prove it's alive first so the zero-after assertion means "cleared",
+    // not "never ran". Small real waits let the pong round-trip settle so
+    // missedPongs can't hit the terminate threshold mid-test.
+    let pings = 0
+    ws.on('ping', () => { pings++ })
+    for (let i = 0; i < 2; i++) {
+      await vi.advanceTimersByTimeAsync(10_000)
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    expect(pings).toBeGreaterThan(0)
+
+    const serverSock = [...(wss.clients as Set<WebSocket>)][0]!
+    serverSock.emit('error', new Error('boom'))
+    await vi.advanceTimersByTimeAsync(50)
+
+    // Listener gone — the old handler left it registered.
+    expect(listenerCount(SID)).toBe(0)
+
+    // Keepalive interval gone — the old handler leaked it (it kept pinging a
+    // connection it had already forgotten about).
+    pings = 0
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(10_000)
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    expect(pings).toBe(0)
+  }, 20_000)
+
+  it("the usual error→close double-fire runs the cleanup exactly once (no double detach)", async () => {
+    // Unique session id: the detach below parks an entry in the module-level
+    // detachedSessions map, which outlives this test's workspace/registry —
+    // reusing SID would hand a later test's subscribe a stale reattach.
+    const ERR_SID = 'sess-err-detach'
+    seedSession(ERR_SID)
+    const ws = await connect()
+    await subscribe(ws, ERR_SID)
+    expect(listenerCount(ERR_SID)).toBe(1)
+
+    // Mark the session running so cleanup takes the detach branch — the one
+    // that REGISTERS a bgHandler. A second pass through the body would
+    // register a second one; the clients.delete gate must prevent that.
+    const sm = registry.getOrCreate(workspace)
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions
+      .set(ERR_SID, { promise: Promise.resolve(), isCompacting: false, messageQueue: [] })
+
+    const serverSock = [...(wss.clients as Set<WebSocket>)][0]!
+    serverSock.emit('error', new Error('boom'))
+    await vi.advanceTimersByTimeAsync(50)
+
+    // Detached: the client listener was swapped for exactly one bgHandler.
+    expect(listenerCount(ERR_SID)).toBe(1)
+
+    // The real close lands afterwards (the normal ws sequence).
+    await new Promise<void>((resolve) => { ws.once('close', () => resolve()); ws.close() })
+    await vi.advanceTimersByTimeAsync(50)
+
+    // Still exactly one — a non-idempotent cleanup would have registered a
+    // second bgHandler and overwritten the detachedSessions entry.
+    expect(listenerCount(ERR_SID)).toBe(1)
+  }, 20_000)
+})
+
 describe('self-heal after reclaim', () => {
   // A reclaimed-but-alive connection (renderer frozen >3min, network process
   // still answering pings) has NO path back on its own: the server keeps

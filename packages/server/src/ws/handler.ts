@@ -528,7 +528,18 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
     // ── Disconnect handler ───────────────────────────────────────────
 
-    ws.on('close', () => {
+    /**
+     * Complete teardown, shared by 'close' and 'error'. ws normally emits
+     * 'close' right after 'error', but nothing guarantees it (audit A-M1) —
+     * the old error handler only stopped the watchers, so an error that never
+     * produced a close leaked the keepalive interval, the event listener,
+     * unflushed background saves and any attached PTYs. `clients.delete` is
+     * the idempotency gate: the usual error→close double-fire runs the body
+     * exactly once (a second detach pass would overwrite the detachedSessions
+     * entry and double-register its bgHandler).
+     */
+    function cleanupConnection(): void {
+      if (!clients.delete(client)) return
       clearInterval(keepaliveTimer)
       terminalManager.detachAll()
 
@@ -571,15 +582,14 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       void client.fileWatcher.stop()
       client.gitDirWatcher.stop()
-      clients.delete(client)
       console.debug(`[WS] Client disconnected (total: ${clients.size})`)
-    })
+    }
+
+    ws.on('close', cleanupConnection)
 
     ws.on('error', (err) => {
       console.debug(`[WS] Client error: ${err.message}`)
-      void client.fileWatcher.stop()
-      client.gitDirWatcher.stop()
-      clients.delete(client)
+      cleanupConnection()
     })
 
     // ── Message handlers ─────────────────────────────────────────────

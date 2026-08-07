@@ -148,13 +148,27 @@ export class TerminalManager {
     return terminalId
   }
 
+  // No terminalId → reject (audit A-M3). The old fallback took the FIRST entry
+  // of the global `terminals` map — not even scoped to this.ownedIds — so with
+  // several admin connections an id-less input could write into another
+  // browser's PTY. Every admin send site always includes terminalId (verified
+  // against the panel and the compiled desktop bundle), so nothing legitimate
+  // hits this path.
   writeInput(terminalId: string | undefined, data: string): void {
-    const t = terminalId ? terminals.get(terminalId) : terminals.values().next().value
+    if (!terminalId) {
+      console.warn('[WS] terminal:input without terminalId rejected')
+      return
+    }
+    const t = terminals.get(terminalId)
     if (t) t.pty.write(data)
   }
 
   resize(terminalId: string | undefined, cols: number, rows: number): void {
-    const t = terminalId ? terminals.get(terminalId) : terminals.values().next().value
+    if (!terminalId) {
+      console.warn('[WS] terminal:resize without terminalId rejected')
+      return
+    }
+    const t = terminals.get(terminalId)
     if (t) t.pty.resize(cols, rows)
   }
 
