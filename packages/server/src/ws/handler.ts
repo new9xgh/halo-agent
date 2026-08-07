@@ -18,6 +18,7 @@ import { WorkspaceWatcher } from './file-watcher.js'
 import { GitDirWatcher } from './git-dir-watcher.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
+import { setClientWorkspaceResolver } from './broadcast.js'
 import { TerminalManager } from './terminal-manager.js'
 import { dispatchCommand as sharedDispatchCommand, type CommandContext as SharedCommandContext } from '../channels/shared/commands.js'
 import { resolveGoalRoute } from '../agents/goal-mode.js'
@@ -98,6 +99,19 @@ interface ConnectedClient {
 export function setupWebSocketHandler(deps: WsHandlerDeps): void {
   const { wss, registry } = deps
   const clients = new Set<ConnectedClient>()
+
+  // Let `broadcastToWorkspace` (used by routes/git.ts) address only the tabs
+  // showing a given workspace. The connection table is private to this
+  // closure, so expose the single lookup it needs rather than the table.
+  // Linear scan over `clients` (n = open admin tabs, single digits) once per
+  // targeted broadcast (one per user-triggered git write) — cheaper than a
+  // parallel ws→client Map that add/remove would have to keep in sync.
+  setClientWorkspaceResolver((ws) => {
+    for (const c of clients) {
+      if (c.ws === ws) return c.projectId
+    }
+    return null
+  })
 
   // Chat dedup for the client's ack/resend protocol. A resend arrives on a
   // NEW connection (the client tears down the zombie socket first), so this

@@ -133,18 +133,6 @@ export class GitManager {
     }
   }
 
-  async getDiff(path?: string): Promise<string> {
-    try {
-      if (path) {
-        return await this.git.diff(['HEAD', '--', path]);
-      }
-      return await this.git.diff(['HEAD']);
-    } catch {
-      // If no HEAD exists yet (no commits), return empty
-      return '';
-    }
-  }
-
   /** Recent commits as structured entries for the Graph view. simple-git's
    *  default log fields already carry hash/date/message/refs/author — map them
    *  through, plus a `pushed` flag (see getUnpushedHashes). Empty array when

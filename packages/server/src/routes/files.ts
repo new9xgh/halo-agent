@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs'
 import { Readable } from 'node:stream'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { Workspace, GitManager, type FileTreeNode } from '@turmind/halo-core'
+import { type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
 
@@ -194,49 +194,6 @@ export function createFileRoutes() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
       console.log(`[Files] Error searching files: ${errorMessage}`)
-      return c.json({ error: errorMessage }, 500)
-    }
-  })
-
-  // GET /files/diff?path=xxx&projectId=xxx - Get file diff from git
-  app.get('/files/diff', async (c) => {
-    try {
-      const filePath = c.req.query('path')
-      const projectId = c.req.query('projectId')
-
-      if (!filePath || !projectId) {
-        return c.json({ error: 'path and projectId are required' }, 400)
-      }
-
-      const projectPath = await resolveProjectPath(projectId)
-      if (!projectPath) {
-        return c.json({ error: 'Project not found' }, 404)
-      }
-
-      if (!validatePath(filePath, projectPath)) {
-        return c.json({ error: 'Path traversal not allowed' }, 403)
-      }
-
-      try {
-        // Create a project-specific GitManager for the diff
-        const projectWorkspace = new Workspace(projectPath)
-        const projectGit = new GitManager(projectWorkspace)
-        const diff = await projectGit.getDiff(filePath)
-        return c.json({
-          path: filePath,
-          diff,
-        })
-      } catch {
-        // If git diff fails (e.g., file not tracked), return empty diff
-        return c.json({
-          path: filePath,
-          diff: '',
-          error: 'Could not get diff (file may not be tracked by git)',
-        })
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err)
-      console.log(`[Files] Error getting diff: ${errorMessage}`)
       return c.json({ error: errorMessage }, 500)
     }
   })
@@ -644,9 +601,26 @@ export function createFileRoutes() {
   app.post('/fs/workspace/resolve', async (c) => {
     const body = await c.req.json<{ path: string }>()
     if (!body.path) return c.json({ error: 'path required' }, 400)
-    const resolved = (await import('node:path')).default.resolve(body.path)
-    const { existsSync } = await import('node:fs')
-    if (!existsSync(resolved)) return c.json({ error: 'path not found' }, 404)
+    const resolved = path.resolve(body.path)
+    // Guard the scaffolding write below (ensureWorkspaceHalo seeds a full
+    // `.halo/` tree): only a real directory that isn't a filesystem root can
+    // become a workspace. Previously any *existing* path qualified — a file
+    // path 500'd inside ensureWorkspaceHalo, and `/` (or a drive root)
+    // silently received the whole scaffold. Deeper system trees (/usr, /etc)
+    // are deliberately NOT banned here: the admin folder picker only offers
+    // directories the user navigates to, and unusual-but-real workspaces
+    // (e.g. /usr/local/<proj>) keep working — the file watcher already
+    // degrades gracefully there (see ws/file-watcher.ts isUnwatchablePath).
+    let stat: import('node:fs').Stats
+    try {
+      stat = await fs.stat(resolved)
+    } catch {
+      return c.json({ error: 'path not found' }, 404)
+    }
+    if (!stat.isDirectory()) return c.json({ error: 'not a directory' }, 400)
+    if (resolved === path.parse(resolved).root) {
+      return c.json({ error: 'filesystem root cannot be a workspace' }, 400)
+    }
     const { ensureWorkspaceHalo } = await import('../init.js')
     ensureWorkspaceHalo(resolved)
     return c.json({ id: resolved, path: resolved })
@@ -664,7 +638,12 @@ export function createFileRoutes() {
     }
   })
 
-  // GET /fs/browse?path=/abs — list immediate directory children for the folder picker
+  // GET /fs/browse?path=/abs — list immediate directory children for the folder
+  // picker. Deliberately NOT rooted to a whitelist: picking a workspace anywhere
+  // on the machine is the feature (admin cookie face, same trust level as the
+  // terminal). It lists directory NAMES only (no file contents), and the
+  // write-capable endpoint it feeds (/fs/workspace/resolve above) carries its
+  // own directory/non-root guard.
   app.get('/fs/browse', async (c) => {
     const target = c.req.query('path') ?? homedir()
     if (!path.isAbsolute(target)) return c.json({ error: 'absolute path required' }, 400)

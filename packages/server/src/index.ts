@@ -288,9 +288,21 @@ const app = new Hono()
 // A non-empty `cors_origins` switches to strict allowlist mode for ops who
 // want to lock things down.
 //
+// `credentials` is tied to that mode, NOT always on: "reflect any Origin +
+// Allow-Credentials: true" is the one combination that lets an arbitrary
+// site's page make cookie-authenticated calls into a user's halo. Nothing
+// halo ships needs it in the default mode — the admin panel is same-origin
+// (cookie flows without CORS at all), and the cross-origin consumers
+// (web-demo, halo-city, ACP adapter) authenticate with the `x-token`
+// web-channel header, which is *not* a credential in the CORS sense.
+// Deployments that genuinely need a cookie to ride cross-origin (e.g. halo
+// behind an SSO proxy, frontend on a sibling subdomain sharing the parent
+// domain's auth cookie) list that origin in `cors_origins` and get
+// credentials back — with a known peer instead of "whoever asked".
+//
 // Note: `Access-Control-Allow-Origin: *` can't be combined with
 // `credentials: true` per the CORS spec, hence reflecting the incoming Origin
-// instead of a literal '*'.
+// instead of a literal '*' in allowlist mode.
 const allowlist = config.server.corsOrigins
 app.use('/*', cors({
   origin: allowlist.length > 0
@@ -304,7 +316,7 @@ app.use('/*', cors({
   allowHeaders: ['Content-Type', 'Authorization', 'x-token'],
   exposeHeaders: ['Content-Length'],
   maxAge: 86400,
-  credentials: true,
+  credentials: allowlist.length > 0,
 }))
 
 // Auth middleware — protects API routes
@@ -546,7 +558,27 @@ process.on('unhandledRejection', (reason) => {
   console.log(`[Server] Unhandled rejection: ${reason}`)
 })
 
+/**
+ * An uncaught exception means some code path unwound past every handler —
+ * locks half-taken, files half-written, in-memory session state possibly
+ * inconsistent. Continuing to serve from that state is worse than dying: the
+ * db is the source of truth and every daemon (cron / evo ticker / channels)
+ * reconciles from it on boot, so a restart is a full recovery while a zombie
+ * process silently corrupts.
+ *
+ * So: log (synchronously flushed by logger.ts's appendFileSync), then exit
+ * non-zero and let the supervisor restart us — systemd (`Restart=on-failure`
+ * in the unit documented in dev/deploy.md, which fires exactly on a non-zero
+ * exit) or Docker's restart policy. Without a supervisor (`halo server start`
+ * run bare) it's a hard stop with the stack in
+ * ~/.halo/global/logs/server.log — a visible failure the user restarts,
+ * rather than a wedged server answering requests from corrupt state.
+ *
+ * The 100ms delay is only to let already-queued stdout/WS frames drain; no
+ * further work is scheduled.
+ */
 process.on('uncaughtException', (err) => {
-  console.log(`[Server] Uncaught exception: ${err.message}`)
-  console.log(err.stack)
+  console.error(`[Server] Uncaught exception — exiting: ${err.message}`)
+  console.error(err.stack)
+  setTimeout(() => process.exit(1), 100)
 })

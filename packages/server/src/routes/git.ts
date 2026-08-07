@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
-import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Workspace, GitManager } from '@turmind/halo-core'
+import { resolveProjectPath, validatePath } from './workspace-path.js'
 import { saveGitCredentials, listGitCredentials, deleteGitCredential } from '../git-credentials.js'
 import {
   listSshKeys,
@@ -11,7 +11,7 @@ import {
   switchRemoteProtocol,
   getRemoteProtocol,
 } from '../git-ssh.js'
-import { broadcast } from '../ws/broadcast.js'
+import { broadcastToWorkspace } from '../ws/broadcast.js'
 
 /**
  * A git write (commit/stage/unstage/push/pull) only mutates `.git` internals
@@ -23,33 +23,17 @@ import { broadcast } from '../ws/broadcast.js'
  * on it with zero code change; the structural-action listeners (tree insert/
  * remove) skip it (action is 'change') and the `.halo/*`-prefixed listeners skip
  * it (path is '.git'), so nothing else reacts. One broadcast per op — idempotent.
+ *
+ * Scoped to the workspace that was written: a `.git` change in workspace A is
+ * meaningless to a tab showing workspace B, which would otherwise refetch
+ * status + ignored + log on every op (audit C-L1).
  */
-function notifyGitChanged(): void {
-  broadcast({ type: 'file:changed', path: '.git', action: 'change' })
+function notifyGitChanged(workspacePath: string): void {
+  broadcastToWorkspace(workspacePath, { type: 'file:changed', path: '.git', action: 'change' })
 }
 
 export function createGitRoutes() {
   const app = new Hono()
-
-  // projectId is an absolute workspace path (same contract as files.ts).
-  async function resolveProjectPath(projectId: string): Promise<string | null> {
-    if (path.isAbsolute(projectId)) {
-      try {
-        await fs.access(projectId)
-        return projectId
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
-
-  // Match on a path-segment boundary, not a raw string prefix (see files.ts).
-  function validatePath(filePath: string, projectPath: string): boolean {
-    const resolved = path.resolve(projectPath, filePath)
-    const proj = path.resolve(projectPath)
-    return resolved === proj || resolved.startsWith(proj + path.sep)
-  }
 
   // Resolve + validate a projectId into a GitManager. Returns the manager or a
   // Hono JSON error response (caller returns it directly).
@@ -224,7 +208,7 @@ export function createGitRoutes() {
         return c.json({ error: 'paths is required' }, 400)
       }
       await res.git.stage(body.paths)
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -243,7 +227,7 @@ export function createGitRoutes() {
         return c.json({ error: 'paths is required' }, 400)
       }
       await res.git.unstage(body.paths)
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -260,7 +244,7 @@ export function createGitRoutes() {
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!body.message?.trim()) return c.json({ error: 'message is required' }, 400)
       const hash = await res.git.commit(body.message)
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true, hash })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -277,7 +261,7 @@ export function createGitRoutes() {
       const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       await res.git.push()
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -293,7 +277,7 @@ export function createGitRoutes() {
       const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       await res.git.pull()
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -311,7 +295,7 @@ export function createGitRoutes() {
       const res = await getGit(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       await res.git.init()
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -345,7 +329,7 @@ export function createGitRoutes() {
       const url = body.url?.trim()
       if (!url) return c.json({ error: 'url is required' }, 400)
       await res.git.addRemote(body.name?.trim() || 'origin', url)
-      notifyGitChanged()
+      notifyGitChanged(res.projectPath)
       return c.json({ ok: true })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
