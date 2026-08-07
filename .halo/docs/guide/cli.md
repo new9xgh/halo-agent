@@ -110,6 +110,12 @@ halo tui -s sid_abc123   # resume session
 halo tui -n              # always start a new session
 ```
 
+`halo tui` needs an interactive terminal — the keyboard layer can't enter raw
+mode without one. When stdin isn't a TTY (CI, `halo tui < file`,
+`echo x | halo tui`) it exits immediately with code 1 and points you at `halo
+cli "<prompt>"`, rather than failing a couple of seconds later inside the
+rendering layer.
+
 Multi-turn conversation. Supports all standard Halo slash commands:
 
 | Command | Description |
@@ -149,7 +155,7 @@ Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above 
 
 | Key | Action |
 |---|---|
-| `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/session interrupt`. |
+| `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/session interrupt`. **Modals own Esc first**: while the log viewer, the sub-agent navigator, or a completion popup is open, Esc just closes that (the popup keeps your typed text) and the turn keeps running — press Esc again, with nothing open, to interrupt. So watching a live log via `Ctrl+O` and pressing Esc to leave never kills the turn. |
 | `Ctrl+C` | Graceful exit; press twice to force |
 | `Ctrl+O` | Toggle the sub-agent navigator — lists every sub-agent spawned this session, each showing its agent name, task title (same as the session list), and status (`●` running green / `○` idle grey / `✕` stopped red, plus a `▢ archived` marker when the session is archived); `↑↓` to move, `Enter` to view that sub-agent's log, `Esc`/`q` to close. (Was `Shift+Tab`, but Windows terminals consume that as backtab.) The log viewer auto-refreshes while the viewed session is still running (a `● live` hint shows in the header) and follows the bottom as new output lands — unless you've scrolled up to read, in which case it stays put (`G` jumps back to the bottom and resumes following). |
 | `↑` / `↓` | Walk input history (when no popup is open). History persists across restarts in `~/.halo/global/tui-history.json` (last 100 entries, shared across workspaces) |
@@ -187,6 +193,18 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 - **Text files**: truncated at 100KB with a `[truncated]` marker
 - **Images**: skipped if larger than 5MB
 - If the current model does not support vision, a warning is shown and images are ignored
+
+## Server Mode (background daemon)
+
+`halo server start|stop|restart|status|logs` manages a local server from the
+same binary. `start -d` runs it in the background **with a bounded respawn
+supervisor**: the detached process supervises the server and brings it back on
+a crash (non-zero exit, or a kill by anything other than SIGTERM/SIGINT), at
+most 5 times per 5 minutes with a 2s pause, logging each decision as
+`[respawn] …` into `~/.halo/global/logs/server.log`. `halo server stop` is
+recognized as intentional and never respawns; `halo server stop|restart|status`
+still target the server's own pid. Full policy in
+[dev/deploy.md](../dev/deploy.md#crash-semantics--why-restarton-failure-is-load-bearing).
 
 ## Architecture
 

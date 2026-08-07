@@ -187,7 +187,7 @@ See [guide/cli.md](../guide/cli.md).
 ## @turmind/halo-core package
 
 ### Workspace (`core/src/workspace/workspace.ts`)
-Methods: `init(name)` / `readFile(path)` / `writeFile(path, content)` / `listFiles(dir?, recursive?)` / `fileExists(path)` / `validatePath(path)` (path-traversal check).
+Methods: `readFile(path)` / `writeFile(path, content)` / `validatePath(path)`. `validatePath` is the traversal guard both accessors go through: segment-boundary prefix check against the resolved root (so a sibling `/x/myapp-secret` can't pass for `/x/myapp`), then a `realpathSync` re-check so a symlink inside the workspace pointing outside is rejected too (ENOENT — a not-yet-created file — falls back to the lexical check).
 
 ### GitManager (`core/src/workspace/git-manager.ts`)
 Constructed from a `Workspace` (no per-call dir argument). Read: `isRepoRoot()` (the nested-repo guard every read/write path goes through) / `getStatus()` / `getLog(count?)` / `getCommitFiles(hash)` / `getIgnoredPaths()` / `getRemotes()` / `getFileDiff(path, staged, from?, commit?)` → `{ original, modified }`. Write: `init()` / `stage(paths)` / `unstage(paths)` / `commit(msg)` / `commitAll(msg)` / `push()` / `pull()` / `addRemote(name, url)`. Backed by simple-git. See [requirements/source-control.md](../requirements/source-control.md).

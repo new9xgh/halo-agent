@@ -66,6 +66,16 @@ and cannot push server frames on connect. Hence:
 - `/session switch` sends a `{type:'switch'}` frame → frontend clears, then
   the follow-up history frame rebuilds.
 
+Slash commands run through the shared `dispatchCommand` with a module-level
+`activeOverrides` map keyed by **`runtimeSessionId`** (one entry per runtime
+session, holding "which halo session is this socket's current one"). The entry
+lives only as long as the socket: `ws.on('close')` deletes it alongside the event
+listener, since a reconnect re-resolves from the session id anyway — without the
+delete the map grew one permanent entry per runtime session for the container's
+whole lifetime (audit B-L3). Every command is `accessLevel: 'full'` by design:
+auth terminated upstream at AgentCore, so whoever reached this socket already
+owns the isolated per-user workspace behind it.
+
 ## Session lifecycle (the part everyone gets wrong)
 
 - Idle timeout (`idleRuntimeSessionTimeout`) terminates a session whose

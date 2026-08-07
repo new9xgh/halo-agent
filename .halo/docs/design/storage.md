@@ -69,6 +69,16 @@ Precedence: workspace > global, **at folder granularity**. For the same id, a wo
 
 All `.halo/...` path math goes through `packages/server/src/paths.ts` (e.g. `wsHaloDir(ws)`, `wsEvoRunDir(ws, runId)`, `globalInternalSessionFile(agentId, seg)`, `cronLogFile(runId)`). Treat `paths.ts` as the canonical reference for the layout above; if the layout changes, update `paths.ts` first and call sites follow.
 
+Most builders are workspace-rooted (`ws*`), but the evo tree also needs the
+layout *inside* one run/apply dir, so four builders take the **artifact dir**
+instead of `(workspace, id)`: `evoSandboxDir(artifactDir)`,
+`evoSandboxHaloDir(artifactDir)`, `evoRegressDir(applyDir)`,
+`evoRegressRunDir(applyDir, runId)`. Run mode and apply mode lay their sandbox
+out identically inside their own dir, which is why one signature serves both.
+They replaced ~40 inline `path.join(ws, '.halo', 'evo', …)` sites across
+archive / enqueue / evo-wrapper / ticker / routes; `test/paths-evo-equivalence.test.ts`
+pins them against the old literals.
+
 ### Workspace runtime lock
 
 `<workspace>/.halo/runtime.lock` — a pid marker that records which process owns this workspace's *runtime* (gates `reconcileOrphansOnBoot`; see [session.md](session.md#boot-reconcile-of-crash-orphans-reconcileorphansonboot)). It exists because `~/.halo/global/server.lock` can't arbitrate the case of two servers with different `HALO_HOME` sharing one workspace — the ownership marker has to live in the shared resource itself. Implementation: `packages/server/src/agents/workspace-runtime-lock.ts`.

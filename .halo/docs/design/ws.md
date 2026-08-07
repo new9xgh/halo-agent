@@ -142,6 +142,7 @@ interface ConnectedClient {
   fileWatcher: WorkspaceWatcher
   gitDirWatcher: GitDirWatcher
   lastClientPingAt: number                 // wall-clock ms of last INBOUND frame — the reclaim's liveness stamp
+  commandUserId: string                    // `ws-<n>`, this connection's key into the command layer's active-session map
 }
 ```
 
@@ -152,6 +153,15 @@ UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to Session
 - `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle). `session:clear` saves, then **releases the event listener and registers nothing in its place**: a cleared session is deliberately abandoned (the admin wipes its chat store on `session:cleared`), and SessionUIStore keeps folding + persisting a still-running session's events with zero listeners, so a later re-open subscribes fresh and gets the full snapshot. The buffering `bgHandler` this used to register — whose `unsubscribe` was discarded and whose `pendingEvents` were never drained — leaked one listener per "New session" click.
 - `command:session` with `compact` verb — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
 - All other `command:*` — builds a shared `CommandContext` and routes through `dispatchCommand()` (see [command.md](command.md))
+
+**Active-session override is per connection.** The shared command layer tracks
+"which session is this user on" in an `activeOverrides` map; the WS handler owns
+one map at handler scope but keys it by `client.commandUserId` (`ws-1`, `ws-2`,
+… minted per socket) rather than a single literal `'ws'`. With a global key, two
+admin tabs on different sessions overwrote each other's current session and
+slash commands landed in the wrong conversation. The entry is deleted on close,
+so the map stays the size of the open connection set. Subscribe / detach /
+reattach lifecycle is unchanged — this only affects command routing.
 
 ### switchTo rebind & `session:switched`
 

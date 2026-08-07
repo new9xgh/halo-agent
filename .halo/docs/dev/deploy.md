@@ -107,10 +107,42 @@ restart is a full recovery while a zombie process silently corrupts state.
 
 So the supervisor is what turns a crash into a ~5s blip: the unit above pairs
 `Restart=on-failure` (fires exactly on non-zero exit) with `RestartSec=5`.
-Docker deployments want an equivalent `restart:` policy. Under Option A (bare
-`nohup` / `halo server start`) there is no supervisor — a crash is a hard stop,
-with the stack in `~/.halo/global/logs/server.log` for whoever restarts it.
+Docker deployments want an equivalent `restart:` policy. Under a bare `nohup
+node dist/index.js` / foreground `halo server start` there is still no
+supervisor — a crash is a hard stop, with the stack in
+`~/.halo/global/logs/server.log` for whoever restarts it.
 `unhandledRejection` is only logged, not fatal.
+
+**`halo server start -d` brings its own bounded supervisor.** The detached
+process `-d` spawns is not the server: it re-execs `halo server start`
+(foreground) with `HALO_SUPERVISE=1`, and *that* process supervises the real
+server as its child (`packages/cli/src/server-supervisor.ts`). Policy:
+
+- **Restarts only on failure** — non-zero exit, or death by any signal other
+  than `SIGTERM` / `SIGINT`. `SIGKILL` (OOM killer) and `SIGSEGV` count as
+  crashes and *are* restarted; the same split systemd's `Restart=on-failure`
+  makes. A clean `exit(0)` is never restarted.
+- **Bounded**: at most **5 restarts per 5-minute sliding window**, then it gives
+  up (exit 1) with a log line telling you to fix the cause and re-run `halo
+  server start -d`.
+- **2s pause between attempts**, so an instant-crash loop can't spin the CPU.
+- Every decision lands in the daemon log as `[respawn] …`, on the same fds the
+  server writes to (`~/.halo/global/logs/server.log`).
+
+`halo server stop` (and `--force`) is not mistaken for a crash: it stamps the
+server pid into a marker file `~/.halo/global/server.stop` *before* signalling,
+and the supervisor stands down when it sees a marker naming the pid it just
+lost. Signals alone couldn't carry that intent (on Windows a `SIGTERM` surfaces
+as a plain `code 1`), and the marker is also what stops a respawn when `stop`
+arrives while the supervisor is mid-backoff. Stamping the pid rather than a bare
+flag keeps `restart` unambiguous — the new supervisor can't consume the outgoing
+one's marker.
+
+Pid ownership is unchanged: `~/.halo/global/server.lock` is still written and
+flock'd by the **server** process itself, so `halo server stop|restart|status`
+keep targeting the server exactly as before. The supervisor has no pidfile of
+its own; killing it directly leaves the server running as an orphan (same end
+state as the pre-supervisor `-d`), and `halo server stop` still stops it.
 
 ## 6. Verify
 

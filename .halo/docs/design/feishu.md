@@ -147,6 +147,19 @@ Feishu's text message limit (~5000 chars), smaller than Slack. Strategy:
 - Media markers (`MEDIA:<path>`) intercepted and sent via native media upload
 - Sub-agent events dropped (visible in web UI only)
 
+**Chunk sends are serialized per responder** (same fix as Slack, audit A-L3):
+splitting produces several chunks in one synchronous loop and each is its own
+send API call, so firing them concurrently gave arrival order no guarantee. Each
+responder appends every chunk to a `sendTail` promise chain — chunk *n+1* waits
+for *n* to settle — and a rejected link is absorbed so one failed send doesn't
+stall the remainder (`dispatchChunk` logs it).
+
+`close()` returns that drain promise and `InboundBridge` holds the session's
+reply route until it settles, then deletes it; the `stopAccount` / `closeAll()`
+path relies on the same per-listener teardown rather than clearing all routes at
+once. Before this, the route was gone as soon as the agent turn returned and
+trailing chunks of a long reply were dropped.
+
 ## Media support
 
 **Inbound:** text, images (base64 attached to agent message), files (noted as `[文件: name]` markers), voice, video, rich posts.

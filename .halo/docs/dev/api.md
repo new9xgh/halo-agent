@@ -39,6 +39,8 @@ File: `packages/server/src/routes/files.ts`
 | POST | `/api/files/upload` | Multipart upload |
 | DELETE | `/api/files?path=&projectId=` | Delete file or directory (recursive) |
 
+**Inline Content-Type** for images comes from core's shared extension→MIME table (`imageMimeFromExt`, `packages/core/src/media/mime.ts`) on both `/api/files/download?inline=1` and `/api/web/file`; each route keeps only its own non-image entries (pdf / html / video / audio) and falls back to `application/octet-stream`. That table is why `.bmp` now serves as `image/bmp` on both — the two routes used to carry their own copies and `/api/web/file` returned `application/octet-stream` for it. `.svg` / `.ico` / `.avif` get a real image Content-Type when served, but are deliberately not "photos" (they're outside `IMAGE_EXTS`) so they never reach a vision model or a channel's sendPhoto.
+
 All file operations validate the path stays inside the project root (prevents path traversal). The check (`validatePath` in `routes/workspace-path.ts`, shared with `data-preview.ts` and `git.ts`) realpaths both sides — longest existing ancestor plus the re-appended tail — so a symlink inside the workspace pointing outside it is rejected too, not just lexical `../`. One exception: `GET /api/files/download` also accepts absolute paths under `/tmp/` so that agent-produced working files (e.g. Playwright screenshots) can be inline-previewed from chat media chips.
 
 ### Filesystem browse (not project-scoped — for the workspace picker)
@@ -90,6 +92,21 @@ The list endpoint returns flat metadata (id / agentId / agentName / title / time
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
+## Channel accounts — shared field validation
+
+`workspacePath` and `accessLevel` are validated at the REST boundary on both
+POST and PATCH across all five channels (web / wechat / telegram / slack /
+feishu) — one shared pair of checks in `channels/shared/accounts.ts`, so the
+five can't drift (they did: four PATCHes never checked `isAbsolute`, and only
+wechat's PATCH rejected an unknown `accessLevel`):
+
+| Field | Rule | 400 body |
+|---|---|---|
+| `accessLevel` | Must be one of the channel's legal levels when present; absent = leave unchanged. **web** allows `full` / `workspace` / `readonly` / `observer` (halo-city / metrics tokens are minted here); the **four chat channels** allow only `full` / `workspace` / `readonly` — `observer` is a dashboard role, not a chat identity | `{error: "accessLevel must be one of: …"}` |
+| `workspacePath` | Absolute and existing. Empty string / relative path → 400; PATCH treats *absence* as "leave the binding alone" but validates any value supplied. On success `ensureWorkspaceHalo()` scaffolds `.halo/` | `{error: "workspacePath must be absolute"}` / `{error: "workspace path not found"}` |
+
+POST additionally rejects a missing `workspacePath` with `{error: "workspacePath required"}`. Stored levels are still normalized to `readonly` on read, but the db no longer holds a value no code path agrees with.
+
 ## WeChat Channel
 
 File: `packages/server/src/routes/wechat.ts`
@@ -97,7 +114,7 @@ File: `packages/server/src/routes/wechat.ts`
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/wechat/login/start` | Start the QR login flow, returns `{qrcodeUrl, sessionKey}` |
-| POST | `/api/wechat/login/wait` | Poll QR status. body: `{sessionKey, workspacePath, label?, language?}`; on success the account is inserted and long-polling starts |
+| POST | `/api/wechat/login/wait` | Poll QR status. body: `{sessionKey, workspacePath, label?, accessLevel?, language?}`; on success the account is inserted and long-polling starts. `workspacePath` must be absolute — checked **before** the blocking QR wait so a typo is rejected without asking the user to scan; existence + `.halo/` scaffolding are only checked after the scan lands, so an abandoned login never scaffolds a directory |
 | GET | `/api/wechat/accounts` | List every bot account |
 | PATCH | `/api/wechat/accounts/:id` | Change label / workspacePath / enabled / accessLevel / language |
 | DELETE | `/api/wechat/accounts/:id` | Stop long-polling and delete the DB row |
@@ -115,7 +132,7 @@ File: `packages/server/src/routes/telegram.ts`. Admin cookie auth. Mounted under
 | PATCH | `/api/telegram/accounts/:id` | Update `label` / `workspacePath` / `enabled` / `accessLevel` / `allowedUsers` / `language`. Stops then restarts the bot if still enabled |
 | DELETE | `/api/telegram/accounts/:id` | Stop long-poll and delete the row |
 
-`workspacePath` must be absolute and exist; `ensureWorkspaceHalo()` runs on POST/PATCH.
+`workspacePath` / `accessLevel` follow the [shared validation rules](#channel-accounts--shared-field-validation).
 
 ## Slack Channel
 
@@ -231,6 +248,21 @@ File: `packages/server/src/routes/web.ts`
 
 ### Public endpoints (token auth via `x-token` header or `?token=` query)
 
+Token auth for the whole public surface — these routes, halo-city's
+`/api/show/*`, and `/api/metrics` — runs through one shared core,
+`resolveTokenAuth` in `middleware/web-token.ts`: header/query token parsing,
+account lookup (must exist **and** be enabled), and the per-IP brute-force
+bookkeeping in one place (5 strikes / 15 min lockout, one `web-token` bucket
+shared by the three surfaces, independent of admin-login lockouts). A missing
+token is a plain 401 and **not** a strike; only an invalid one counts.
+
+Statuses are identical everywhere (`locked_out` 429, `missing_token` /
+`invalid_token` 401) — only the **body shape** differs, which is why each surface
+maps the failure itself: web + `/api/show/*` share the JSON renderer
+(`{error: "token required" | "invalid token" | "too many failed attempts, try again later"}`),
+`/api/metrics` answers in Prometheus comment lines (`# …`) so a scraper never
+gets JSON, and additionally gates on `accessLevel`.
+
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/web/chat` | Send message, receive SSE stream. Body: `{message, images?, workspace?, sessionId?, agentId?}` (overrides also accepted as `?workspace=`/`?sessionId=` query or `x-workspace`/`x-session-id` headers; `workspace` only honored when token has `accessLevel: full`) |
@@ -243,8 +275,9 @@ See [design/web.md](../design/web.md).
 
 ## Show (world snapshot)
 
-File: `packages/server/src/routes/show.ts`. Token auth (same `x-token` as the
-Web channel; shares its brute-force lockout bucket). Read-only, cross-workspace
+File: `packages/server/src/routes/halo-city.ts`. Token auth (same `x-token` as
+the Web channel — same shared `resolveTokenAuth` core, same JSON error shape,
+same brute-force lockout bucket). Read-only, cross-workspace
 snapshot powering the `halo-city` pixel visualizer — one call returns the whole
 runtime so the frontend can render rooms (workspaces) + characters (sessions).
 
@@ -326,7 +359,7 @@ File: `packages/server/src/routes/metrics.ts`.
 |---|---|---|
 | GET | `/api/metrics` | Prometheus text exposition (gauges) of deployment-wide runtime: `halo_uptime_seconds`, `halo_workspaces`, `halo_sessions{status=}`, `halo_sessions_total`, `halo_context_tokens`, `halo_output_tokens` |
 
-In `PUBLIC_PATHS` (no admin cookie). Auth is a web-channel `x-token` (header or `?token=`) with a **global** scope — `full` or `observer` (the read-only role minted for dashboards/scrapes); a workspace-scoped token gets 403. Session counts come from each workspace's `listSessions`; token sums read the in-memory UIState of sessions this process actively drives.
+In `PUBLIC_PATHS` (no admin cookie). Auth is a web-channel `x-token` (header or `?token=`) resolved through the shared `resolveTokenAuth` core, but rendered as Prometheus comment lines instead of JSON — and it additionally requires a **global** scope: `full` or `observer` (the read-only role minted for dashboards/scrapes); a workspace-scoped token gets `# global-scope token (full or observer) required` with 403. Session counts come from each workspace's `listSessions`; token sums read the in-memory UIState of sessions this process actively drives.
 
 ## Self-Evolution
 

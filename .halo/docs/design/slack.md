@@ -118,6 +118,22 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
 4. Errors and system notices flush immediately (don't wait for complete)
 5. Sub-agent events (taskId set) are dropped (visible in web UI only)
 
+**Chunk sends are serialized per responder.** One `flushBuffer` can produce
+several chunks in a single synchronous loop, and each chunk is a separate
+`chat.postMessage` call. Those calls used to be fired without awaiting the
+previous one, so Slack could accept them out of order and a long reply arrived
+scrambled (audit A-L3). Each responder now keeps a `sendTail` promise chain and
+appends every chunk to it, so chunk *n+1* only goes out after *n* settles; a
+rejected link is absorbed (`dispatchChunk` logs its own send failures) so one
+bad send can't stall the rest of the reply.
+
+`close()` therefore returns that drain promise, and `InboundBridge` keeps the
+session's reply route registered until it settles before deleting it — including
+on the `stopAccount` / `closeAll()` path, which for the same reason has no
+blanket `routes.clear()`. Previously the route was dropped the moment the agent
+turn returned, so the tail of a split reply had nowhere to send and was silently
+dropped.
+
 ## Account binding & session keying
 
 ### DM sessions

@@ -21,6 +21,7 @@ For Docker / CI use `halo setup --non-interactive` and supply credentials via `H
 - **Monorepo**: pnpm workspace (packages/core, server, admin, cli, desktop)
 - **packages/server**: Hono + WebSocket (API + agent orchestration + static frontend), port 9527
 - **packages/admin**: Next.js 15 static export → `out/`, served directly by Hono
+- **packages/core**: shared building blocks — `Workspace` / `GitManager`, plus `media/mime.ts`, the one image ext↔MIME table (`IMAGE_EXTS` / `imageMimeFromExt` / `extFromImageMime`) that server routes, channels and the CLI all import instead of keeping their own copy
 - **Agent framework**: custom agent loop + per-provider runtime (AWS Bedrock Claude / Kimi / DeepSeek / MiniMax / Qwen / Hunyuan / Doubao / generic OpenAI / generic Anthropic)
 - **Database**: SQLite + Drizzle ORM
 - **Runtime**: Node.js 22+, ESM
@@ -114,7 +115,7 @@ Driven from `packages/server/templates/canvas/self.html` (engine) + `packages/se
 
 A standalone, read-only pixel **city block** view of a server's runtime — each workspace is a building, each session is a chibi animal citizen who climbs real stairs to a real desk (working / coffee / arcade / smoke break by status), skills are stations that glow when an agent `activate_skill`s on them. Click anyone to inspect their live session log / active skill / last tool / tokens. Pure client-side canvas animation, **no LLM / zero model tokens**; the only traffic is one `GET /api/show/state` poll plus `GET /api/show/session` while an inspector panel is open. Token (web-channel) auth: full → all workspaces, otherwise own.
 
-Lives at [halo-city/](halo-city/) (plain static files, no build). Backed by `packages/server/src/routes/show.ts` (`/api/show/state`, added to `PUBLIC_PATHS`). See [halo-city/README.md](halo-city/README.md) and design notes in [design/halo-city.md](docs/design/halo-city.md).
+Lives at [halo-city/](halo-city/) (plain static files, no build). Backed by `packages/server/src/routes/halo-city.ts` (`/api/show/state`, added to `PUBLIC_PATHS`). See [halo-city/README.md](halo-city/README.md) and design notes in [design/halo-city.md](docs/design/halo-city.md).
 
 ## AgentCore Runtime Mode
 

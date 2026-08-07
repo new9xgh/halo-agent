@@ -42,7 +42,7 @@ Exactly **one** of `schedule` / `runAt` is set per job. `runner.ts` `scheduleJob
 
 REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cron` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:
 
-- Fast path: `PRAGMA data_version` flips only when *another* connection commits. If unchanged since last pass, skip the full select entirely — one pragma read (~µs) vs. a select-all + per-row fingerprint compare.
+- Fast path: `PRAGMA data_version` flips only when *another* connection commits. If unchanged since last pass, skip the full select entirely — one pragma read (~µs) vs. a select-all + per-row fingerprint compare. The pragma (and the run-pruning `NOT IN (subquery)` below) needs the raw better-sqlite3 handle, which the runner gets from the shared `rawSqlite(db)` helper (`db/raw-sqlite.ts`) instead of re-spelling drizzle's `$client` / `.session.client` cast at each site — it did, three times, each with its own hand-written method shape.
 - On change: diff db rows against the in-memory `_fingerprint` map (`enabled|schedule|runAt|timezone`); schedule new rows, unschedule deleted ones, re-instantiate croner only for rows whose fingerprint changed. Broadcasts a coalesced `cron:job_changed` per affected job.
 
 ## Execution (`runJob`)

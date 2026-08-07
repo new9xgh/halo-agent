@@ -223,6 +223,20 @@ Per-workspace mutex in ticker prevents two applies from racing on the same works
     apply-<id>.zip
 ```
 
+**Every path above is built by a `paths.ts` builder — no inline joins.** The
+layout used to be assembled with `path.join(ws, '.halo', 'evo', …)` at ~40 sites
+across archive / enqueue / evo-wrapper / ticker / routes, which is how the same
+directory got spelled two ways. Workspace-rooted builders (`wsEvoDir`,
+`wsEvoRunDir`, `wsEvoApplyDir`, `wsEvoArchiveDir`, `wsEvoHistoryDir`, …) were
+already there; the refactor added four **artifact-dir-relative** ones —
+`evoSandboxDir(artifactDir)`, `evoSandboxHaloDir(artifactDir)`,
+`evoRegressDir(applyDir)`, `evoRegressRunDir(applyDir, runId)`. They take the
+run-*or*-apply dir rather than `(workspace, id)` because run mode and apply mode
+lay their sandbox out identically inside their own artifact dir (`buildEvoSandbox`
+is deliberately called with either). A dedicated equivalence test
+(`test/paths-evo-equivalence.test.ts`) pins the builders against the old
+literals.
+
 `evo-context.json` format:
 
 ```json
@@ -308,7 +322,7 @@ Top-level "Evolution" tab shows:
 
 - **List**: evolution_runs + latest apply per run. Sortable by created_at / status / score.avg. Filterable by status. Joins runs+applies to show consolidated view.
 - **Detail**: patch.md, score.json, test scenario, assembled brief context, diff against current target.
-- **Approve**: Opens dialog, optional reviewer_hint. Creates evolution_applies row.
+- **Approve**: Opens dialog, optional reviewer_hint. Flips the run to `approved` **and** inserts the pending `evolution_applies` row **inside one `db.transaction`** — it's a single reviewer decision, and half of it (run flipped, apply missing) strands the run in a status the ticker never advances.
 - **Reject**: Sets status='rejected'.
 - **Retry**: Resets row to pending, requires new hint. Allowed from any terminal status except `applied`.
 - **Manual Delete**: Removes artifacts (live dir + archive zip, whichever exists) + DB row immediately. Blocked on active rows (pending/running/approved/syncing).
