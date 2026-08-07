@@ -192,13 +192,13 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
    explicitly. This is what carries the built-in skills (incl. `send-file`),
    agents, prompts, models into the dmg.
 3. **Native fixup** — re-fetch `better-sqlite3` prebuilds via `prebuild-install
-   --target=22.11.0` **unconditionally** (pins the ABI to the bundled node
-   regardless of the build host's node — see the ABI gotcha below);
+   --target=$NODE_VERSION_BARE` **unconditionally** (pins the ABI to the bundled
+   node regardless of the build host's node — see the ABI gotcha below);
    `@parcel/watcher`'s per-platform binary is swapped only when cross-staging.
 4. **Trim bloat** — drop non-target `node-pty` prebuilds, `better-sqlite3`'s
    C source, and the server's `src/`/`tests/`.
 5. **Copy `admin-out/`** — the Next.js static export.
-6. **Download + stage node** — fetch `node-v22.11.0-<platform>-<arch>` from
+6. **Download + stage node** — fetch `node-$NODE_VERSION-<platform>-<arch>` from
    nodejs.org, extract the `node` binary into `resources/`.
 7. **codesign (ad-hoc)** — `codesign --force --sign -` on the node binary for
    Gatekeeper. **We deliberately do NOT `strip`** — see gotcha below.
@@ -236,7 +236,8 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   looks fine but won't boot. Keep the full ~114 MB binary; the ~30 MB saved
   isn't worth a dead app. (`stage-runtime.mjs` has the strip step removed.)
 
-- **better-sqlite3's ABI must match the BUNDLED node (22.11.0 / ABI 127), not
+- **better-sqlite3's ABI must match the BUNDLED node (`NODE_VERSION` in
+  `stage-runtime.mjs`, currently v22.11.0 / ABI 127), not
   the build host's node.** `pnpm deploy` / `npm install` hard-link whatever
   `.node` the build host's *active* node produced. If a homebrew/nvm node 23
   (ABI 131) shadows the pinned 22 on the build machine, the staged
@@ -245,9 +246,10 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   (`ERR_DLOPEN_FAILED`, server `code=1`). The dmg packages fine and runs on the
   builder's own machine (whose node happens to match), so it ships broken to
   everyone else. Three guards now prevent this, all in `stage-runtime.mjs`:
-  1. `fetchTargetArchNatives()` runs `prebuild-install --target=22.11.0` for
-     better-sqlite3 **unconditionally** (not just when cross-staging), so the
-     ABI is always re-pinned to the bundled node regardless of the host node.
+  1. `fetchTargetArchNatives()` runs `prebuild-install
+     --target=$NODE_VERSION_BARE` for better-sqlite3 **unconditionally** (not
+     just when cross-staging), so the ABI is always re-pinned to the bundled
+     node regardless of the host node.
   2. An early gate aborts if the build host's node major ≠ the bundled major
      (`nvm use 22` then rebuild; override with `HALO_SKIP_NODE_CHECK=1`).
   3. `smokeTestNativeAddons()` loads the staged better-sqlite3 with the bundled
@@ -257,6 +259,12 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   Verify a built dmg manually: `"<app>/Contents/Resources/node" -e
   "new (require('<app>/Contents/Resources/server-runtime/node_modules/better-sqlite3'))(':memory:')"`
   should exit 0.
+  **Bumping the bundled node = editing `NODE_VERSION` only.** Every effective
+  use (both `prebuild-install --target=` call sites, the host-major gate, the
+  download URL, the log lines) derives from it via `NODE_VERSION_BARE =
+  NODE_VERSION.slice(1)`. The version used to be re-typed as a literal
+  `22.11.0` in the `--target` args, so a bump silently left the ABI pinned to
+  the old node.
 
 - **Desktop port is sequential from 9527 (NOT random), and that's load-bearing
   for persistence.** `main.cjs` `findFreePort()` tries 9527 first, then scans
@@ -283,6 +291,32 @@ Still good practice: build server + admin **before** `pnpm dist:arm64`.
   `;` and these dirs don't exist there). Note this still requires the user to
   have run the menu action that installs `/usr/local/bin/halo`; a fresh
   install that never did has no `halo` on any PATH.
+
+- **The installed `halo` launcher hard-codes paths inside the .app, so moving
+  the app breaks it — the script probes at run time.** `/usr/local/bin/halo` is
+  a tiny `sh` script (not a symlink: it must pair the bundled `node` with the
+  `cli-runtime` entry, which one symlink can't express), so its inlined
+  `Contents/Resources/...` paths go stale the moment the user drags the app
+  Downloads → /Applications — the classic post-install move. `buildCliLauncher()`
+  in `main.cjs` therefore emits a script that checks `-x $NODE` / `-f $CLI`
+  first and, when stale, retries at the standard location
+  (`/Applications/<AppName>.app/Contents/Resources/{node,cli-runtime/dist/index.js}`,
+  derived from the *current* bundle's basename). Still missing → print
+  "re-run Install 'halo' Command from the app menu" and `exit 127`, instead of
+  exec's cryptic "no such file or directory". Dev (`!app.isPackaged`) keeps the
+  plain one-line exec — `nodeBin` there may be a bare PATH lookup and
+  `resourcesPath` points into electron/dist, so there's no .app to heal against.
+
+- **First-run detection parses `secrets/config.yaml` with a real yaml parser.**
+  `configHasPassword()` used to regex `^\s*password:\s*\n\s*value:\s*"([^"]*)"`,
+  which only matched a *double-quoted* value. `halo setup` / change-password
+  write through the yaml Document API, which emits the scrypt hash unquoted (or
+  escape-folded across lines) depending on the prior scalar style — so a real
+  password regexed as "not set" and the desktop re-showed first-run setup on
+  every launch. It now `require()`s the `yaml` package out of the staged
+  server-runtime (always present — the desktop can't boot without it) and reads
+  `server.password.value`; the regex survives only as a `catch` fallback,
+  widened to accept unquoted scalars.
 
 - **Server child lifecycle.** On `before-quit` the main process sends SIGTERM,
   then force-SIGKILLs after 1.5 s. This is the backstop for a wedged server

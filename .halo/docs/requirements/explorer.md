@@ -43,6 +43,7 @@ Visual directory browser opened by the 📁🔍 button:
 - No max depth limit
 - Expansion state lives in localStorage; restored on refresh and lazily reloaded
 - WebSocket `file:changed` events incrementally update loaded branches; unloaded branches are left alone (re-fetched on expand)
+- **Reconnect reconciliation**: because the tree is kept in sync purely by `file:changed` deltas, events missed while the socket was down (laptop lid, network drop) would leave it stale forever. On WS *re*connect (not first connect) the root level is silently refetched; expanded directories self-heal because their fresh nodes come back without children, which re-arms the lazy-load along the persisted expanded-paths spine
 
 ### Selection model
 VS Code-style highlight selection (no checkboxes):

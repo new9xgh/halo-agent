@@ -55,13 +55,11 @@ Every channel, on every inbound message, runs this sequence:
 
 1. **Receive.** Webhook endpoint or long-poll loop gets a raw platform message.
 2. **Extract.** Pull user ID, workspace binding, text, media. Platform-specific — this is why each channel has its own `types.ts`.
-3. **Resolve workspace.** Look up the bound workspace for this account / user. For Weixin this is a DB column; for Slack you'd use team → workspace mapping.
+3. **Resolve workspace.** Look up the bound workspace for this account / user. For WeChat this is a DB column; for Slack you'd use team → workspace mapping.
 4. **Get a SessionManager.** `registry.getOrCreate(workspacePath)` — cheap, memoized per workspace.
-5. **Resolve or create a session.** One user often has multiple sessions over time; keep a "currently active" override per user (Weixin uses an in-memory `activeOverrides` map updated by `/session new` / `/session switch`).
-6. **Register an event listener once per session.** `sm.registerEventListener(sessionId, handler)` — handler receives every agent event. Coalesce streamed text into whole outbound messages (platforms hate per-token streams).
-7. **Send the user message.** `sm.sendUserMessage(sessionId, text, images?)`. This returns immediately; the agent runs async and emits events to your listener.
+5. **Hand off to `deliverInbound`.** Everything downstream is shared ([channels/shared/inbound.ts](../../../packages/server/src/channels/shared/inbound.ts)): resolve-or-create the session under a per-user `activeOverrides` override (`/session new` / `/session switch` update it), fold the account access level, send the busy hint, refresh the reply **route**, register the responder listener once per session (`sm.registerEventListener`), then `appendUserMessage` + `sendUserMessage`. Your channel supplies the route and the send primitives; the responder coalesces streamed text into whole outbound messages (platforms hate per-token streams).
 
-Source for the canonical flow: [packages/server/src/channels/wechat/handler.ts](../../../packages/server/src/channels/wechat/handler.ts) (`handleInbound`).
+Steps 1-4 are yours, step 5 is shared — see [step 4 below](#4-write-the-main-handler) for the call shape. Canonical example: [packages/server/src/channels/wechat/handler.ts](../../../packages/server/src/channels/wechat/handler.ts) (`handleInbound`).
 
 ---
 
@@ -78,7 +76,7 @@ packages/server/src/channels/slack/
 └── event-adapter.ts
 ```
 
-Copy the Weixin shapes to get started, then rewrite against the Slack API.
+Copy the WeChat shapes to get started, then rewrite against the Slack API.
 
 ### 2. Define the account adapter
 
@@ -103,35 +101,54 @@ Inbound: Slack pushes events via **HTTPS webhooks** (Events API) or **WebSocket*
 
 ### 4. Write the main handler
 
-`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. Weixin shape at [packages/server/src/channels/wechat/handler.ts:66-135](../../../packages/server/src/channels/wechat/handler.ts#L66-L135).
+`handler.ts`: exports `startSlackChannel(deps: { registry, db })` returning `{ startAccount, stopAccount, stopAll }`. WeChat shape at [packages/server/src/channels/wechat/handler.ts:73-157](../../../packages/server/src/channels/wechat/handler.ts#L73-L157).
 
 For webhook-style channels (Slack Events API), you don't need a `runAccountLoop` — instead expose an HTTP route that validates the signature, deserializes the event, and calls `handleInbound`. For Socket Mode, you **do** have a loop (the WebSocket reconnect loop).
 
-Inside `handleInbound`:
+Inside `handleInbound`, **don't hand-roll the session/listener plumbing** — the get-or-create, access folding, busy hint, responder registration and agent-input assembly all live in [channels/shared/inbound.ts](../../../packages/server/src/channels/shared/inbound.ts) (`InboundBridge` + `deliverInbound` + `dispatchChannelCommand`). All four channels go through it; the four hand-written copies it replaced are how audit findings A-M2 (responder locked onto the first user in a chat) and A-M5 (skill-command turns ran with no listener attached) happened. Your handler parses the platform message and supplies a **reply route**:
 
 ```ts
-async function handleInbound({ registry, db, account, event, listeners }) {
+// One bridge per running account, owned by the account state so
+// stopAccount can closeAll(). The responder reads the route LAZILY at
+// send time — never capture the chat/user in the closure (A-M2).
+const bridge: InboundBridge<SlackRoute> = new InboundBridge({
+  channel: 'slack',
+  makeResponder: (sessionId) => new SlackResponder({
+    sendText: async (chunk) => {
+      const route = bridge.getRoute(sessionId)
+      if (!route) return
+      await postMessage({ botToken, channel: route.channelId, threadTs: route.replyTs, text: chunk })
+    },
+  }),
+})
+
+async function handleInbound({ registry, db, account, event, bridge, activeOverrides }) {
   const sm = registry.getOrCreate(account.workspacePath)
-  const sessionId = resolveActiveSession(account, event.user, sm)
-    ?? await sm.createSession('default', null, `Slack: ${event.user}`, undefined, undefined, null, account.accessLevel)
-
-  if (!listeners.has(sessionId)) {
-    const responder = new SlackResponder({
-      sendText: (text) => sendMessage({ token: account.botToken, channel: event.channel, text }),
-    })
-    const unsubscribe = sm.registerEventListener(sessionId, (event, state, turnId) => responder.handle(event, state, turnId))
-    listeners.set(sessionId, unsubscribe)
-  }
-
-  // Prefix is optional but nice — lets the agent address the user by handle
-  const agentInput = `[channel: slack | user: ${event.user}]\n${event.text}`
-  await sm.sendUserMessage(sessionId, agentInput, event.images)
+  await deliverInbound({
+    sm, db, accountId: account.accountId, bridge,
+    chatKey: event.channel,                       // cached for cron delivery
+    tagKey: `${event.user}:${event.threadTs}`,     // activeOverrides key
+    sessionPrefix: `slack-${account.accountId}-`,
+    activeOverrides,
+    accountAccessLevel: account.accessLevel,
+    workspacePath: account.workspacePath,
+    sessionLabel: `Slack: ${event.user}`,
+    setOverrideOnCreate: true,                     // per-thread channels pin it
+    route: { channelId: event.channel, replyTs: event.threadTs },  // THIS message
+    lang: account.language, sendHint: (t) => postEphemeral(t),
+    uiText: event.text, agentText: event.text, userTag: event.user,
+    images: event.images,
+  })
 }
 ```
 
+`deliverInbound` refreshes the route on every message before `ensureListener`, so a listener registered once follows the conversation to whoever spoke last. Slash commands go through `dispatchChannelCommand` (same `bridge` + `route`), which wires the responder when the command reports `startedTurn`.
+
 ### 5. Write the event adapter
 
-`event-adapter.ts`: buffers streamed text and sends whole messages. Weixin's flushes on either a 3500-char hard ceiling (platform limit) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Slack has a 40k char limit but users dislike huge messages — consider splitting at paragraph boundaries.
+`event-adapter.ts`: buffers streamed text and sends whole messages. WeChat's flushes on either a 3500-char hard ceiling (platform limit) or a `complete` event; see [packages/server/src/channels/wechat/event-adapter.ts](../../../packages/server/src/channels/wechat/event-adapter.ts). Slack has a 40k char limit but users dislike huge messages — consider splitting at paragraph boundaries.
+
+Its send primitives take **no destination argument** — they read `bridge.getRoute(sessionId)` on each send (see step 4). A responder that captured a chat/user id at construction time is the A-M2 bug.
 
 **What to forward, what to drop**:
 - Drop `tool_call` / `tool_result` / `thinking` events — they're chatter the user doesn't want in IM
@@ -218,7 +235,7 @@ export function createSlackRoutes(deps: { db, channel }) {
 }
 ```
 
-Pattern: [packages/server/src/routes/weixin.ts](../../../packages/server/src/routes/weixin.ts).
+Pattern: [packages/server/src/routes/wechat.ts](../../../packages/server/src/routes/wechat.ts).
 
 ### 8. Write the server descriptor + register
 
@@ -258,7 +275,7 @@ That's all the server wiring. `index.ts` calls `bootChannels(app, defaultChannel
 
 To let users manage Slack accounts from the web UI:
 
-1. Build the React component (mirror [packages/admin/src/features/weixin/weixin-settings.tsx](../../../packages/admin/src/features/weixin/weixin-settings.tsx)). Place it at `packages/admin/src/features/slack/slack-settings.tsx`.
+1. Build the React component (mirror [packages/admin/src/features/wechat/wechat-settings.tsx](../../../packages/admin/src/features/wechat/wechat-settings.tsx)). Place it at `packages/admin/src/features/slack/slack-settings.tsx`.
 2. Create `packages/admin/src/features/slack/descriptor.ts`:
    ```ts
    import { Hash } from 'lucide-react'    // or whatever icon fits
@@ -277,7 +294,7 @@ To let users manage Slack accounts from the web UI:
    import { slackAdminDescriptor } from '@/features/slack/descriptor'
 
    export const defaultAdminChannelDescriptors = [
-     weixinAdminDescriptor,
+     wechatAdminDescriptor,
      telegramAdminDescriptor,
      webAdminDescriptor,
      slackAdminDescriptor,        // ← one new line
@@ -328,13 +345,7 @@ Channel-specific commands (e.g. WeChat's `/qr`) go in a fallback switch after `d
 
 ### Compact / busy states
 
-If the session is currently compacting when an inbound arrives, reply with a hint ("integrating context, try again") and don't queue. If the session is busy (agent running), queue with a "last message still processing" hint. Weixin pattern at [packages/server/src/channels/wechat/handler.ts](../../../packages/server/src/channels/wechat/handler.ts):
-
-```ts
-if (sm.isSessionCompacting(sid)) { /* reply + return, don't enqueue */ }
-if (sm.isSessionRunning(sid)) { /* reply + enqueue */ }
-sm.sendUserMessage(sid, text, images)
-```
+Handled for you inside `deliverInbound`: it calls `busyHint(sm, sessionId, lang)` ([channels/shared/busy-hint.ts](../../../packages/server/src/channels/shared/busy-hint.ts)) and sends the result through your `sendHint` callback. The hint is a **hint only** — the message is always delivered, because `sendUserMessage` queues compacting/busy sessions itself. (The four inlined copies once carried an extra `return` in the compacting branch, so messages sent mid-compact were answered with a hint and then silently dropped.)
 
 ### Single-instance lock
 
@@ -348,7 +359,7 @@ At handler startup, `resolveAccountWorkspace(account)` checks the path exists on
 
 ### Media
 
-Use the shared helper `saveInboundMedia({ workspacePath, accountId, channel: 'slack', buffer, kind: 'image', mimeType })` — [packages/server/src/channels/wechat/media-store.ts](../../../packages/server/src/channels/wechat/media-store.ts). It saves under `<ws>/.halo/assets/slack/inbound/<accountId>/<date>/` and returns the path. Append `[图片已保存: /abs/path]` to the agent's input text and the existing UI code will render a thumbnail.
+Use the shared helper `saveInboundMedia({ workspacePath, accountId, channel: 'slack', buffer, kind: 'image', mimeType })` — [packages/server/src/channels/shared/media-store.ts](../../../packages/server/src/channels/shared/media-store.ts). It saves under `<ws>/.halo/assets/slack/inbound/<accountId>/<date>/` and returns the path. Append `[图片已保存: /abs/path]` to the agent's input text and the existing UI code will render a thumbnail.
 
 For images going to the LLM, also pass them as base64 in the `images` arg — `sm.sendUserMessage(sid, text, images)`.
 
@@ -369,8 +380,9 @@ No automated test framework for channels — manual for now:
 
 ## References
 
-- Full Weixin reference: [design/wechat.md](../design/wechat.md)
-- Weixin code: [packages/server/src/channels/wechat/](../../../packages/server/src/channels/wechat/)
+- Shared inbound skeleton: [packages/server/src/channels/shared/inbound.ts](../../../packages/server/src/channels/shared/inbound.ts) (also written up in [design/telegram.md](../design/telegram.md#shared-inbound-skeleton))
+- Full WeChat reference: [design/wechat.md](../design/wechat.md)
+- WeChat code: [packages/server/src/channels/wechat/](../../../packages/server/src/channels/wechat/)
 - Architecture seat: [design/architecture.md](../design/architecture.md)
 - Session registry: [packages/server/src/agents/session-manager-registry.ts](../../../packages/server/src/agents/session-manager-registry.ts)
 - Storage conventions: [design/storage.md](../design/storage.md)

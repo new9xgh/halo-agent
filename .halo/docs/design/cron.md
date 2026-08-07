@@ -29,6 +29,15 @@ Schedules are **durable** — the source of truth is the `cron_jobs` table; in-m
 - **Recurring**: standard cron expression (`job.schedule`), optional `timezone`.
 - **One-shot**: `job.runAt` (epoch ms) — croner fires once at that instant. After it completes, `finalize` sets `enabled=0` so it never re-fires. A `runAt` already in the past at schedule time is marked `lastRunStatus='missed'` and disabled (rather than firing immediately or retrying every reconcile).
 
+### Trigger-mode exclusivity (the db contract)
+
+Exactly **one** of `schedule` / `runAt` is set per job. `runner.ts` `scheduleJob` silently prefers `runAt` when both are present, and at-mode's post-fire auto-disable (`enabled=0`) would then kill the recurring schedule too — so the invariant is enforced at every write point, not just at create. `PUT /api/cron/jobs/:id` validates the **merged** row (partial PUT bodies make this non-obvious):
+
+- Both sides in one body → `400 schedule and runAt are mutually exclusive`.
+- One side only → treated as a **mode switch**: the other side is implicitly cleared (`schedule` set ⇒ `runAt=null`; `runAt` set ⇒ `schedule=''`).
+- Clearing the active side with nothing to replace it (`schedule: ''` on a recurring job, `runAt: null` on an at-mode job) → `400 schedule or runAt required`. A triggerless job would sit `enabled` and never fire.
+- A non-number, non-null `runAt` is rejected (`400`) *before* the exclusivity check — otherwise garbage types slip past `typeof body.runAt === 'number'` and land in the db as-is.
+
 ### Hot-reload + out-of-band edits
 
 REST route mutations call `scheduleJob` / `unscheduleJob` directly. But the `cron` skill (and manual ops) edit `cron.db` over a *different* sqlite connection. `reconcileFromDb` (10s timer) catches those:

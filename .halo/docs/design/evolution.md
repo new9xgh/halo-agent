@@ -254,6 +254,8 @@ Active rows (pending/running/awaiting_review/approved/syncing) never archived. `
 
 Archive daemon runs at server boot (1 min delay) + daily. Idempotent.
 
+Zipping is **pure JS** (`jszip`, already a repo dependency via admin). It used to `spawnSync('zip', …)`, which depends on a system binary Windows installs don't have — so every archive pass failed there forever and artifacts grew unbounded. `zipDir()` walks the tree manually rather than using a recursive readdir, because the layout has to match what `zip -rq <out> .` produced and two cases need explicit handling: empty dirs get explicit folder entries, and **directory symlinks are not recursed** (an agent runs inside the sandbox during evaluation and could leave a cycle). File symlinks store the target's contents (what system `zip` without `-y` did); broken links are skipped instead of failing the pass. Contents are buffered per file (`createReadStream` for every entry would open all fds up front — EMFILE risk) and the zip is streamed to disk. On failure the partial zip is deleted, and `archiveRun`/`archiveApply` skip both the `rmDir` and the `archived_at` stamp, so the next pass retries from a clean state.
+
 ## Integration with SessionManager
 
 Each evo/score/apply agent is flagged `internal: true` in `agent.yaml`. SessionManager skips loading workspace platform prompts (USER.md, INSTRUCTIONS.md, INDEX.md, prompts/all|root|bootstrap) for internal agents — only their own AGENT.md + wrapper brief reaches the LLM. Reduces token cost and removes workspace-rule bleed-through.
@@ -268,7 +270,7 @@ After apply publishes to main, **no explicit session-release step needed**. Sess
 | `/packages/server/src/evolution/ticker.ts` | 496 | Stateless 30s scheduler. Mark timeouts, claim pending, spawn wrappers. Per-workspace apply mutex. Broadcast status changes to admin UI. |
 | `/packages/server/src/evolution/spawn.ts` | 36 | Real spawner: detached Node child running evo-wrapper.js. Override-able for testing. |
 | `/packages/server/src/evolution/evo-wrapper.ts` | 2000+ | Wrapper orchestrator. 3-phase run mode (draft/dry-run/score). Apply mode (merge/regress/publish). Heartbeat every 60s. Handles Windows command-line limits via stdin briefs. |
-| `/packages/server/src/evolution/archive.ts` | 275 | Archive job: 14d → zip + delete, 30d → purge. Runs daily + at boot. Idempotent. |
+| `/packages/server/src/evolution/archive.ts` | 313 | Archive job: 14d → zip (pure-JS jszip) + delete, 30d → purge. Runs daily + at boot. Idempotent. |
 
 ## Sandbox Model
 

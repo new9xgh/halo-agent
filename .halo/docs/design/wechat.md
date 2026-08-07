@@ -1,4 +1,4 @@
-# Weixin Channel — Design
+# WeChat Channel — Design
 
 Let the user talk to Halo from WeChat on their phone, sharing the same workspace + session as the web side.
 
@@ -13,7 +13,7 @@ Halo server (9527) ──┤── channels/telegram/             ├── Sess
                            ilinkai.weixin.qq.com
 ```
 
-All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport.
+All channels are peers — each one is a subscriber + caller against SessionManager. Common slash commands (`/help`, `/evo`, and the object commands `/session`, `/agent`, `/skill`, `/workspace`) live in `channels/shared/commands.ts`; each channel handler is a thin adapter that builds a `CommandContext` and formats the result for its transport. The inbound tail (session resolve → goal route → busy hint → responder wiring → deliver) is likewise shared — see [Shared inbound skeleton](telegram.md#shared-inbound-skeleton).
 
 ## Data model
 
@@ -65,19 +65,19 @@ WeChat is single-recipient per dispatch (no fan-out across `allowedUsers` like t
 
 Files: `packages/server/src/channels/wechat/`
 
-- `api.ts` — HTTP client (getUpdates long-poll / sendMessage / notifyStart / notifyStop)
-- `login.ts` — QR login (startWeixinLoginWithQr + waitForWeixinLogin)
+- `api.ts` — HTTP client (getUpdates long-poll / sendMessage / notifyStart / notifyStop). `QR_BASE_URL` still points at `ilinkai.weixin.qq.com` — the upstream vendor host, not a naming leftover.
+- `login.ts` — QR login (`startLogin` + `waitLogin`)
 - `accounts.ts` — DAL (insertAccount / updateAccount / deleteAccount / list / normalize / saveSyncBuf)
 - `cdn.ts` — media CDN client (download + decrypt)
-- `media-store.ts` — saves inbound media to the workspace. Shared with the web chat channel: WeChat uses `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/`, web pasted images land in `<workspace>/.halo/assets/web/inbound/<date>/`. Both emit `[图片已保存: /abs/path]` markers that the UI turns into media chips.
+- `media-store.ts` (in `channels/shared/`) — saves inbound media to the workspace. Shared with the web chat channel: WeChat uses `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` path segment is kept for backward compatibility with already-saved assets — the code, routes and db all say `wechat`), web pasted images land in `<workspace>/.halo/assets/web/inbound/<date>/`. Both emit `[图片已保存: /abs/path]` markers that the UI turns into media chips.
 - `send-media.ts` — uploads and sends files/images out
 - `handler.ts` — long-poll main loop, routes messages to SessionManager + slash-command dispatch
 - `event-adapter.ts` — LLM streaming events → WeChat whole-message send (coalesce by 200 chars / 3s silence / complete flush)
 
 ## SessionManager dependencies
 
-- **Multi-subscriber listener**: `eventListeners: Map<rootId, Set<handler>>` — web and weixin can subscribe to the same session simultaneously
-- **Registry**: `SessionManagerRegistry` caches SessionManager instances by workspace path; web and weixin share it
+- **Multi-subscriber listener**: `eventListeners: Map<rootId, Set<handler>>` — web and wechat can subscribe to the same session simultaneously
+- **Registry**: `SessionManagerRegistry` caches SessionManager instances by workspace path; web and wechat share it
 
 ## Long-poll main loop
 
@@ -94,17 +94,11 @@ loop {
 
 > **单实例依赖**：长轮询循环跟 HTTP server 解耦 —— 即便 `:9527` 没绑上，只要进程活着，`runAccountLoop` 就继续拉消息。如果有孤儿 server 进程残留，每个进程都会独立收到同一条消息并 fan out 到不同 session（每个进程内存里的 `activeOverrides` 是独立的，`findActiveSessionId` 可能返回不同结果）。因此 `src/index.ts` 在启动时要抢 `~/.halo/global/server.pid` 单实例锁，详见 [dev/deploy.md](../dev/deploy.md#4-start-the-server)。
 
-`handleInbound(account, msg)`:
+`handleInbound(account, msg)` — WeChat-specific head, then the shared tail:
 1. Extract `from_user_id` / text + media items / `context_token`
 2. Process inbound media: images → base64 attached to the agent message; voice / video / files → saved under the workspace with a `[voice saved: ...]` etc. marker appended to the text
 3. If the text begins with `/`, dispatch a slash command (see below) — if it returns `handled`, stop here
-4. sm = `registry.getOrCreate(account.workspacePath)`
-5. Resolve the active session for this user (override from `/session new`/`/session switch`; otherwise the most recent non-archived session matching the user prefix)
-6. If no active session exists, create one with the inherited access level
-7. If the session is compacting, reply with `⏳ integrating context, try again in ~30s` and skip queueing
-8. If the session is busy, reply with `🔄 still processing last message, queued` and still enqueue
-9. Register a WeixinResponder event listener (once per session) that coalesces outbound text
-10. `sm.sendUserMessage(sessionId, agentInput, images?)` — the actual agent input is prefixed with `[channel: wechat | user: <id>]` so the agent knows how to address the media-send skill
+4. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)), which caches `lastActiveChatId`, resolves-or-creates the session, applies the goal-mode route overlay, sends a busy/compacting hint when needed, refreshes the reply route (`wxRoute(fromUserId, context_token)`), attaches the `WechatResponder` listener once, and delivers: clean text to the UI log, `[channel: wechat | user: <id>]\n<text>` to the agent (so it knows how to address the media-send skill)
 
 ## Slash commands
 
@@ -121,7 +115,7 @@ Implemented in `handler.ts`'s `handleSlashCommand()`:
 
 Unknown `/` input falls through to normal message handling.
 
-## Event coalescing (WeixinResponder)
+## Event coalescing (WechatResponder)
 
 WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "buffer the whole turn, flush as one message":
 - `stream` events accumulate in a single buffer
@@ -130,6 +124,8 @@ WeChat `sendMessage` is block-send, while LLMs stream. The current strategy is "
 - `error` → immediate flush + send a `[错误] …` message; `system` → immediate flush + send a `[系统] …` message
 - Tool calls / tool results / thinking are dropped (detail lives in the web UI)
 - Media: the agent emits `MEDIA: <path>` markers, which the responder extracts and turns into actual media uploads
+
+**The responder never captures its recipient.** Both `sendText` and `sendMedia` read `bridge.getRoute(sessionId)` at send time, so a `{fromUserId, contextToken}` refreshed by a later inbound message takes effect immediately. Closing over `fromUserId` at listener-registration time was the A-M2 bug: after a full-access `/session switch` moved a session to another user, the listener kept replying to the *first* one. `contextToken` (WeChat's passive-reply-window credential) is carried over between messages **only while the user is the same** — a new user's route starts without the old token rather than replaying it against the new recipient. `/session switch` additionally calls `bridge.dropListener(oldSid)` before wiring the target so the abandoned session doesn't keep a live responder.
 
 ## Supported inbound media
 
@@ -143,4 +139,4 @@ Not supported: group chats, typing indicators.
 
 ## References
 
-Original rollout plan: [plans/weixin-channel.md](../plans/weixin-channel.md).
+Original rollout plan: [plans/weixin-channel.md](../plans/weixin-channel.md) (local-only; written before the module was renamed `wechat`, so it still says "weixin" throughout).

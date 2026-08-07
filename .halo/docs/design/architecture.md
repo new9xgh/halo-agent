@@ -29,7 +29,7 @@
 │  Route mounts (via bootChannels — registry-driven):                 │
 │    /api/web/*         (web descriptor)                              │
 │    /api/telegram/*    (telegram descriptor)                         │
-│    /api/weixin/*      (wechat descriptor)                           │
+│    /api/wechat/*      (wechat descriptor)                           │
 │    /api/slack/*       (slack descriptor)                            │
 │    /api/feishu/*      (feishu descriptor)                           │
 │    /ws                → setupWebSocketHandler({wss,registry})       │
@@ -158,8 +158,8 @@ File: `prompts/md-loader.ts`. See [design/prompt-system.md](prompt-system.md).
 ### WorkspaceTools — agent tool set
 File: `tools/workspace-tools.ts`. 9 tools: file_read / view_image / file_write / file_edit / file_list / shell_exec / grep / glob / web_fetch. See [dev/tools.md](../dev/tools.md).
 
-### BackgroundHandler — post-disconnect event buffer
-File: `ws/background-handler.ts`. After WS disconnect it takes over events and buffers structural events for replay on reconnect.
+### Detached event buffer — post-disconnect replay
+File: `ws/handler.ts` (`cleanupConnection`) + `bufferDetachedNotification` in `ws/event-processor.ts`. After WS disconnect, an inline handler takes over the session tree's events and buffers structural ones for replay on reconnect. A *cleared* session (`/session new`) gets no handler at all — see [design/background-dispatch.md](background-dispatch.md).
 
 ### WorkspaceWatcher — file watching
 File: `ws/file-watcher.ts`. chokidar → 300ms debounce + per-path Map dedup → callback. Ignores node_modules / .git / .next / dist. `.halo/sessions/` and `.halo/logs/` are **not** ignored — the dedup keeps volume low, and the front-end drops `change` events for files not open in the editor, so Explorer can reflect session deletions/creations while chat streaming stays cheap.
@@ -190,35 +190,34 @@ See [guide/cli.md](../guide/cli.md).
 Methods: `init(name)` / `readFile(path)` / `writeFile(path, content)` / `listFiles(dir?, recursive?)` / `fileExists(path)` / `validatePath(path)` (path-traversal check).
 
 ### GitManager (`core/src/workspace/git-manager.ts`)
-Methods: `init(dir)` / `commitAll(dir, msg)` / `getDiff(dir, path)`. Backed by simple-git.
+Constructed from a `Workspace` (no per-call dir argument). Read: `isRepoRoot()` (the nested-repo guard every read/write path goes through) / `getStatus()` / `getLog(count?)` / `getCommitFiles(hash)` / `getIgnoredPaths()` / `getRemotes()` / `getFileDiff(path, staged, from?, commit?)` → `{ original, modified }`. Write: `init()` / `stage(paths)` / `unstage(paths)` / `commit(msg)` / `commitAll(msg)` / `push()` / `pull()` / `addRemote(name, url)`. Backed by simple-git. See [requirements/source-control.md](../requirements/source-control.md).
 
 ## Dependency matrix
 
 ```
-                        │ SM │ WS │ EP │ BG │ Routes │ Core │ CLI │
-─────────────────────────┼────┼────┼────┼────┼────────┼──────┼─────┤
-ModelRuntime            │ ✦  │    │    │    │        │      │     │
-SessionManager          │    │ ✦  │    │    │        │      │ ✦   │
-SessionUIStore          │ ✦  │    │    │    │        │      │     │
-SessionQueryStore       │ ✦  │    │    │    │        │      │     │
-SessionAgentBuilder     │ ✦  │    │    │    │        │      │     │
-SessionSkillCommands    │ ✦  │    │    │    │        │      │     │
-SessionStateStore       │ ✦  │    │    │    │        │      │     │
-EventProcessor          │    │ ✦  │    │ ✦  │        │      │
-UILogBuilder            │ ✦  │    │    │    │        │      │
-SessionStore            │ ✦  │ ✦  │ ✦  │ ✦  │ ✦(Ses) │      │
-AgentLoader             │ ✦  │    │    │    │ ✦(AC)  │      │
-MdLoader                │ ✦  │    │    │    │ ✦(AC)  │      │
-WorkspaceTools          │ ✦  │    │    │    │        │      │
-ConversationRepair      │ ✦  │    │    │    │        │      │
-Compact                 │ ✦  │    │    │    │        │      │
-Config                  │ ✦  │ ✦  │    │    │ ✦      │      │ ✦   │
-Database                │ ✦  │ ✦  │    │    │ ✦      │      │     │
-Workspace               │    │    │    │    │ ✦(F)   │      │
-GitManager              │    │    │    │    │ ✦(F)   │      │
-WorkspaceWatcher        │    │ ✦  │    │    │        │      │
-TerminalManager         │    │ ✦  │    │    │        │      │
-BackgroundHandler       │    │ ✦  │    │    │        │      │
+                        │ SM │ WS │ EP │ Routes │ Core │ CLI │
+─────────────────────────┼────┼────┼────┼────────┼──────┼─────┤
+ModelRuntime            │ ✦  │    │    │        │      │     │
+SessionManager          │    │ ✦  │    │        │      │ ✦   │
+SessionUIStore          │ ✦  │    │    │        │      │     │
+SessionQueryStore       │ ✦  │    │    │        │      │     │
+SessionAgentBuilder     │ ✦  │    │    │        │      │     │
+SessionSkillCommands    │ ✦  │    │    │        │      │     │
+SessionStateStore       │ ✦  │    │    │        │      │     │
+EventProcessor          │    │ ✦  │    │        │      │
+UILogBuilder            │ ✦  │    │    │        │      │
+SessionStore            │ ✦  │ ✦  │ ✦  │ ✦(Ses) │      │
+AgentLoader             │ ✦  │    │    │ ✦(AC)  │      │
+MdLoader                │ ✦  │    │    │ ✦(AC)  │      │
+WorkspaceTools          │ ✦  │    │    │        │      │
+ConversationRepair      │ ✦  │    │    │        │      │
+Compact                 │ ✦  │    │    │        │      │
+Config                  │ ✦  │ ✦  │    │ ✦      │      │ ✦   │
+Database                │ ✦  │ ✦  │    │ ✦      │      │     │
+Workspace               │    │    │    │ ✦(F)   │      │
+GitManager              │    │    │    │ ✦(F)   │      │
+WorkspaceWatcher        │    │ ✦  │    │        │      │
+TerminalManager         │    │ ✦  │    │        │      │
 ```
 
 ## Storage responsibility

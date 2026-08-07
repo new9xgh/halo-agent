@@ -60,7 +60,7 @@ Files: `packages/server/src/channels/slack/`
 
 - `types.ts` — SlackAccount, SlackSocketEnvelope, SlackMessageEvent interfaces
 - `accounts.ts` — DAL (thin wrapper over `channels/shared/accounts.ts` for Slack-specific mappings)
-- `handler.ts` — Socket Mode connection + event routing, mention filtering, session resolution, per-thread event listener bookkeeping
+- `handler.ts` — Socket Mode connection + event routing, mention filtering; session resolution + per-thread listener/route bookkeeping come from `channels/shared/inbound.ts` (`InboundBridge` / `deliverInbound` / `dispatchChannelCommand`)
 - `event-adapter.ts` — AgentSessionEvent → Slack messages (buffer + flush; split at 35k chars)
 - `api.ts` — HTTP client (auth.test / openSocketModeConnection / chat.postMessage / files.upload / files.download / searchSlackTargets)
 - `cron-dispatcher.ts` — CronDispatcher registration; requires an explicit Slack chatId per dispatch
@@ -103,9 +103,7 @@ Unlike Telegram (grammy polling) or WeChat (HTTP long-poll), Socket Mode elimina
 7. Strip the `<@botUserId>` mention prefix from the text
 8. (DMs only) Check if text is a slash command (starts with `/` or `!`); if so, dispatch via `channels/shared/commands.ts` and return early
 9. Download and ingest any attached files (save images + files to workspace media store; images base64'd for vision)
-10. Resolve or create the session for this {channel, thread}
-11. Register a `SlackResponder` event listener (once per session, torn down on stopAccount)
-12. Queue the user message with SessionManager
+10. Hand off to `deliverInbound` ([shared skeleton](telegram.md#shared-inbound-skeleton)): resolve or create the session for this {channel, thread}, apply the goal-mode route overlay, send a busy hint if needed, refresh the reply route `{channelId, replyTs}`, attach the `SlackResponder` listener once (torn down on `stopAccount` via `bridge.closeAll()`), then queue the user message with SessionManager
 
 ### Outbound (SlackResponder)
 
@@ -155,9 +153,9 @@ If no explicit chatId is provided, dispatch fails with a clear message. This pre
 Slack channel is a peer with all other channels. The handler:
 
 1. Calls `registry.getOrCreate(workspacePath)` to get the SessionManager for the bound workspace
-2. Registers a `SlackResponder` listener on the session via `sm.registerEventListener(sessionId, listener)`
+2. Registers a `SlackResponder` listener on the session via the shared `InboundBridge` (`ensureListener` → `sm.registerEventListener`); the responder reads its `{channelId, replyTs}` route lazily at send time, so a thread that later receives a message from elsewhere can't get stale replies
 3. Calls `sm.sendUserMessage(sessionId, agentInput, images?, accessLevel)` to queue inbound messages
-4. Calls `sm.isSessionCompacting(sessionId)` / `sm.isSessionRunning(sessionId)` to report status
+4. Calls `sm.isSessionCompacting(sessionId)` / `sm.isSessionRunning(sessionId)` to report status (via the shared `busyHint`)
 
 The registry caches SessionManager instances by workspace path, so multiple bots in the same workspace share the same SessionManager and can coexist in the same sessions (each runs their own responder listener).
 

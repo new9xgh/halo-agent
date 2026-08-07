@@ -53,13 +53,13 @@ The QR is valid for ~3 minutes; if it expires the admin UI auto-refreshes. If yo
 
 The bot's name in your WeChat contacts is whatever the iLink platform set it to (typically a generic placeholder like `小助手`; you can rename it locally). Open the bot's chat in WeChat and send `hello` → expect a streamed reply.
 
-If nothing happens, check halo server logs for `[weixin]` lines.
+If nothing happens, check halo server logs for `[wechat]` lines.
 
 ## How halo handles inbound
 
 - **Text** — sent to the agent
 - **Images** — passed to the LLM as multimodal content
-- **Voice** — decrypted, saved under `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/`, path included in the agent's input
+- **Voice** — decrypted, saved under `<workspace>/.halo/assets/weixin/inbound/<accountId>/<date>/` (the `weixin` directory name is kept for backward compatibility with existing workspaces), path included in the agent's input
 - **Video / files** — same as voice
 - **Group chats** — not supported in v1 (group messages are dropped)
 - **Self-loop** — bot-authored messages are filtered out
@@ -106,5 +106,5 @@ Each scan = one account = one workspace binding. To use a second workspace, open
 
 - Code: `packages/server/src/channels/wechat/`
 - Login flow: `packages/server/src/channels/wechat/login.ts`
-- Admin UI: `packages/admin/src/features/weixin/weixin-settings.tsx`
+- Admin UI: `packages/admin/src/features/wechat/wechat-settings.tsx`
 - Design notes: [../../design/wechat.md](../../design/wechat.md)

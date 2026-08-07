@@ -6,7 +6,7 @@ Let the user talk to Halo from Telegram, sharing the same workspace + sessions a
 
 ```
                        ┌── ws/ (web channel)            ─┐
-                       ├── channels/weixin/              │
+                       ├── channels/wechat/              │
 Halo server (9527) ──┤                                 ├── SessionManager
                        └── channels/telegram/            ─┘    (per workspace, via Registry)
                                ↕ grammy long-poll
@@ -14,6 +14,18 @@ Halo server (9527) ──┤                                 ├── SessionMa
 ```
 
 All channels are peers — each one is a subscriber + caller against SessionManager.
+
+## Shared inbound skeleton
+
+All four IM channels (telegram / wechat / slack / feishu) route inbound messages through `channels/shared/inbound.ts` rather than each keeping its own copy of the same ~200-line tail. The copies had drifted independently, which is how two audited bugs happened (audit A, 2026-08-06): the wechat responder captured its recipient at listener-registration time (A-M2), and all four command-dispatch sites ignored `CommandResult.startedTurn`, so a skill command on a fresh session kicked the agent with no listener attached and the reply vanished (A-M5).
+
+Three pieces:
+
+- **`InboundBridge<Route>`** — per-account bookkeeping for session listeners + their reply routes (`setRoute` / `getRoute` / `ensureListener` / `dropListener` / `closeAll`). The **reply route** — where to send, plus any per-message credential like wechat's context token — is a per-session value refreshed on **every** inbound message, and responders read it lazily at send time via `bridge.getRoute(sessionId)`. A listener registered once therefore can't lock onto a stale destination. Route entries are dropped together with their listener, so the map can't outgrow the listener set (the old per-channel context-token map never got cleaned up). `ensureListener` is idempotent per session; the account runner owns the bridge so `stopAccount` tears everything down with `closeAll()`.
+- **`deliverInbound`** — the tail itself: `rememberLastActiveChat` → access-level projection → resolve-or-create the channel session → `resolveGoalRoute` overlay → busy/compacting hint (hint only; delivery continues regardless) → `setRoute` → `ensureListener` → `appendUserMessage(uiText)` + `sendUserMessage("[channel: X | user: Y | thread: Z]\n" + agentText)`. Returns the (goal-routed) session id.
+- **`dispatchChannelCommand`** — wraps the shared `dispatchCommand` and, when the result says `startedTurn`, wires route + listener exactly like the plain-message path, so no channel can forget it again. A call site that can't build a route logs instead of attaching a responder that could never send.
+
+Deliberately **not** shared (real semantic differences, not drift): message parsing, media download / ingest, slash-command gating (slack `!cmd` alias + DM-only, feishu p2p-only, telegram's `bot.command` registration, wechat `/qr`), the send primitives (thread routing, passive reply window), and post-command effects (workspace restart, wechat's `switchTo` listener migration).
 
 ## Data model
 
@@ -85,13 +97,10 @@ Routes: `packages/server/src/routes/telegram.ts`
 `bot.on('message:text')`:
 1. Check user against `allowedUsers` whitelist
 2. Resolve workspace (check path exists on disk)
-3. Resolve or create active session for this Telegram userId
-4. If session is compacting → reply "⏳ wait"
-5. If session is busy → reply "🔄 queued"
-6. Register a `TelegramResponder` event listener (once per session)
-7. `sm.sendUserMessage(sessionId, agentInput)` with channel prefix
+3. If the text is a registered command, `runCommand` (→ `dispatchChannelCommand`) and stop
+4. Otherwise `handleUserMessage` → `deliverInbound` ([shared skeleton](#shared-inbound-skeleton)): session resolve/create → goal route → busy hint → route `{chatId}` + `TelegramResponder` listener → deliver
 
-Photos / documents trigger the same flow with file metadata in the text.
+Photos / documents / voice / video notes trigger the same flow with the saved-file note in the text.
 
 ## Slash commands (native Telegram /commands)
 
@@ -118,7 +127,10 @@ Same strategy as WeChat:
 
 ## Media support
 
-Inbound: text, photos (file URL in text), documents (file URL in text).
+Inbound: text, photos, documents, voice, video notes. All four media kinds go through the same `fetchAndSaveTelegramFile()` helper — download, persist under `<workspace>/.halo/assets/telegram/inbound/<accountId>/<date>/` via `saveInboundMedia`, and put the **local** path in the note the agent sees (`[文件 "x.pdf" 已保存: /abs/path]`). Two hard rules baked into that helper:
+
+- **Never a getFile URL in the note.** `https://api.telegram.org/file/bot<TOKEN>/…` embeds the bot token, and the note text is persisted verbatim into the session log — UI log, LLM context and disk (audit A-H2). A failed download degrades to the bare filename, never the URL.
+- **20 MB cap** (`MAX_TG_DOWNLOAD_BYTES`) checked against `file_size` up front, because the Bot API's `getFile` refuses anything larger with a generic error. Over the cap → the user gets a readable "file too big" reply and the message is dropped rather than delivered with a broken note.
 
 Outbound: the `send-file` skill produces `MEDIA:<path>` markers. The responder sends files via grammy's `InputFile`:
 - `.jpg/.png/.gif/.webp/.bmp` → `sendPhoto`

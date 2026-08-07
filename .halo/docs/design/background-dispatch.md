@@ -29,14 +29,16 @@ SessionManager.emitEvent(sessionId, event)
 | State | Listener | Events go to |
 |---|---|---|
 | **Connected** | `registerEventListener(rootId, handler)` | `sendWsNotification(event, state, turnId, ctx)` → WS JSON |
-| **Background** (after `/session new`) | Inline `bufferDetachedNotification` closure | `pendingEvents[]` (structural events only for later replay) |
-| **Detached** (WS disconnect) | Same `bufferDetachedNotification` pattern | `pendingEvents[]` on `DetachedSession` |
+| **Background** (after `/session new`) | **none** — the listener is released | Nowhere. SessionUIStore keeps folding + persisting on its own |
+| **Detached** (WS disconnect) | Inline `bufferDetachedNotification` closure | `pendingEvents[]` on `DetachedSession` |
 
 State is NOT duplicated — all handlers read from `SessionManager.getUIState(rootId)`.
 
+**Background has no listener by design.** A cleared session is deliberately abandoned: the admin wipes its chat store on `session:cleared`, so nobody on that connection would ever consume a buffered notification. Unlike the detach path — which buffers precisely because a reconnect within the grace window expects stream continuity — there is no reattach here; a later re-open subscribes fresh and gets the full snapshot from `SessionUIStore` / disk. The buffering handler this used to register (its `unsubscribe` discarded, its `pendingEvents` never drained) leaked one listener per "New session" click.
+
 ## `/session new` (session:clear) flow
 
-Source: `packages/server/src/ws/handler.ts` (`session:clear` case)
+Source: `packages/server/src/ws/handler.ts` (`handleSessionClear`)
 
 ```
 User clicks /session new
@@ -44,45 +46,29 @@ User clicks /session new
     ▼
 session:clear handler
     │
-    ├─ ctx.saveSession()                     ← persist current UIState to file
+    ├─ saveSession(client)                   ← persist current UIState to file
     │
-    ├─ create inline bgHandler:
-    │     (event, state, turnId) => bufferDetachedNotification(event, pendingEvents)
+    ├─ client.unsubscribeEvents?.()          ← release the live WS listener
+    │  client.unsubscribeEvents = null          and register NOTHING in its place
     │
-    ├─ sm.registerEventListener(agentSessionId, bgHandler)
-    │     ← old session's future events go to the buffer
-    │
-    ├─ backgroundSaves.set(prevSessionId, () => ctx.saveSession())
+    ├─ backgroundSaves.set(prevSessionId, () => saveSession(client))
     │     ← register a save fn for when user switches back or disconnects
     │
-    ├─ reset client state (agentSessionId=null, sessionId=null)
-    └─ send { type: 'session:cleared' }
+    ├─ client.sessionId = null
+    └─ send { type: 'session:cleared' }      ← admin bumps its session-list bus on this
 ```
 
-### `createBackgroundHandler` (utility)
+### Where the old session's state keeps coming from
 
-Location: `packages/server/src/ws/background-handler.ts`
-
-A helper used in contexts outside session:clear (e.g. detached sessions). Takes 3 args:
-
-```typescript
-createBackgroundHandler(sessionId: string, projectPath: string | null, sm: SessionManager)
-→ { handler, save, pendingEvents }
-```
-
-- **handler**: `(event, state, turnId) => bufferDetachedNotification(event, pendingEvents)` — buffers structural WS events
-- **save**: reads live UIState from `sm.getUIState(sessionId)`, creates a snapshot, writes to file
-- **pendingEvents**: array of buffered structural events for replay on reconnect
-
-The handler does NOT hold its own messageLog/streamBuffer/tokenState. All state lives in SessionManager's UIState, maintained by `reduceIntoUIState → applyEvent`.
+Nothing is lost without a listener: `SessionUIStore.emitEvent` folds every event into the root's `UIState` (`reduceIntoUIState → applyEvent`) and persists it — debounced 500 ms for tool traffic, flushed synchronously on `complete` — **before** it looks up listeners. Listeners are a pure fan-out for live UI; the persistence path is independent of them.
 
 ### When save fires
 
 Background state persists in three scenarios:
 
 1. **`backgroundSaves.get(sessionId)?.()` in subscribe** — user switches back to the old session; called before re-attaching the listener
-2. **`backgroundSaves` flush on disconnect** — WS closes, flush every pending bg
-3. **Periodic auto-save by UIState reducer** — `complete`, `tool_call`, `tool_result`, `usage` events trigger save via the reducer
+2. **`backgroundSaves` flush on disconnect** — WS closes (or errors), flush every pending bg
+3. **SessionUIStore's own persist** — `complete` flushes immediately, other structural events go through the 500 ms debounce
 
 ## Subscribe (switching back) flow
 
@@ -101,7 +87,6 @@ subscribe handler
     │     backgroundSaves.delete(sessionId)
     │
     ├─ re-attach the event listener to this session tree
-    │     (replaces the bg buffer handler with the live WS handler)
     │
     ├─ Load UIState from SessionManager (or from file if not in memory)
     │
@@ -110,25 +95,27 @@ subscribe handler
 
 ## When disconnect happens while background is still running
 
+Both `close` and `error` run the same `cleanupConnection()` (`clients.delete` is the idempotency gate — see [ws.md](ws.md#reconnect-flow)):
+
 ```
-disconnect handler
+cleanupConnection
     │
+    ├─ clearInterval(keepalive) + terminalManager.detachAll()
     ├─ (if agent running) → detach session with bufferDetachedNotification
     ├─ (otherwise)        → saveSession
-    │
-    └─ flush every backgroundSaves
-          for (const [sid, saveFn] of backgroundSaves)
-            saveFn()
+    ├─ flush every backgroundSaves
+    │     for (const [sid, saveFn] of backgroundSaves)
+    │       saveFn()
+    └─ stop fileWatcher + gitDirWatcher
 ```
 
 ## Relevant files
 
 | File | Relevant code |
 |---|---|
-| `packages/server/src/ws/background-handler.ts` | `createBackgroundHandler()` utility |
-| `packages/server/src/ws/handler.ts` | `session:clear` case — inline bgHandler + `backgroundSaves` registration |
+| `packages/server/src/ws/handler.ts` | `handleSessionClear()` — listener release + `backgroundSaves` registration; `cleanupConnection()` — the shared close/error teardown |
 | `packages/server/src/ws/event-processor.ts` | `sendWsNotification()`, `bufferDetachedNotification()` |
-| `packages/server/src/agents/session-manager.ts` | `emitEvent()`, `reduceIntoUIState()`, `registerEventListener()` |
+| `packages/server/src/agents/session-ui-store.ts` | `emitEvent()`, `reduceIntoUIState()`, `flushPersist()` / `debouncedPersist()`, `registerEventListener()` |
 | `packages/server/src/sessions/ui-log-builder.ts` | `applyEvent()`, `createSaveSnapshot()`, UIState type |
 | `packages/server/src/sessions/session-store.ts` | `saveSessionToFile()`, `loadSessionMessages()` |
 
@@ -142,10 +129,10 @@ disconnect handler
 **Root cause**: before #1 was fixed, sub-agent events went through the live WS handler, pushing messages into the new session's state.
 **Fix**: (a) fixing #1 made event routing tree-scoped. (b) session:clear explicitly saves before switching and resets client state.
 
-### 3. `createBackgroundHandler` missing a return
-**Root cause**: the function defined `handler` and `save` locally but did not `return { handler, save }`.
-**Fix**: add `return { handler, save, pendingEvents }` at the end.
-
-### 4. Stream buffer not flushed before saveSession in session:clear
+### 3. Stream buffer not flushed before saveSession in session:clear
 **Root cause**: in-flight stream text wasn't captured before save.
 **Fix**: UIState reducer now incrementally persists on every structural event — stream text is folded into messageLog by `applyEvent` before save triggers.
+
+### 4. One leaked listener per "New session" click (2026-08-07)
+**Root cause**: `session:clear` registered a buffering background handler whose `unsubscribe` was discarded and whose `pendingEvents` nobody ever drained, so every click added a permanent listener (and an ever-growing array) to the abandoned session tree.
+**Fix**: release the listener and register nothing — see [Background has no listener by design](#three-event-handler-states). `ws/background-handler.ts` (the `createBackgroundHandler` utility, by then only used by this path) was deleted with it.

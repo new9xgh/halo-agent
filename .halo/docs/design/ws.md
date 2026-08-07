@@ -62,13 +62,13 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 | `__ping__` | Application-level liveness probe; server replies `__pong__` |
 | `chat:stop` | Hard-abort the current generation (ends the turn, no re-run) → `stopUserSession` |
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
-| `session:clear` | Non-destructive /session new: save the current, detach, create fresh (handled inline) |
+| `session:clear` | Non-destructive /session new: save the current, release its listener, create fresh (handled inline) — see [Command dispatch](#command-dispatch) |
 | `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
 | `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting. See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
 | `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
-| `terminal:input` | Send keystrokes |
-| `terminal:resize` | Resize terminal |
+| `terminal:input` | Send keystrokes. `terminalId` is **required** — an id-less frame is logged and dropped (it used to fall back to the first entry of the process-global terminal map, which with several admin connections open could write into another browser's PTY) |
+| `terminal:resize` | Resize terminal. `terminalId` required, same rejection as `terminal:input` |
 | `terminal:close` | Kill the PTY |
 | `terminal:reattach` | Re-attach every detached terminal after reconnect |
 
@@ -110,12 +110,12 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
 | `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
 | `chat:queued` | `sendUserMessage` returning queued | User-message-queued notification |
-| `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
+| `file:changed` | WorkspaceWatcher · GitDirWatcher · `routes/git.ts` | File change notification (path + action). Three sources: (1) **WorkspaceWatcher** — recursive workspace watch, deliberately excludes `.git`; (2) **`routes/git.ts`** — every git mutation route re-broadcasts `path:'.git'` itself (the recursive watcher ignores `.git`), via `broadcastToWorkspace` so only clients bound to that workspace are woken (a git write in A used to make every tab showing B refetch status + ignored + log); (3) **GitDirWatcher** — a non-recursive `.git`-dir watch for command-line git ops, *plus* a degraded "watch the workspace root for `.git` appearing" phase that fires `path:'.git'` on a terminal `git init`/`clone` so the Source Control entry auto-surfaces. See [source-control.md](../requirements/source-control.md#auto-refresh-no-polling). |
 | `terminal:ready` / `terminal:output` / `terminal:exit` / `terminal:reattached` | TerminalManager | PTY output |
 | `session:changed` | `SessionManager` (broadcast to all clients) | Root session list changed — re-fetch. Fires on root-session create *and* on each root turn `complete` (so channel-driven messages refresh the count/title/ordering, not just admin's own turns). |
 | `session:switched` | handler.ts (this client only) | The server rebound this connection to a different session — see [switchTo rebind](#switchto-rebind--sessionswitched) |
 | `goal:changed` | `writeGoalState` (`agents/goal-mode.ts`, broadcast to all clients) | Goal-mode state transition: `{goalSessionId, workerSessionId, status, round, maxRounds}`. Emitted on every goal state write (every transition routes through `writeGoalState`, so the push can never be forgotten) plus the goal-session-delete dissolve path. **No workspace marker** — the admin re-fetches through `GET /api/sessions/goal` under its active project, which naturally filters cross-workspace events. Drives the goal banner, worker input lock, and 🎯 badge refresh. See [goal-mode.md](goal-mode.md#admin-surface--ws). |
-| `session:cleared` | session:clear handler | /session new complete |
+| `session:cleared` | session:clear handler (this client only) | /session new complete — sent **after** `saveSession`, so the admin bumps its session-list bus on this event instead of guessing with a `setTimeout` |
 | `session:deleted` | session:delete handler (this client only) | Session delete complete — `{sessionId}` |
 | `chat:stopped` | `chat:stop` / `chat:interrupt` handlers (this client only) | Stop/interrupt acknowledged — `{sessionId}` |
 | `session:compacted` | compact handler | Compaction complete |
@@ -149,7 +149,7 @@ UI state (messageLog / streamBuffer / turnToolCalls / tokens) belongs to Session
 
 ### Command dispatch
 
-- `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle)
+- `session:clear` / `session:delete` — handled inline (save/detach/delete logic specific to WS client lifecycle). `session:clear` saves, then **releases the event listener and registers nothing in its place**: a cleared session is deliberately abandoned (the admin wipes its chat store on `session:cleared`), and SessionUIStore keeps folding + persisting a still-running session's events with zero listeners, so a later re-open subscribes fresh and gets the full snapshot. The buffering `bgHandler` this used to register — whose `unsubscribe` was discarded and whose `pendingEvents` were never drained — leaked one listener per "New session" click.
 - `command:session` with `compact` verb — calls `sm.compactSession(sid, { onProgress })` directly for real-time progress feedback
 - All other `command:*` — builds a shared `CommandContext` and routes through `dispatchCommand()` (see [command.md](command.md))
 
@@ -176,6 +176,8 @@ When the client drops while an agent is still working:
 6. Event handler: `bufferDetachedNotification(event, pendingEvents)` — buffers structural events only (agent_start / agent_done / error / system / followup / complete)
 7. On grace expiry: session is saved and torn down
 
+Teardown lives in one function (`cleanupConnection`) shared by the socket's `close` **and** `error` events: ws normally emits `close` right after `error`, but nothing guarantees it, and the old error path only stopped the watchers — leaking the keepalive interval, the event listener, unflushed background saves and attached PTYs. `clients.delete(client)` is the idempotency gate, so the usual error→close double-fire runs the body exactly once (a second detach pass would overwrite the `detachedSessions` entry and double-register its buffering handler).
+
 ### Reconnect flow
 
 Client reconnects and sends `subscribe`:
@@ -191,6 +193,12 @@ Client reconnects and sends `subscribe`:
 ### Double-subscribe guard
 
 Inside the subscribe handler, `messageLog.length === 0` is a precondition for loading from file — so if reattach has already populated the log, subsequent subscribes can't overwrite it with stale file data. Prevents two consecutive subscribes from losing state.
+
+### Client-side reconnect reconciliation
+
+The chat stream reconciles itself (above), but several admin panels keep state in sync purely from incremental `file:changed` / bus deltas — events emitted while the socket was down are lost forever, leaving them stale until an unrelated event arrives, or indefinitely when none does. Every such subscriber pairs its delta subscription with `onWsReconnect(wsClient, <its existing refetch>)` ([ws-reconnect.ts](../../../packages/admin/src/shared/ws-reconnect.ts)) — a reconnect re-reads from the server instead of trusting the gap. Current consumers: file tree (`use-file-tree.ts` → `loadFileTree`, silent replace), editor open tabs (`editor-panel.tsx` → `refreshActiveTab`), git decorations, Source Control panel + history graph, skills sidebar, agent-management list, agent session-chat panel, and the session-list bus (`state-handlers.ts`).
+
+`everConnected` seeds from `client.connected`, which makes "reconnect" mean the same thing for both mount timings: a panel mounting on an already-open socket treats the next `_connected` as a reconnect, while a page-load mount does **not** fire on its first `_connected` (the subscriber's own mount fetch already covered it — firing would be a pure double-pull).
 
 ## Background session dispatch
 

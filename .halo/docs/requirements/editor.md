@@ -34,7 +34,7 @@ When agents write files through tools, the canvas detects it:
 Open tabs and the active tab live in localStorage; survive refresh.
 
 ### Diff view
-- Tracked files → `GET /api/files/diff` for git diff
+- Tracked files → `GET /api/git/diff` (returns `{ original, modified }`) for git diff
 - Monaco left/right compare view
 
 ### Binary previews

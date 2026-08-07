@@ -96,6 +96,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now halo
 ```
 
+### Crash semantics — why `Restart=on-failure` is load-bearing
+
+The server **exits 1 on any uncaught exception** (`process.on('uncaughtException')`
+logs the stack, then `exit(1)` after a 100ms drain for queued stdout/WS frames).
+It does not try to keep serving: past an unwound handler the process may hold
+half-taken locks and half-written files, and since the db is the source of truth
+— every daemon (cron / evo ticker / channels) reconciles from it on boot — a
+restart is a full recovery while a zombie process silently corrupts state.
+
+So the supervisor is what turns a crash into a ~5s blip: the unit above pairs
+`Restart=on-failure` (fires exactly on non-zero exit) with `RestartSec=5`.
+Docker deployments want an equivalent `restart:` policy. Under Option A (bare
+`nohup` / `halo server start`) there is no supervisor — a crash is a hard stop,
+with the stack in `~/.halo/global/logs/server.log` for whoever restarts it.
+`unhandledRejection` is only logged, not fatal.
+
 ## 6. Verify
 
 ```bash

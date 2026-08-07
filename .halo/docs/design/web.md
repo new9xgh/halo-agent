@@ -171,6 +171,7 @@ node server.js
 ### Security model
 
 - **Proxy mode (default)**: `HALO_TOKEN` and `HALO_API` are server-side only, never exposed to the browser; frontend uses same-origin relative paths (`/chat`, `/history`, etc.); web-demo server proxies all requests to Halo, injecting the token in `x-token` header. Session auth: HMAC token in `x-session` header + localStorage. All proxy routes including `GET /file` are gated by the auth middleware.
+  - **Session TTL: 7 days**, enforced without server-side storage — the signed payload *is* the issue timestamp, so `isValidSession` re-parses it and rejects anything older than `SESSION_TTL_MS`. A leaked token therefore stops working on its own; the frontend gets a 401 and falls back to the login view (`handleAuthFail → logout`). Previously the signature alone was checked, making every issued token valid forever.
 - **Direct-connect mode (opt-in)**: the gear panel takes a halo server URL + web-channel token; the browser then calls `<server>/api/web/*` directly with `x-token`, bypassing the proxy (no password step). The token is stored in that browser's localStorage by explicit user choice — the UI says so next to the field. One slot; clearing it returns to proxy mode. Works because the server CORS reflects any origin and allowlists `x-token`.
 
 ### Proxy routes

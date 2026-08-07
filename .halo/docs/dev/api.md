@@ -18,7 +18,7 @@ File: `packages/server/src/middleware/auth.ts`
 |---|---|---|
 | POST | `/api/auth/login` | Password login, returns a JWT cookie |
 | POST | `/api/auth/logout` | Clears the auth cookie (Set-Cookie `Max-Age=0`). In `PUBLIC_PATHS`. No server-side token blacklist — a copied JWT stays valid until natural expiry |
-| GET | `/api/auth/check` | Validates the current token; refreshes stale tokens |
+| GET | `/api/auth/check` | Validates the current token; refreshes stale tokens. Also returns `badge` (the `HALO_BADGE` env, `null` when unset) on both the 200 and the 401 so the login page can brand its favicon/title too |
 | POST | `/api/auth/change-password` | Change the admin password. **Not** in `PUBLIC_PATHS` — requires a valid JWT cookie. Persists the new scrypt hash to `~/.halo/secrets/config.yaml`; takes effect immediately (no restart), does **not** rotate `jwt_secret` so existing sessions stay signed in |
 
 ## Files
@@ -31,7 +31,6 @@ File: `packages/server/src/routes/files.ts`
 | GET | `/api/files/search?projectId=&q=[&limit=][&dirsOnly=1]` | Recursive name search. Default limit 200, max 1000. Scans up to 50000 entries then truncates; returns `{matches, truncated}`. `dirsOnly=1` matches directories instead of files (powers the chat `@scope` directory completion). |
 | GET | `/api/files?path=&projectId=` | Read file content (max 10 MB) |
 | GET | `/api/files/stat?path=&projectId=` | Lightweight mtime + size |
-| GET | `/api/files/diff?path=&projectId=` | Git diff |
 | GET | `/api/files/download?path=&projectId=&inline=` | Download or inline-preview — streams the file (no full read into memory), supports `Range` (206 Partial Content) so `<video>`/`<audio>` can seek + partial-load; aborts the read if the client disconnects |
 | PUT | `/api/files` | Save file (body: `{path, content, projectId}`) |
 | POST | `/api/files/new` | Create empty file |
@@ -40,7 +39,7 @@ File: `packages/server/src/routes/files.ts`
 | POST | `/api/files/upload` | Multipart upload |
 | DELETE | `/api/files?path=&projectId=` | Delete file or directory (recursive) |
 
-All file operations validate the path stays inside the project root (prevents path traversal). One exception: `GET /api/files/download` also accepts absolute paths under `/tmp/` so that agent-produced working files (e.g. Playwright screenshots) can be inline-previewed from chat media chips.
+All file operations validate the path stays inside the project root (prevents path traversal). The check (`validatePath` in `routes/workspace-path.ts`, shared with `data-preview.ts` and `git.ts`) realpaths both sides — longest existing ancestor plus the re-appended tail — so a symlink inside the workspace pointing outside it is rejected too, not just lexical `../`. One exception: `GET /api/files/download` also accepts absolute paths under `/tmp/` so that agent-produced working files (e.g. Playwright screenshots) can be inline-previewed from chat media chips.
 
 ### Filesystem browse (not project-scoped — for the workspace picker)
 
@@ -49,9 +48,9 @@ All file operations validate the path stays inside the project root (prevents pa
 | GET | `/api/fs/home` | Returns server `homedir()` — fallback when the frontend has no `?folder=` URL param. Returns `{ home }`. |
 | GET | `/api/fs/exists?path=/abs` | Validates an absolute path exists and whether it's a directory. Returns `{exists, isDirectory?}`. |
 | GET | `/api/fs/browse?path=/abs` | Lists immediate directory children (hidden ones dropped). Returns `{path, parent, entries: [{name, path}]}`. |
-| POST | `/api/fs/workspace/resolve` | Resolve `{path}` to an absolute path and run `ensureWorkspaceHalo()`. Returns `{id, path}`. Used by the workspace-picker on switch. |
+| POST | `/api/fs/workspace/resolve` | Resolve `{path}` to an absolute path and run `ensureWorkspaceHalo()`. Returns `{id, path}`. Used by the workspace-picker on switch. 404 `path not found` when it doesn't exist; 400 `not a directory` for a file; 400 `filesystem root cannot be a workspace` for `/` (or a drive root) — `ensureWorkspaceHalo()` writes a whole `.halo/` scaffold, so those two shapes are refused before the write. Deeper system trees (`/usr`, `/etc`) are deliberately **not** banned. |
 
-Absolute paths only. Purpose: Explorer's workspace picker and switching validation. Reading/writing files still goes through `/api/files/*` and remains project-sandboxed.
+Absolute paths only. Purpose: Explorer's workspace picker and switching validation. `/api/fs/browse` is intentionally unrestricted (it's a read-only picker over the server's filesystem — same trust boundary as the admin cookie). Reading/writing files still goes through `/api/files/*` and remains project-sandboxed.
 
 ## Data Preview
 
@@ -91,17 +90,17 @@ The list endpoint returns flat metadata (id / agentId / agentName / title / time
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
-## Weixin Channel
+## WeChat Channel
 
-File: `packages/server/src/routes/weixin.ts`
+File: `packages/server/src/routes/wechat.ts`
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/weixin/login/start` | Start the QR login flow, returns `{qrcodeUrl, sessionKey}` |
-| POST | `/api/weixin/login/wait` | Poll QR status. body: `{sessionKey, workspacePath, label?, language?}`; on success the account is inserted and long-polling starts |
-| GET | `/api/weixin/accounts` | List every bot account |
-| PATCH | `/api/weixin/accounts/:id` | Change label / workspacePath / enabled / accessLevel / language |
-| DELETE | `/api/weixin/accounts/:id` | Stop long-polling and delete the DB row |
+| POST | `/api/wechat/login/start` | Start the QR login flow, returns `{qrcodeUrl, sessionKey}` |
+| POST | `/api/wechat/login/wait` | Poll QR status. body: `{sessionKey, workspacePath, label?, language?}`; on success the account is inserted and long-polling starts |
+| GET | `/api/wechat/accounts` | List every bot account |
+| PATCH | `/api/wechat/accounts/:id` | Change label / workspacePath / enabled / accessLevel / language |
+| DELETE | `/api/wechat/accounts/:id` | Stop long-polling and delete the DB row |
 
 See [design/wechat.md](../design/wechat.md).
 
@@ -152,7 +151,7 @@ File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `c
 |---|---|---|
 | GET | `/api/cron/jobs?limit=&before=` | Cursor-paginated newest-first by `createdAt`. Default `limit` 20, max 100; `before` is a `createdAt` cursor. Returns `{jobs, hasMore, nextCursor}`. Each job has `targets` decoded and a live `nextRunAt` (computed from schedule/runAt) |
 | POST | `/api/cron/jobs` | Create a job. Body: `{label?, workspacePath, agentId, userPrompt, schedule, runAt?, timezone?, targets?, enabled?}`. Exactly one of `schedule` (5-field cron) or `runAt` (epoch ms, future) is required; mutually exclusive. Returns `{ok, id}` |
-| PUT | `/api/cron/jobs/:id` | Partial update over the same fields. Re-validates `schedule` / `runAt`; flips schedule/unschedule on `enabled`. Returns `{ok}` |
+| PUT | `/api/cron/jobs/:id` | Partial update over the same fields. Re-validates `schedule` / `runAt` and enforces trigger-mode exclusivity on the **merged** row: both in one body → 400 `schedule and runAt are mutually exclusive`; supplying one side is a mode switch that implicitly clears the other; a body that clears the active side without supplying a replacement → 400 `schedule or runAt required`. `runAt` must be a finite future epoch-ms number or `null`. Flips schedule/unschedule on `enabled`. Returns `{ok}` |
 | DELETE | `/api/cron/jobs/:id` | Unschedule, delete every `cron_runs` row for the job, then delete the job. Returns `{ok}` |
 | POST | `/api/cron/jobs/:id/run-now` | Fire the job immediately (fire-and-forget). Returns `{ok}` |
 | POST | `/api/cron/reload` | Re-read every job from db and rebuild schedules. Returns `{ok}` |
@@ -175,7 +174,7 @@ File: `packages/server/src/routes/cron.ts`. Admin cookie auth. REST CRUD over `c
 
 ## Source Control (Git)
 
-File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source Control panel + Explorer git decorations. All project-scoped reads take `projectId=<absPath>`; writes take it in the JSON body. A write (stage/unstage/commit/push/pull/init/remote) broadcasts `file:changed` (path `.git`) so the panel, graph and explorer decorations auto-refresh without polling — the file watcher ignores `.git`, so the route re-broadcasts it itself. Path params on diff are traversal-checked against the project root.
+File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source Control panel + Explorer git decorations. All project-scoped reads take `projectId=<absPath>`; writes take it in the JSON body. A write (stage/unstage/commit/push/pull/init/remote) broadcasts `file:changed` (path `.git`) so the panel, graph and explorer decorations auto-refresh without polling — the file watcher ignores `.git`, so the route re-broadcasts it itself. The broadcast is **workspace-scoped** (`broadcastToWorkspace`): only clients bound to that workspace get it, so a git write in A no longer makes every tab showing B refetch status + ignored + log. Path params on diff are traversal-checked against the project root.
 
 ### Repo state (read)
 
@@ -189,6 +188,8 @@ File: `packages/server/src/routes/git.ts`. Admin cookie auth. Backs the Source C
 | GET | `/api/git/remotes?projectId=` | Configured remotes. Returns `{remotes: [{name, url}]}` (`[]` when none) |
 
 ### Mutations (write — each broadcasts `file:changed`)
+
+Every write except `/api/git/init` is gated on the project being a git work-tree **root** (`getGitForWrite` → `isRepoRoot()`): a folder that's merely nested inside an ancestor's repo gets **409** `{error: 'Not a git repository root'}` instead of silently mutating the ancestor. Reads keep their 200-with-empty-payload shape for the same state. `/api/git/init` is deliberately ungated — initializing a nested folder's own repo is exactly its purpose.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -281,6 +282,8 @@ File: `packages/server/src/routes/agent-configs.ts`
 | DELETE | `/api/agent-configs/:id/sessions/:sessionId` | Delete a session |
 | DELETE | `/api/agent-configs/:id/sessions?all=1` | Delete every session for the agent |
 
+Every `:id` / `:sessionId` route param that becomes a path segment (here and in `DELETE /api/skills/:id`) is validated with `isSafeIdSegment()` (`routes/workspace-path.ts`) before it reaches `path.join` — `.` / `..` rejected outright, everything else must match `/^[\w.:>\u4e00-\u9fff-]+$/` (the union of the real id charsets: slug + CJK agent names, `__internal__`, and session ids embedding `_ - : . >`). Hono decodes `%2F` / `%2e` into params, so a raw `..%2F..%2Fetc` would otherwise arrive as a traversal. A rejected param is **400** (`Invalid agent id` / `Invalid skill id` / `Invalid session id`), distinct from the **404** a well-formed-but-missing session file gets.
+
 ## Skills
 
 File: `packages/server/src/routes/skills.ts`
@@ -312,6 +315,8 @@ File: `packages/server/src/routes/settings.ts`
 | PUT | `/api/settings` | Replace a scope's full settings |
 | PATCH | `/api/settings` | Update a single key |
 | DELETE | `/api/settings` | Delete a key |
+
+PATCH / DELETE walk the dotted key layer by layer, so a segment of `__proto__` / `constructor` / `prototype` is rejected with 400 `Invalid key` — the leaf assignment would otherwise land on `Object.prototype` and pollute every object in the process.
 
 ## Metrics
 
@@ -367,11 +372,17 @@ Source: [packages/server/src/middleware/auth.ts:123-134](../../../packages/serve
 
 ```json
 // 200 authenticated
-{ "authenticated": true }
+{ "authenticated": true, "badge": "DEV" }
 
 // 401 not authenticated
-{ "authenticated": false }
+{ "authenticated": false, "badge": "DEV" }
 ```
+
+`badge` echoes the `HALO_BADGE` env (trimmed; `null` when unset) on **both**
+branches — this is the admin's first request, login page included, so the tab
+can brand its favicon + title from the very first paint without a second
+endpoint or a poll. Corollary: the value is readable **without authenticating**,
+so it must stay a label, not a secret. See [env.md](./env.md).
 
 ### POST `/api/auth/change-password`
 
@@ -641,9 +652,9 @@ Resolves declared schema (from `models/<id>.yaml` `secrets:` and `skills/<id>/co
 
 PUT replaces the full scope; DELETE takes `{scope, projectId, key}` and removes the key. The Settings page uses DELETE for both Reset (current scope removed → falls back to lower scope / unset) and orphan Remove.
 
-### POST `/api/weixin/login/start`
+### POST `/api/wechat/login/start`
 
-Source: [packages/server/src/routes/weixin.ts:42-46](../../../packages/server/src/routes/weixin.ts#L42-L46)
+Source: [packages/server/src/routes/wechat.ts:39-43](../../../packages/server/src/routes/wechat.ts#L39-L43)
 
 ```json
 // Request
@@ -653,7 +664,7 @@ Source: [packages/server/src/routes/weixin.ts:42-46](../../../packages/server/sr
 { "qrcodeUrl": "https://...", "sessionKey": "abc123" }
 ```
 
-### POST `/api/weixin/login/wait`
+### POST `/api/wechat/login/wait`
 
 ```json
 // Request
