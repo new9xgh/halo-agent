@@ -28,6 +28,7 @@ import { claimWorkspaceRuntime } from './workspace-runtime-lock.js'
 import type { CommandDescriptor } from '../commands/types.js'
 import { enqueueEvoRun } from '../evolution/enqueue.js'
 import { saveSessionToFile, fileSegment, findInternalSession, atomicWriteSessionFile } from '../sessions/session-store.js'
+import { readArchiveCount } from '../sessions/session-archive.js'
 import { VISION_IMAGE_MIME_TYPES } from '../channels/shared/media-store.js'
 import type { SessionMessage } from '../sessions/session-types.js'
 import {
@@ -2366,6 +2367,18 @@ export class SessionManager implements SessionManagerInternals {
       const finalTail = tailMicro.compacted ? tailMicro.messages : cleanRecent
       session.agent.messages = [summaryMsg, ...finalTail]
 
+      // The UI log's only shrink point. rawMessages just collapsed to
+      // [summary, ...recent]; the UI log keeps the full conversation and would
+      // otherwise grow forever (measured: 6.9MB of a 7.4MB session file). Move
+      // its older exchanges into a gzipped archive segment here — the one
+      // moment where "history moves out of the active file" is already the
+      // semantics of the operation. Root sessions only: a sub-agent's compact
+      // must not truncate its parent's log (findRootSessionId would resolve a
+      // sub id to the root's UI state), and sub logs are the next round's job.
+      // Runs BEFORE the callers emit their compaction notices, so the summary
+      // notice lands in the kept tail rather than the archived segment.
+      if (!session.parentId) this.uiStore.archiveOldMessages(session.id)
+
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])
       return { summary: summaryText, olderCount, estimatedTokens }
     } finally {
@@ -2533,17 +2546,32 @@ export class SessionManager implements SessionManagerInternals {
    * would corrupt the in-flight conversation). Memory + disk stay in sync: a
    * live session's `agent.messages` / UI log are updated in place then persisted;
    * a cold session is edited on disk directly.
+   *
+   * Also rejects once the UI log has archived segments (`archiveCount > 0`) —
+   * see the `'archived'` note below.
    */
   async deleteExchange(
     sessionId: string,
     userOrdinal: number,
-  ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange'> {
+  ): Promise<'deleted' | 'running' | 'compacting' | 'not_found' | 'no_exchange' | 'archived'> {
     const rootId = this.findRootSessionId(sessionId)
     if (this.isSessionRunning(rootId)) return 'running'
     if (this.isSessionCompacting(rootId)) return 'compacting'
 
     const info = this.getSessionById(rootId)
     if (!info) return 'not_found'
+
+    // `userOrdinal` is positional over the log both sides can see, so it is only
+    // meaningful while client and server agree on where the log starts. Archiving
+    // moves that start forward: a chat panel that was open across the compact
+    // still counts from the pre-archive top, and an ordinal computed there maps
+    // onto a DIFFERENT turn here — a silently wrong delete. There is nothing in
+    // the current payload to disambiguate (no id, no anchor), so refuse loudly
+    // instead of guessing. Read from the file header, not memory: the commit
+    // marker on disk is the truth about what was archived.
+    // Real fix belongs with the upload-scroll round that teaches the frontend
+    // about segments — that is where the ordinal protocol gains an anchor.
+    if (readArchiveCount(this.sessionDir(info.agentId), fileSegment(rootId)) > 0) return 'archived'
 
     const uiState = this.getUIState(rootId)
     if (!uiState) return 'not_found'

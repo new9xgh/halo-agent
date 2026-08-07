@@ -9,6 +9,7 @@ import {
   getSessionDir, loadSessionMessages, fileSegment,
   type SessionSaveOptions,
 } from '../sessions/session-store.js'
+import { archiveSplitIndex, readArchiveCount, writeArchiveSegment } from '../sessions/session-archive.js'
 import type { SessionMessage, SessionFileData } from '../sessions/session-types.js'
 import {
   applyEvent, createEmptyUIState, createSaveSnapshot, genId,
@@ -251,8 +252,10 @@ export class SessionUIStore {
     return state
   }
 
-  /** Persist UI state (root messages + token counts) to disk */
-  private persistUIState(rootId: string, state: UIState): void {
+  /** Persist UI state (root messages + token counts) to disk.
+   *  `archiveCount` is passed ONLY by archiveOldMessages (the commit step of an
+   *  archive write); every other call leaves the on-disk value alone. */
+  private persistUIState(rootId: string, state: UIState, archiveCount?: number): void {
     try {
       const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
       const snapshot = createSaveSnapshot(state)
@@ -278,9 +281,72 @@ export class SessionUIStore {
         // slot `agentId` — keep these two distinct so a renamed default slot
         // shows correctly. (agentId still drives the directory above.)
         agentName: inMem?.agentName ?? row?.agentName ?? row?.agentId,
+        archiveCount,
       })
     } catch (err) {
       console.error(`[SessionUIStore] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  /**
+   * Move the older part of a root session's UI log out into a gzipped archive
+   * segment, keeping the recent tail in the active file. Called from the
+   * compact path — the only place that already accepts "history shrinks here".
+   *
+   * Two-step write, segment FIRST:
+   *   1. write `<seg>.arch.<N>.json.gz` (a brand-new path, nothing references it yet)
+   *   2. rewrite the active file with the kept tail + `archiveCount: N`
+   *
+   * `archiveCount` is the commit marker, so a crash between the steps leaves an
+   * uncommitted segment that no reader can reach and the active file still
+   * holding every message — nothing is lost, and the next compact simply
+   * re-derives the same `N` and overwrites the orphan (idempotent by
+   * construction, no reconciliation pass needed). The reverse order would risk
+   * dropping messages from the active file before their archive exists.
+   *
+   * Returns the number of archived messages (0 = nothing to do).
+   */
+  archiveOldMessages(sessionId: string): number {
+    const rootId = this.findRootSessionId(sessionId)
+    if (this.host.isSessionDeleted(rootId)) return 0
+    // ensureUIState, not a cache peek: a compact on a session restored from
+    // disk (cold `/compact`) must archive too. Returns the live state when one
+    // is already loaded, which is the normal mid-turn case.
+    const state = this.ensureUIState(rootId)
+    try {
+      const cut = archiveSplitIndex(state.messageLog)
+      if (cut === 0) return 0
+
+      const inMem = this.host.getSession(rootId)
+      const row = inMem ? null : this.db.select().from(agentSessions)
+        .where(eq(agentSessions.id, rootId)).get()
+      const agentId = inMem?.agentId ?? row?.agentId ?? 'default'
+      const dir = getSessionDir(agentId, this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot)
+      const seg = fileSegment(rootId)
+
+      const older = state.messageLog.slice(0, cut)
+      const kept = state.messageLog.slice(cut)
+      const n = readArchiveCount(dir, seg) + 1
+      writeArchiveSegment(dir, seg, n, older)
+
+      state.messageLog = kept
+      this.persistUIState(rootId, state, n)
+      // persistUIState swallows its own IO errors (every session write does), so
+      // confirm the commit landed. An active file still at `< n` next to a
+      // truncated in-memory log would let the NEXT ordinary persist write the
+      // short log under the old count — that, not the crash case, is how
+      // messages would actually go missing. Roll memory back instead: the
+      // segment stays uncommitted and the next compact redoes the same N.
+      if (readArchiveCount(dir, seg) < n) {
+        state.messageLog = [...older, ...kept]
+        console.warn(`[SessionUIStore] archive commit for ${rootId} segment ${n} did not land — rolled back`)
+        return 0
+      }
+      console.debug(`[SessionUIStore] archived ${older.length} UI messages of ${rootId} into segment ${n}`)
+      return older.length
+    } catch (err) {
+      console.error(`[SessionUIStore] archiveOldMessages failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
+      return 0
     }
   }
 

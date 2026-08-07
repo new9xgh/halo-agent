@@ -250,6 +250,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal)
     if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running' }); return }
     if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting' }); return }
+    if (result === 'archived') { sendJson(ws, { type: 'error', error: 'Cannot delete turns in a session with archived history' }); return }
     if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found' }); return }
 
     // Push the refreshed log to the subscribed client (this connection) when it's

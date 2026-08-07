@@ -9,6 +9,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import type { SessionMessage, SessionFileData } from './session-types.js'
+import { deleteArchiveSegments } from './session-archive.js'
 
 /**
  * Internal agents (`__evo_agent__`, `__score__`, `__apply_agent__`) are
@@ -107,6 +108,10 @@ export interface SessionSaveOptions {
   description?: string
   /** Parent session ID (sub-sessions only) */
   parentSessionId?: string | null
+  /** Number of committed UI-log archive segments (`<seg>.arch.<N>.json.gz`).
+   *  Only the archiving write passes it; every other write preserves whatever
+   *  the file already has. See sessions/session-archive.ts. */
+  archiveCount?: number
 }
 
 /**
@@ -161,6 +166,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
     let existingRawMessages: unknown
     let existingOutput: unknown
     let existingTitle: string | undefined
+    let existingArchiveCount: number | undefined
     try {
       const existing = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
       if (existing.createdAt) createdAt = existing.createdAt
@@ -169,6 +175,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
       // Preserve agent state fields (written by session-manager saveAgentState)
       if (existing.rawMessages) existingRawMessages = existing.rawMessages
       if (existing.output !== undefined) existingOutput = existing.output
+      if (typeof existing.archiveCount === 'number') existingArchiveCount = existing.archiveCount
     } catch { /* new session */ }
 
     // Title: derived once from the first user message and sticky thereafter.
@@ -191,6 +198,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
     }
 
     const parentSessionId = existingParent ?? (opts.parentSessionId || undefined)
+    const archiveCount = opts.archiveCount ?? existingArchiveCount
     const session: Record<string, unknown> = {
       version: 1,
       id: sessionId,
@@ -208,6 +216,10 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
       // Preserve rawMessages/output from session-manager
       ...(existingRawMessages ? { rawMessages: existingRawMessages } : {}),
       ...(existingOutput !== undefined ? { output: existingOutput } : {}),
+      // Archive commit marker: the archiving write raises it, every other
+      // write carries the on-disk value forward. Dropping it here would
+      // orphan already-written segments.
+      ...(archiveCount ? { archiveCount } : {}),
     }
 
     atomicWriteJsonSync(filePath, JSON.stringify(session))
@@ -253,10 +265,12 @@ export function loadSessionFileData(sessionId: string, projectPath?: string | nu
   }
 }
 
-/** Delete a session JSON file. */
+/** Delete a session JSON file plus its UI-log archive segments. */
 export async function deleteSessionFile(sessionId: string, projectPath?: string | null, agentId?: string): Promise<void> {
   const dir = getSessionDir(agentId ?? 'default', projectPath)
-  try { await fs.rm(path.join(dir, `${fileSegment(sessionId)}.json`)) } catch { /* not found */ }
+  const seg = fileSegment(sessionId)
+  try { await fs.rm(path.join(dir, `${seg}.json`)) } catch { /* not found */ }
+  await deleteArchiveSegments(dir, seg)
 }
 
 /** List all session files for an agent */
@@ -318,15 +332,17 @@ export function findSessionFileData(sessionId: string, projectPath?: string | nu
   return null
 }
 
-/** Find and delete a session file by ID (scans all agent dirs). */
+/** Find and delete a session file by ID (scans all agent dirs), plus its
+ *  UI-log archive segments. */
 export async function findAndDeleteSessionFile(sessionId: string, projectPath?: string | null): Promise<void> {
   try {
     const baseDir = getSessionsBaseDir(projectPath)
     const agentDirs = await fs.readdir(baseDir)
-    const fileName = `${fileSegment(sessionId)}.json`
+    const seg = fileSegment(sessionId)
     for (const agentDir of agentDirs) {
       try {
-        await fs.rm(path.join(baseDir, agentDir, fileName))
+        await fs.rm(path.join(baseDir, agentDir, `${seg}.json`))
+        await deleteArchiveSegments(path.join(baseDir, agentDir), seg)
         return
       } catch { /* not here, try next agent dir */ }
     }
