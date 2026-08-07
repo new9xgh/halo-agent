@@ -32,6 +32,7 @@ import { SourceControlSidebar } from '@/features/source-control/source-control-s
 import { SourceControlMain } from '@/features/source-control/source-control-main'
 import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff } from 'lucide-react'
 import { useT } from '@/shared/i18n'
+import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
 
 type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
@@ -145,8 +146,10 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   useEffect(() => {
     const name = activeProject?.name
     // No workspace open → bare "Halo"; otherwise prefix a solid dot while busy.
-    // em dash (U+2014) matches the desktop window/title style.
-    document.title = name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo'
+    // em dash (U+2014) matches the desktop window/title style. The env-badge
+    // prefix ("[DEV] ") must be re-stamped here — this rewrite would
+    // otherwise clobber what applyEnvBadge put on the initial title.
+    document.title = envBadgeTitlePrefix() + (name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo')
 
     // Busy→idle falling edge → notify the user their agent finished, but only
     // when this window is unfocused (focused → they can see it) AND the session

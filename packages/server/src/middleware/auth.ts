@@ -193,7 +193,9 @@ export function createAuthRoutes() {
     return c.json({ ok: true })
   })
 
-  // Check if authenticated
+  // Check if authenticated. Also carries the HALO_BADGE env (`badge`) —
+  // this is the admin's first request (pre-login included), so a dev tab
+  // can brand its favicon/title at runtime without a new endpoint or poll.
   app.get('/auth/check', (c) => {
     const token = getCookie(c, COOKIE_NAME)
     const payload = validateToken(token)
@@ -202,9 +204,9 @@ export function createAuthRoutes() {
         const newToken = createToken()
         setTokenCookie(c, newToken)
       }
-      return c.json({ authenticated: true })
+      return c.json({ authenticated: true, badge: config.server.badge })
     }
-    return c.json({ authenticated: false }, 401)
+    return c.json({ authenticated: false, badge: config.server.badge }, 401)
   })
 
   // Logout

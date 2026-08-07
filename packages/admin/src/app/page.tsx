@@ -5,6 +5,7 @@ import { WorkspaceLayout } from '@/features/workspace/workspace-layout'
 import { useWebSocket } from '@/shared/use-websocket'
 import { wsClient } from '@/shared/ws-client'
 import { LoginPage } from '@/features/auth/login-page'
+import { applyEnvBadge } from '@/shared/env-badge'
 
 export default function HomePage() {
   const { linkState } = useWebSocket()
@@ -12,7 +13,11 @@ export default function HomePage() {
 
   useEffect(() => {
     fetch('/api/auth/check', { credentials: 'include' })
-      .then((res) => {
+      .then(async (res) => {
+        // Both the 200 and 401 bodies carry `badge` (HALO_BADGE env) — brand
+        // the tab before login too, so dev/prod tabs never look identical.
+        const body = await res.json().catch(() => null) as { badge?: string | null } | null
+        applyEnvBadge(body?.badge)
         setAuthState(res.ok ? 'authenticated' : 'login')
       })
       .catch(() => {

@@ -309,6 +309,15 @@ export const config = {
     get trustProxy(): boolean {
       return settingsBool('general.server.trust_proxy', false)
     },
+    /** Environment badge (`HALO_BADGE=DEV`) surfaced to the admin via
+     *  `GET /auth/check` so parallel dev/prod tabs are tellable apart — the
+     *  admin repaints the favicon with a badge band and prefixes the tab
+     *  title. dev/prod serve the same static build, so this must be a
+     *  runtime signal. Unset/empty → null → admin keeps stock branding. */
+    get badge(): string | null {
+      const v = process.env.HALO_BADGE?.trim()
+      return v ? v : null
+    },
     /** `HALO_RUNTIME_MODE=agentcore` runs the server as an Amazon Bedrock
      *  AgentCore Runtime container: auth is terminated upstream by AgentCore,
      *  so password/JWT checks, channels, cron/evolution and the instance lock
