@@ -1,10 +1,8 @@
 import { Hono, type Context } from 'hono'
-import fs from 'node:fs'
-import path from 'node:path'
-import { channelAccounts, getChannelDb } from '../db/channel-db.js'
+import { getChannelDb } from '../db/channel-db.js'
 import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
-import { readonlySessionCounts, dropRoReader } from './halo-city.js'
+import { readonlySessionCounts, dropRoReader, discoverWorkspaces } from './halo-city.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionInfo } from '../agents/session-manager.js'
 
@@ -22,21 +20,6 @@ function family(name: string, type: 'gauge' | 'counter', help: string, samples: 
   const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`]
   for (const s of samples) lines.push(`${name}${s.labels ? `{${s.labels}}` : ''} ${s.value}`)
   return lines.join('\n')
-}
-
-/** Discover every workspace a full-access scrape covers: live SessionManagers
- *  plus every channel-account-bound path. Deduped by realpath. (Same set
- *  halo-city.ts surfaces, kept inline — the canonical copy is tied to halo-city's route.) */
-function discoverWorkspaces(registry: SessionManagerRegistry): Set<string> {
-  const out = new Set<string>()
-  const add = (p: string) => {
-    try { out.add(fs.realpathSync(p)) } catch { /* gone from disk — skip */ }
-  }
-  for (const { workspacePath } of registry.list()) add(workspacePath)
-  try {
-    for (const row of getChannelDb().select().from(channelAccounts).all()) add(row.workspacePath)
-  } catch { /* channel db not ready */ }
-  return out
 }
 
 export function createMetricsRoutes(registry: SessionManagerRegistry) {
@@ -78,7 +61,8 @@ export function createMetricsRoutes(registry: SessionManagerRegistry) {
     let contextTokens = 0, outputTokens = 0
     let workspaces = 0
 
-    for (const wsPath of discoverWorkspaces(registry)) {
+    // Map path→label; a scrape only needs the paths (labels name buildings in halo-city).
+    for (const wsPath of discoverWorkspaces(registry).keys()) {
       try {
         // peek, never getOrCreate — same rule as halo-city.ts: this is a read-only
         // surface, and constructing a SessionManager has write side effects

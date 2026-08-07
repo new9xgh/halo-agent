@@ -19,7 +19,7 @@
  * ticker can be unit-tested and so phase 7 can land without phase 8's
  * wrapper binary being ready.
  */
-import { eq, and, or, lt, asc, isNull, sql } from 'drizzle-orm'
+import { eq, and, or, asc, isNull, sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { broadcast } from '../ws/broadcast.js'
@@ -495,8 +495,3 @@ function claimApply(id: string): boolean {
 
 // Re-export for type consumers
 export type { } // placeholder so editors don't strip the file
-
-// Suppress unused-import warning when this file is imported only for its
-// startEvoTicker side-effects. (`lt` was used by an earlier draft; keeping
-// the import so future timeout queries can be expressed via drizzle ops.)
-void lt

@@ -17,12 +17,13 @@
  * lazily on detail fetch (small files, no caching).
  */
 import { Hono } from 'hono'
-import { eq, desc, asc, inArray, lt, and, or, sql } from 'drizzle-orm'
+import { eq, desc, lt, and, or, sql } from 'drizzle-orm'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { homedir } from 'node:os'
 import { evolutionApplies, evolutionRuns, getEvoDb } from '../db/evo-db.js'
 import { removeRunArtifacts, removeApplyArtifacts } from '../evolution/archive.js'
+import { wsEvoRunDir, evoWrapperLogFile } from '../paths.js'
+import { rawSqlite } from '../db/raw-sqlite.js'
 import { broadcast } from '../ws/broadcast.js'
 
 // Statuses a run must NOT be in to allow manual delete. `pending` (the ticker
@@ -53,10 +54,6 @@ interface RunListItem {
   /** Approved/applied runs may be linked to an apply row — surface the latest. */
   applyId?: string
   applyStatus?: string
-}
-
-function runDirOf(workspacePath: string, runId: string): string {
-  return path.join(workspacePath, '.halo', 'evo', 'runs', runId)
 }
 
 export function createEvolutionRoutes(): Hono {
@@ -102,8 +99,7 @@ export function createEvolutionRoutes(): Hono {
     // every call — fine at N=10 applies, dies at N=10k.
     const applyByRunId = new Map<string, { id: string; status: string }>()
     if (rows.length > 0) {
-      const sqlite = (db as unknown as { $client?: { prepare: (s: string) => { all: (...a: unknown[]) => unknown[] } } }).$client
-        ?? (db as unknown as { session: { client: { prepare: (s: string) => { all: (...a: unknown[]) => unknown[] } } } }).session.client
+      const sqlite = rawSqlite(db)
       const placeholders = rows.map(() => '?').join(',')
       const stmt = sqlite.prepare(`
         SELECT a.id AS id, a.status AS status, a.created_at AS created_at, j.value AS run_id
@@ -156,7 +152,7 @@ export function createEvolutionRoutes(): Hono {
     const row = db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).get()
     if (!row) return c.json({ error: 'not found' }, 404)
 
-    const dir = runDirOf(row.workspacePath, id)
+    const dir = wsEvoRunDir(row.workspacePath, id)
 
     let patchMd: string | null = null
     try { patchMd = await fs.readFile(path.join(dir, 'patch.md'), 'utf-8') } catch { /* may not exist yet */ }
@@ -174,10 +170,7 @@ export function createEvolutionRoutes(): Hono {
     // run it's still useful to see what each phase took.
     let wrapperLog: string | null = null
     try {
-      wrapperLog = await fs.readFile(
-        path.join(homedir(), '.halo', 'global', 'logs', 'evo', `run-${id}.log`),
-        'utf-8',
-      )
+      wrapperLog = await fs.readFile(evoWrapperLogFile(id), 'utf-8')
     } catch { /* may not exist yet (e.g. wrapper hasn't started) */ }
 
     // Sub-cli log: tee'd stdout/stderr of every `halo cli` child the
@@ -448,9 +441,3 @@ function extractText(content: unknown): string | undefined {
   }
   return undefined
 }
-
-// Suppress unused-import warning — `inArray` and `asc` may be useful for
-// future filter endpoints; keep them imported so editors don't strip the
-// drizzle ops.
-void inArray
-void asc

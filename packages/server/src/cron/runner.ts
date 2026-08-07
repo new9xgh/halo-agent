@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { Cron } from 'croner'
 import { eq, lt } from 'drizzle-orm'
 import { cronJobs, cronRuns, getCronDb } from '../db/cron-db.js'
+import { rawSqlite } from '../db/raw-sqlite.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
@@ -430,9 +431,7 @@ let _lastCronDataVersion: number | null = null
 function readCronDataVersion(): number | null {
   try {
     const db = getCronDb()
-    const sqlite = (db as unknown as { $client?: { pragma: (s: string) => unknown } }).$client
-      ?? (db as unknown as { session: { client: { pragma: (s: string) => unknown } } }).session.client
-    const rows = sqlite.pragma('data_version') as Array<{ data_version: number }>
+    const rows = rawSqlite(db).pragma('data_version') as Array<{ data_version: number }>
     return rows[0]?.data_version ?? null
   } catch { return null }
 }
@@ -799,12 +798,8 @@ function parseTargets(raw: string): CronTarget[] {
 function pruneOldRuns(jobId: string): void {
   const db = getCronDb()
   // drizzle-orm doesn't have a clean `NOT IN (subquery)` builder; raw
-  // sqlite is straightforward and the query is static. better-sqlite3 is
-  // exposed via drizzle's `$client` (fallback to `.session.client` on
-  // older builds).
-  const sqlite = (db as unknown as { $client?: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }).$client
-    ?? (db as unknown as { session: { client: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } } }).session.client
-  sqlite.prepare(`
+  // sqlite is straightforward and the query is static.
+  rawSqlite(db).prepare(`
     DELETE FROM cron_runs
     WHERE job_id = ?
       AND id NOT IN (

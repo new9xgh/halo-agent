@@ -36,6 +36,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { homedir } from 'node:os'
 import { evolutionRuns, getEvoDb } from '../db/evo-db.js'
+import { wsEvoRunDir } from '../paths.js'
 import type { SessionManager } from '../agents/session-manager.js'
 
 export type EvoTrigger = 'note' | 'pre-compact'
@@ -329,7 +330,7 @@ export function enqueueEvoRun(input: EnqueueEvoRunInput): EnqueueEvoRunResult {
   const ts = new Date().toISOString().replace(/[:.]/g, '-')      // 2026-05-16T15-30-00-000Z
   const slug = Math.random().toString(36).slice(2, 8)
   const runId = `${ts}-${slug}`
-  const runDir = path.join(workspacePath, '.halo', 'evo', 'runs', runId)
+  const runDir = wsEvoRunDir(workspacePath, runId)
   const info = sm.getSessionById(sourceSessionId)
 
   if (!info) {

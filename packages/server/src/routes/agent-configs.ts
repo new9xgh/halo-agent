@@ -9,6 +9,7 @@ import { resolveMdFilePath, writeMdFile } from '../prompts/md-loader.js'
 import { config, getModelsRegistry } from '../config.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { isSafeIdSegment } from './workspace-path.js'
+import { createMtimeCache } from './mtime-cache.js'
 
 /** List available tools with name + description */
 let _cachedTools: Array<{ name: string; description: string }> | null = null
@@ -158,23 +159,8 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true })
 }
 
-/**
- * Per-yaml parse cache, keyed by absolute file path. We re-stat each
- * yaml's mtime on every request and only re-read+parse when the mtime
- * has changed since we last cached it. A `stat` is ~one syscall, vs
- * `readFile + YAML.parse` which dominates the cost; this keeps the
- * route O(N stat) instead of O(N read+parse) at steady state.
- *
- * Why per-file (not per-dir): editing an existing `agent.yaml` only
- * bumps that file's mtime, not the parent dir's, so a "cache invalidate
- * on parent dir mtime" scheme silently serves stale yaml after an in-
- * place edit. Per-file mtime catches it.
- */
-interface YamlCacheEntry {
-  mtimeMs: number
-  parsed: ReturnType<typeof parseAgentYaml>
-}
-const _yamlCache = new Map<string, YamlCacheEntry>()
+/** Per-`agent.yaml` parse cache — see mtime-cache.ts for the scheme. */
+const _yamlCache = createMtimeCache<ReturnType<typeof parseAgentYaml>>()
 
 /** Scan an agents directory and return agent metadata. Each yaml is
  *  parsed at most once per mtime change. */
@@ -197,13 +183,9 @@ async function scanAgentsDir(dir: string, scope: 'global' | 'workspace'): Promis
     const yamlPath = path.join(agentDir, 'agent.yaml')
     try {
       const yamlStat = await fs.stat(yamlPath)
-      let entry = _yamlCache.get(yamlPath)
-      if (!entry || entry.mtimeMs !== yamlStat.mtimeMs) {
-        const content = await fs.readFile(yamlPath, 'utf-8')
-        entry = { mtimeMs: yamlStat.mtimeMs, parsed: parseAgentYaml(content) }
-        _yamlCache.set(yamlPath, entry)
-      }
-      const { name, description, model, priority, tools, skills, internal } = entry.parsed
+      const parsed = _yamlCache.get(yamlPath, yamlStat.mtimeMs)
+        ?? _yamlCache.set(yamlPath, yamlStat.mtimeMs, parseAgentYaml(await fs.readFile(yamlPath, 'utf-8')))
+      const { name, description, model, priority, tools, skills, internal } = parsed
       agents.push({
         id: entryName,
         name: name || entryName,

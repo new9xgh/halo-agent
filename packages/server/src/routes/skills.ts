@@ -6,6 +6,7 @@ import YAML from 'yaml'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { getWorkspaceDb, getDisabledSet, toggleDisabled } from '../db/index.js'
 import { isSafeIdSegment } from './workspace-path.js'
+import { createMtimeCache } from './mtime-cache.js'
 const GLOBAL_SETTINGS_PATH = path.join(homedir(), '.halo', 'secrets', 'settings.yaml')
 
 /** Default settings entry for a newly created skill (self-describing format) */
@@ -88,18 +89,10 @@ function toSkillMd(name: string, description: string): string {
   return `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nEnter the skill prompt here.\n`
 }
 
-/**
- * Per-SKILL.md parse cache. Same shape as the agent yaml cache in
- * agent-configs.ts — re-stat each file on every request, only
- * re-read+parse when mtime moved. Skips the legacy yaml fallback in
- * the hot path; that branch is only hit on first read of a legacy
- * skill, after which the cache covers it.
- */
-interface SkillCacheEntry {
-  mtimeMs: number
-  meta: { name: string; description: string; command?: string }
-}
-const _skillMdCache = new Map<string, SkillCacheEntry>()
+/** Per-SKILL.md parse cache — see mtime-cache.ts for the scheme. The legacy
+ *  `skill.yaml` fallback below stays uncached: it's only reached when SKILL.md
+ *  is missing, i.e. off the hot path. */
+const _skillMdCache = createMtimeCache<{ name: string; description: string; command?: string }>()
 
 /** Scan a skills directory and return skill metadata. Each SKILL.md is
  *  parsed at most once per mtime change. */
@@ -122,17 +115,12 @@ async function scanSkillsDir(dir: string, scope: 'global' | 'workspace'): Promis
     const skillMdPath = path.join(skillDir, 'SKILL.md')
     try {
       const mdStat = await fs.stat(skillMdPath)
-      let entry = _skillMdCache.get(skillMdPath)
-      if (!entry || entry.mtimeMs !== mdStat.mtimeMs) {
-        const content = await fs.readFile(skillMdPath, 'utf-8')
-        const { name, description, command } = parseSkillFrontmatter(content)
-        entry = {
-          mtimeMs: mdStat.mtimeMs,
-          meta: { name: name || entryName, description: description ?? '', command },
-        }
-        _skillMdCache.set(skillMdPath, entry)
+      let meta = _skillMdCache.get(skillMdPath, mdStat.mtimeMs)
+      if (!meta) {
+        const { name, description, command } = parseSkillFrontmatter(await fs.readFile(skillMdPath, 'utf-8'))
+        meta = _skillMdCache.set(skillMdPath, mdStat.mtimeMs, { name: name || entryName, description: description ?? '', command })
       }
-      skills.push({ id: entryName, name: entry.meta.name, description: entry.meta.description, path: skillDir, scope, command: entry.meta.command })
+      skills.push({ id: entryName, name: meta.name, description: meta.description, path: skillDir, scope, command: meta.command })
     } catch {
       // Fallback: try legacy skill.yaml. Cold path — not cached.
       const yamlPath = path.join(skillDir, 'skill.yaml')

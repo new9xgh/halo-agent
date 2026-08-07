@@ -12,6 +12,7 @@ import { getAccountByToken } from '../channels/web/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
+import { createMtimeCache } from './mtime-cache.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
 import type { SessionMessage } from '../sessions/session-types.js'
@@ -65,12 +66,10 @@ interface ShowWorkspace {
   skills: ShowSkill[]
 }
 
-// ── Cached skill scan (mtime-keyed, mirrors routes/skills.ts) ─────────
+// ── Cached skill scan ─────────────────────────────────────────────────
 //   The world re-polls every few seconds, so re-reading every SKILL.md per
-//   request would be needless disk churn. Re-stat each file, only re-parse
-//   when it moved.
-interface SkillCacheEntry { mtimeMs: number; meta: ShowSkill }
-const _skillCache = new Map<string, SkillCacheEntry>()
+//   request would be needless disk churn. See mtime-cache.ts for the scheme.
+const _skillCache = createMtimeCache<ShowSkill>()
 
 function scanSkills(dir: string): ShowSkill[] {
   let names: string[]
@@ -83,15 +82,14 @@ function scanSkills(dir: string): ShowSkill[] {
       stat = fs.statSync(skillMd)
       if (!stat.isFile()) continue
     } catch { continue }
-    let cached = _skillCache.get(skillMd)
-    if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+    let meta = _skillCache.get(skillMd, stat.mtimeMs)
+    if (!meta) {
       try {
         const { name, description, command } = parseSkillFrontmatter(fs.readFileSync(skillMd, 'utf-8'))
-        cached = { mtimeMs: stat.mtimeMs, meta: { id: entry, name: name || entry, description: description ?? '', command } }
-        _skillCache.set(skillMd, cached)
+        meta = _skillCache.set(skillMd, stat.mtimeMs, { id: entry, name: name || entry, description: description ?? '', command })
       } catch { continue }
     }
-    out.push(cached.meta)
+    out.push(meta)
   }
   return out
 }
@@ -375,8 +373,9 @@ function workspaceBirth(wsPath: string): number {
 
 /** Enumerate every workspace a full-access caller may see: those with a live
  *  SessionManager plus every workspace any channel account is bound to.
- *  Deduped by realpath, missing-on-disk paths skipped. Returns path→label. */
-function discoverWorkspaces(registry: SessionManagerRegistry): Map<string, string> {
+ *  Deduped by realpath, missing-on-disk paths skipped. Returns path→label.
+ *  Also the set routes/metrics.ts scrapes — it only needs the keys. */
+export function discoverWorkspaces(registry: SessionManagerRegistry): Map<string, string> {
   const out = new Map<string, string>()
   const add = (p: string, label: string) => {
     try {

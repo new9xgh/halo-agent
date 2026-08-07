@@ -28,7 +28,10 @@ import { pipeline } from 'node:stream/promises'
 import JSZip from 'jszip'
 import { eq, and, isNull, lte, isNotNull, lt } from 'drizzle-orm'
 import { evolutionRuns, evolutionApplies, getEvoDb } from '../db/evo-db.js'
-import { wsEvoHistoryDir, evoWrapperLogFile, evoApplyLogFile } from '../paths.js'
+import {
+  wsEvoRunDir, wsEvoApplyDir, wsEvoArchivedRunZip, wsEvoArchivedApplyZip,
+  wsEvoHistoryDir, evoWrapperLogFile, evoApplyLogFile,
+} from '../paths.js'
 
 /** Statuses considered "terminal" — eligible for archive after the
  *  retention window. Active states (running / pending / etc.) are
@@ -117,9 +120,8 @@ async function archiveRun(
   runId: string,
   errors: string[],
 ): Promise<boolean> {
-  const runDir = path.join(workspacePath, '.halo', 'evo', 'runs', runId)
-  const archiveDir = path.join(workspacePath, '.halo', 'evo', 'archive')
-  const outZip = path.join(archiveDir, `run-${runId}.zip`)
+  const runDir = wsEvoRunDir(workspacePath, runId)
+  const outZip = wsEvoArchivedRunZip(workspacePath, runId)
 
   if (!fs.existsSync(runDir)) {
     // Already archived (or never had a dir). Just mark.
@@ -139,9 +141,8 @@ async function archiveApply(
   applyId: string,
   errors: string[],
 ): Promise<boolean> {
-  const applyDir = path.join(workspacePath, '.halo', 'evo', 'applies', applyId)
-  const archiveDir = path.join(workspacePath, '.halo', 'evo', 'archive')
-  const outZip = path.join(archiveDir, `apply-${applyId}.zip`)
+  const applyDir = wsEvoApplyDir(workspacePath, applyId)
+  const outZip = wsEvoArchivedApplyZip(workspacePath, applyId)
 
   if (!fs.existsSync(applyDir)) return true
 
@@ -154,13 +155,11 @@ async function archiveApply(
 }
 
 function purgeRun(workspacePath: string, runId: string): void {
-  const zipPath = path.join(workspacePath, '.halo', 'evo', 'archive', `run-${runId}.zip`)
-  rmFile(zipPath)
+  rmFile(wsEvoArchivedRunZip(workspacePath, runId))
 }
 
 function purgeApply(workspacePath: string, applyId: string): void {
-  const zipPath = path.join(workspacePath, '.halo', 'evo', 'archive', `apply-${applyId}.zip`)
-  rmFile(zipPath)
+  rmFile(wsEvoArchivedApplyZip(workspacePath, applyId))
 }
 
 /** Delete a run's on-disk footprint outright: the live run dir, its archive
@@ -168,12 +167,11 @@ function purgeApply(workspacePath: string, applyId: string): void {
  *  has the zip), and the global wrapper log. Used by the manual-delete route
  *  in routes/evolution.ts; removing the db row is the caller's job. Apply
  *  artifacts (applies/, history/) are NOT touched here — the route cascades
- *  to removeApplyArtifacts for each apply the run produced. Path layout
- *  intentionally matches archiveRun/purgeRun above so there's one source of
- *  truth for where a run's files live. */
+ *  to removeApplyArtifacts for each apply the run produced. Path layout comes
+ *  from paths.ts, same as archiveRun/purgeRun above. */
 export function removeRunArtifacts(workspacePath: string, runId: string): void {
-  rmDir(path.join(workspacePath, '.halo', 'evo', 'runs', runId))
-  rmFile(path.join(workspacePath, '.halo', 'evo', 'archive', `run-${runId}.zip`))
+  rmDir(wsEvoRunDir(workspacePath, runId))
+  rmFile(wsEvoArchivedRunZip(workspacePath, runId))
   rmFile(evoWrapperLogFile(runId))
 }
 
@@ -185,8 +183,8 @@ export function removeRunArtifacts(workspacePath: string, runId: string): void {
  *  is discarding this apply outright — leaving the rollback dir behind is the
  *  exact orphaned-folder the cleanup is meant to prevent. */
 export function removeApplyArtifacts(workspacePath: string, applyId: string): void {
-  rmDir(path.join(workspacePath, '.halo', 'evo', 'applies', applyId))
-  rmFile(path.join(workspacePath, '.halo', 'evo', 'archive', `apply-${applyId}.zip`))
+  rmDir(wsEvoApplyDir(workspacePath, applyId))
+  rmFile(wsEvoArchivedApplyZip(workspacePath, applyId))
   rmDir(wsEvoHistoryDir(workspacePath, applyId))
   rmFile(evoApplyLogFile(applyId))
 }

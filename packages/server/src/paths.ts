@@ -113,7 +113,7 @@ export function wsEvoRunDir(workspacePath: string, runId: string): string {
 /** `<ws>/.halo/evo/runs/<id>/sandbox` — per-run sandbox (drafter +
  *  scorer + apply all run against this). */
 export function wsEvoSandboxDir(workspacePath: string, runId: string): string {
-  return path.join(wsEvoRunDir(workspacePath, runId), 'sandbox')
+  return evoSandboxDir(wsEvoRunDir(workspacePath, runId))
 }
 
 /** `<ws>/.halo/evo/applies/<id>` — per-apply artifact dir. */
@@ -139,6 +139,34 @@ export function wsEvoArchivedApplyZip(workspacePath: string, applyId: string): s
 /** `<ws>/.halo/evo/history/apply-<id>` — pre-apply rollback snapshot. */
 export function wsEvoHistoryDir(workspacePath: string, applyId: string): string {
   return path.join(wsEvoDir(workspacePath), 'history', `apply-${applyId}`)
+}
+
+// Artifact-dir-relative evo paths. Run mode and apply mode lay their sandbox /
+// regress dirs out identically inside their own artifact dir (buildEvoSandbox
+// is deliberately called with either), so these take the run-or-apply dir
+// rather than (workspace, id).
+
+/** `<runDir|applyDir>/sandbox` — the workspace every wrapper-spawned cli
+ *  runs against. */
+export function evoSandboxDir(artifactDir: string): string {
+  return path.join(artifactDir, 'sandbox')
+}
+
+/** `<runDir|applyDir>/sandbox/.halo` — the prompt surface inside the
+ *  sandbox; what patches are written into and what publish reads. */
+export function evoSandboxHaloDir(artifactDir: string): string {
+  return path.join(evoSandboxDir(artifactDir), '.halo')
+}
+
+/** `<applyDir>/regress` — root for per-source-run regression scoring. */
+export function evoRegressDir(applyDir: string): string {
+  return path.join(applyDir, 'regress')
+}
+
+/** `<applyDir>/regress/<runId>` — one source run's regression artifacts
+ *  (dry-run output + score.json). */
+export function evoRegressRunDir(applyDir: string, runId: string): string {
+  return path.join(evoRegressDir(applyDir), runId)
 }
 
 // ── Global paths ─────────────────────────────────────────────────────

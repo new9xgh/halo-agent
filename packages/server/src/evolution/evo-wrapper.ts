@@ -44,6 +44,11 @@ import { parseArgs } from 'node:util'
 import { eq, and } from 'drizzle-orm'
 import YAML from 'yaml'
 import { createEvoDb, evolutionRuns, evolutionApplies, setEvoDb, getEvoDb } from '../db/evo-db.js'
+import {
+  wsHaloDir, wsEvoRunDir, wsEvoApplyDir, wsEvoHistoryDir,
+  evoSandboxDir, evoSandboxHaloDir, evoRegressDir, evoRegressRunDir,
+  evoLogsDir, evoWrapperLogFile, evoApplyLogFile,
+} from '../paths.js'
 import { config } from '../config.js'
 import { cleanChildEnv } from '../child-env.js'
 
@@ -743,11 +748,11 @@ function buildDraftBrief(args: {
     'rewrite an existing rule; tighten / reorganize what\'s there; or, only',
     'when neither applies, add a new rule.',
     '',
-    `Sandbox path: ${path.join(args.runDir, 'sandbox')}`,
+    `Sandbox path: ${evoSandboxDir(args.runDir)}`,
     '',
     `When you have a change worth making, write ${path.join(args.runDir, 'patch.md')}`,
     '(frontmatter + body) and one new file at',
-    `${path.join(args.runDir, 'sandbox', '.halo')}/<target> with the`,
+    `${evoSandboxHaloDir(args.runDir)}/<target> with the`,
     'full new contents. AGENT.md describes the patch.md schema.',
     '',
     'When the conversation has no signal worth a patch (rule already covers,',
@@ -789,7 +794,7 @@ function buildFixBrief(args: {
     '',
     `An earlier draft pass produced patch.md + a sandbox at`,
     `${path.join(args.runDir, 'patch.md')} and`,
-    `${path.join(args.runDir, 'sandbox', '.halo')} respectively.`,
+    `${evoSandboxHaloDir(args.runDir)} respectively.`,
     'The dry-run failed; the wrapper\'s failure log:',
     '',
     '```',
@@ -938,7 +943,7 @@ async function phaseDraft(args: {
   // etc.); writes go to `<runDir>/sandbox/.halo/<target>` either
   // way (drafter's patch output target == sandbox).
   buildEvoSandbox(args.workspacePath, args.runDir, args.logFd)
-  const sandboxWs = path.join(args.runDir, 'sandbox')
+  const sandboxWs = evoSandboxDir(args.runDir)
   const brief = buildDraftBrief({
     runId: args.runId,
     workspacePath: args.workspacePath,
@@ -983,7 +988,7 @@ async function phaseDraft(args: {
     return 'skipped'
   }
   const hasPatch = fs.existsSync(path.join(args.runDir, 'patch.md'))
-  const hasSandbox = fs.existsSync(path.join(args.runDir, 'sandbox', '.halo'))
+  const hasSandbox = fs.existsSync(evoSandboxHaloDir(args.runDir))
   writeLog(args.logFd, `[phaseDraft] patch.md=${hasPatch} sandbox=${hasSandbox}\n`)
   if (hasPatch && hasSandbox) return 'drafted'
   return 'failed'
@@ -1046,7 +1051,7 @@ async function tryDryRun(args: {
   runDir: string
   logFd: number
 }, attemptIndex: number): Promise<DryRunResult> {
-  const sandboxDir = path.join(args.runDir, 'sandbox')
+  const sandboxDir = evoSandboxDir(args.runDir)
   const outputPath = path.join(args.runDir, 'dry-run-output.txt')
   const failLogPath = path.join(args.runDir, `dry-run-fail-${attemptIndex}.log`)
   const cli = resolveHaloCli()
@@ -1123,7 +1128,7 @@ async function runFix(args: {
   // Fresh `-n` like draft. Brief inlines the failure log + tells the
   // agent to file_read patch.md in the runDir to see what it
   // produced last time. No session resume — same simplicity as draft.
-  const sandboxWs = path.join(args.runDir, 'sandbox')
+  const sandboxWs = evoSandboxDir(args.runDir)
   const result = await spawnProc(
     resolveHaloCli(),
     ['cli', '-a', '__evo_agent__', '-n', '-w', sandboxWs],
@@ -1156,7 +1161,7 @@ async function phaseScore(args: {
   // Run against the sandbox built by phase A — by phase C the sandbox
   // already contains the patched files the drafter wrote, plus the
   // original prompt files cp'd in at sandbox build time.
-  const sandboxWs = path.join(args.runDir, 'sandbox')
+  const sandboxWs = evoSandboxDir(args.runDir)
   // Defensive: if for any reason phase A's buildEvoSandbox didn't fire
   // (shouldn't happen — phase B requires the sandbox), build it now.
   buildEvoSandbox(args.workspacePath, args.runDir, args.logFd)
@@ -1223,7 +1228,7 @@ function resetRunArtifacts(runDir: string, logFd: number): void {
 
 async function runMode(id: string, logFd: number): Promise<void> {
   const row = loadRunRow(id)
-  const runDir = path.join(row.workspacePath, '.halo', 'evo', 'runs', id)
+  const runDir = wsEvoRunDir(row.workspacePath, id)
   fs.mkdirSync(runDir, { recursive: true })
   // A re-run (reviewer retry or heartbeat-timeout re-claim) reuses this
   // runDir. Clear the prior attempt's output first; a stale .skip.md in
@@ -1387,8 +1392,8 @@ function loadApplyRow(id: string): ApplyRow {
  * we're trying to escape.
  */
 function buildEvoSandbox(workspacePath: string, sandboxParent: string, logFd: number): void {
-  const srcWs = path.join(workspacePath, '.halo')
-  const dstWs = path.join(sandboxParent, 'sandbox', '.halo')
+  const srcWs = wsHaloDir(workspacePath)
+  const dstWs = evoSandboxHaloDir(sandboxParent)
   fs.mkdirSync(dstWs, { recursive: true })
   const whitelist = SANDBOX_WHITELIST
   for (const entry of whitelist) {
@@ -1436,7 +1441,7 @@ function buildApplyMergeBrief(args: ApplyCtx): string {
     `Reviewer hint: ${args.reviewerHint ?? '(none)'}`,
     '',
     'The wrapper has already built the sandbox at',
-    `${path.join(args.applyDir, 'sandbox', '.halo')} by whitelist-cp from`,
+    `${evoSandboxHaloDir(args.applyDir)} by whitelist-cp from`,
     'the current main workspace. Read each source_run_id\'s patch.md',
     '(latest version!) and merge their changes into the sandbox.',
     '',
@@ -1530,7 +1535,7 @@ async function phaseApplyMerge(ctx: ApplyCtx): Promise<ApplyMergeResult> {
   // merge them) — never the user workspace. Same isolation reasoning as
   // run mode: no agent_sessions row pollution, no accidental writes to
   // user files.
-  const sandboxWs = path.join(ctx.applyDir, 'sandbox')
+  const sandboxWs = evoSandboxDir(ctx.applyDir)
   const result = await spawnProc(
     resolveHaloCli(),
     ['cli', '-a', '__apply_agent__', '-n', '-w', sandboxWs],
@@ -1582,18 +1587,17 @@ interface RegressOutcome {
 
 async function phaseApplyRegress(ctx: ApplyCtx): Promise<{ allOk: boolean; outcomes: RegressOutcome[] }> {
   writeLog(ctx.logFd, `\n=== Phase B': regress ===\n`)
-  const sandboxDir = path.join(ctx.applyDir, 'sandbox')
-  const regressBaseDir = path.join(ctx.applyDir, 'regress')
-  fs.mkdirSync(regressBaseDir, { recursive: true })
+  const sandboxDir = evoSandboxDir(ctx.applyDir)
+  fs.mkdirSync(evoRegressDir(ctx.applyDir), { recursive: true })
   const outcomes: RegressOutcome[] = []
 
   for (const runId of ctx.sourceRunIds) {
     writeLog(ctx.logFd, `\n--- regress for source run ${runId} ---\n`)
-    const regressDir = path.join(regressBaseDir, runId)
+    const regressDir = evoRegressRunDir(ctx.applyDir, runId)
     fs.mkdirSync(regressDir, { recursive: true })
 
     // Resolve the patch + snapshot for this source run.
-    const runDir = path.join(ctx.workspacePath, '.halo', 'evo', 'runs', runId)
+    const runDir = wsEvoRunDir(ctx.workspacePath, runId)
     const patchMdPath = path.join(runDir, 'patch.md')
     const snapshotPath = path.join(runDir, 'source-snapshot.json')
 
@@ -1652,7 +1656,7 @@ async function phaseApplyRegress(ctx: ApplyCtx): Promise<{ allOk: boolean; outco
     // Apply scorer also runs against the apply sandbox — same isolation
     // reasoning as the merge phase. The patched-and-merged prompt files
     // are already in there from phaseApplyMerge.
-    const scoreSandboxWs = path.join(ctx.applyDir, 'sandbox')
+    const scoreSandboxWs = evoSandboxDir(ctx.applyDir)
     const scoreRun = await spawnProc(
       resolveHaloCli(),
       ['cli', '-a', '__score__', '-n', '-w', scoreSandboxWs],
@@ -1714,7 +1718,7 @@ function finalizeApply(applyId: string, status: 'failed', failureReason: string 
 
 async function applyMode(id: string, logFd: number): Promise<void> {
   const row = loadApplyRow(id)
-  const applyDir = path.join(row.workspacePath, '.halo', 'evo', 'applies', id)
+  const applyDir = wsEvoApplyDir(row.workspacePath, id)
   fs.mkdirSync(applyDir, { recursive: true })
 
   // Persist meta.json so the apply agent (and any debugging human) can
@@ -1903,8 +1907,8 @@ async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
   | { ok: false; reason: string }
 > {
   writeLog(ctx.logFd, `\n=== Phase 12 preflight: diff + history backup ===\n`)
-  const sandboxHalo = path.join(ctx.applyDir, 'sandbox', '.halo')
-  const mainHalo = path.join(ctx.workspacePath, '.halo')
+  const sandboxHalo = evoSandboxHaloDir(ctx.applyDir)
+  const mainHalo = wsHaloDir(ctx.workspacePath)
   if (!fs.existsSync(sandboxHalo)) return { ok: false, reason: 'sandbox missing — phase 11 must run first' }
 
   // Walk sandbox/.halo/ and produce a list of (relPath, sandboxFullPath).
@@ -1924,7 +1928,7 @@ async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
   // timestamp on every preflight) so a recovery retry lands on the same
   // dir and overwrites its manifest cleanly, instead of leaving stale
   // `<ts1>--apply-<id>/` and `<ts2>--apply-<id>/` siblings.
-  const historyDir = path.join(mainHalo, 'evo', 'history', `apply-${ctx.applyId}`)
+  const historyDir = wsEvoHistoryDir(ctx.workspacePath, ctx.applyId)
   const changed: Array<{ rel: string; full: string; existsInMain: boolean }> = []
   for (const { rel, full } of filesToConsider) {
     const mainPath = path.join(mainHalo, rel)
@@ -1992,7 +1996,7 @@ async function phaseApplyPreflight(ctx: ApplyCtx): Promise<
  */
 async function phaseApplyPublish(ctx: ApplyCtx, preflight: PreflightResult): Promise<void> {
   writeLog(ctx.logFd, `\n=== Phase 12 publish: cp sandbox → main ===\n`)
-  const mainHalo = path.join(ctx.workspacePath, '.halo')
+  const mainHalo = wsHaloDir(ctx.workspacePath)
   for (const { rel, full } of preflight.changed) {
     const mainPath = path.join(mainHalo, rel)
     fs.mkdirSync(path.dirname(mainPath), { recursive: true })
@@ -2055,11 +2059,11 @@ function writeLog(fd: number, msg: string): void {
   try { fs.writeSync(fd, msg) } catch { /* best effort */ }
 }
 
-/** Append-mode log file under ~/.halo/global/logs/evo/. */
+/** Append-mode log file under ~/.halo/global/logs/evo/. Filename shape is
+ *  paths.ts's — routes/evolution.ts reads the same file back by name. */
 function openLogFor(mode: Mode, id: string): { fd: number; logPath: string } {
-  const logsDir = path.join(homedir(), '.halo', 'global', 'logs', 'evo')
-  fs.mkdirSync(logsDir, { recursive: true })
-  const logPath = path.join(logsDir, `${mode}-${id}.log`)
+  fs.mkdirSync(evoLogsDir(), { recursive: true })
+  const logPath = mode === 'run' ? evoWrapperLogFile(id) : evoApplyLogFile(id)
   const fd = fs.openSync(logPath, 'a')
   return { fd, logPath }
 }
