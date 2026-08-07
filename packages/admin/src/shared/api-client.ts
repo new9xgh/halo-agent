@@ -18,71 +18,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   health: () => fetch(`${API_BASE}/health`).then((r) => r.json()),
 
-  chat: {
-    send(sessionId: string, projectId: string, message: string): Promise<Response> {
-      return fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, projectId, message }),
-      })
-    },
-
-    getHistory(sessionId: string) {
-      return request<{ messages: Array<{ role: string; content: string; timestamp: number }> }>(
-        `/chat/${sessionId}/history`,
-      )
-    },
-  },
-
-  tasks: {
-    get(planId: string) {
-      return request<{ plan: Record<string, unknown> }>(`/tasks/${planId}`)
-    },
-
-    approve(planId: string) {
-      return request<{ ok: boolean }>(`/tasks/${planId}/approve`, {
-        method: 'POST',
-      })
-    },
-
-    reject(planId: string, feedback: string) {
-      return request<{ ok: boolean }>(`/tasks/${planId}/reject`, {
-        method: 'POST',
-        body: JSON.stringify({ feedback }),
-      })
-    },
-  },
-
-  agents: {
-    list() {
-      return request<{ agents: Array<Record<string, unknown>> }>('/agents')
-    },
-
-    get(id: string) {
-      return request<{ agent: Record<string, unknown> }>(`/agents/${id}`)
-    },
-
-    create(data: Record<string, unknown>) {
-      return request<{ agent: Record<string, unknown> }>('/agents', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      })
-    },
-
-    update(id: string, data: Record<string, unknown>) {
-      return request<{ agent: Record<string, unknown> }>(`/agents/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      })
-    },
-
-    remove(id: string) {
-      return request<{ ok: boolean }>(`/agents/${id}`, {
-        method: 'DELETE',
-      })
-    },
-  },
-
   fs: {
     home() {
       return request<{ home: string }>('/fs/home')
@@ -243,12 +178,6 @@ export const api = {
 
     viewUrl(path: string, projectId: string) {
       return `/api/files/download?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}&inline=1`
-    },
-
-    diff(path: string, projectId: string) {
-      return request<{ diff: string; original: string; modified: string }>(
-        `/files/diff?path=${encodeURIComponent(path)}&projectId=${encodeURIComponent(projectId)}`,
-      )
     },
   },
 
@@ -668,30 +597,6 @@ export const api = {
       if (opts?.projectId) params.set('projectId', opts.projectId)
       const qs = params.toString() ? `?${params}` : ''
       return request<{ ok: boolean; disabled: boolean }>(`/skills/${id}/toggle${qs}`, { method: 'PATCH' })
-    },
-  },
-
-  projects: {
-    list() {
-      return request<{ projects: Array<{ id: string; name: string; path: string; createdAt: number }> }>(
-        '/projects',
-      )
-    },
-
-    create(name: string) {
-      return request<{ project: { id: string; name: string; path: string; createdAt: number } }>(
-        '/projects',
-        {
-          method: 'POST',
-          body: JSON.stringify({ name }),
-        },
-      )
-    },
-
-    get(id: string) {
-      return request<{ project: { id: string; name: string; path: string; createdAt: number } }>(
-        `/projects/${id}`,
-      )
     },
   },
 
