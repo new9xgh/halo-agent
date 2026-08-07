@@ -24,12 +24,9 @@
  * (maybeAutoCompact) goes straight to self-compact, and micro is its final
  * byte-trimming pass.
  *
- * Ported from Claude Code's `services/compact/microCompact.ts`, but inverted:
- * the original runs micro every loop iteration and only escalates to full
- * compaction when micro can't free enough; here full (self-)compact is the
- * entry point and micro is its tail cleanup. We keep the core idea (clear old
- * tool results for known high-output tools) and skip the cached-MC /
- * time-based / forked-agent branches specific to Anthropic's deployment.
+ * The core idea: old results from known high-output tools are bytes the
+ * model rarely re-reads — clearing them in place frees real context without
+ * touching conversation structure or requiring another LLM round-trip.
  */
 import type { AnthropicMessage, ContentBlock } from './agent-loop.js'
 
