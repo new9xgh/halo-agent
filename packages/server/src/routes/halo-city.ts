@@ -11,6 +11,7 @@ import { channelAccounts, getChannelDb } from '../db/channel-db.js'
 import { resolveTokenAuth, tokenAuthJsonError } from '../middleware/web-token.js'
 import { GLOBAL_SKILLS_DIR, parseSkillFrontmatter } from '../agents/agent-loader.js'
 import { readSessionFileMeta, loadSessionFileData } from '../sessions/session-store.js'
+import { messageToolCalls } from '../sessions/session-types.js'
 import { createMtimeCache } from './mtime-cache.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import type { SessionManager, SessionInfo } from '../agents/session-manager.js'
@@ -103,8 +104,8 @@ function liveActivity(sm: SessionManager, sessionId: string): { lastTool: string
   const pools: Array<{ name: string; input?: string }[]> = []
   if (turn.turnToolCalls.length) pools.push(turn.turnToolCalls)
   for (let i = turn.messageLog.length - 1; i >= 0 && pools.length < 2; i--) {
-    const m = turn.messageLog[i]
-    if (m.toolCalls?.length) { pools.push(m.toolCalls); break }
+    const calls = messageToolCalls(turn.messageLog[i])
+    if (calls.length) { pools.push(calls); break }
   }
 
   let lastTool = ''
@@ -347,7 +348,7 @@ function trimSessionMessages(messages: SessionMessage[]) {
     toolName: m.toolName ?? null,
     toolInput: m.toolInput != null ? JSON.stringify(m.toolInput).slice(0, 200) : null,
     durationMs: m.durationMs ?? null,
-    toolCalls: (m.toolCalls || []).map((tc) => ({ name: tc.name, input: (tc.input || '').slice(0, 200) })),
+    toolCalls: messageToolCalls(m).map((tc) => ({ name: tc.name, input: (tc.input || '').slice(0, 200) })),
   }))
 }
 

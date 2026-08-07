@@ -142,17 +142,24 @@ function setToolResult(target: TurnState, rawResult: unknown, durationMs?: numbe
 
 // ── Flush + snapshot ────────────────────────────────────────────────
 
-/** Flush current stream buffer + accumulated tool calls into an assistant message */
+/**
+ * Flush current stream buffer + accumulated tool calls into an assistant message.
+ *
+ * Only `contentBlocks` is attached: `addToolCall` pushes every entry into BOTH
+ * turn buffers, so the blocks are a strict superset of `turnToolCalls` and a
+ * `toolCalls` copy would duplicate every tool's input+output byte-for-byte in
+ * the session file. Readers render blocks first and only fall back to
+ * `toolCalls` for sessions written before blocks existed (design/storage.md
+ * "Assistant rendering priority"). `turnToolCalls` stays in memory — it's what
+ * setToolResult / markPendingToolCallsInterrupted scan.
+ */
 export function flushAssistantMessage(state: TurnState, taskId?: string): void {
   if (!state.streamBuffer.trim() && state.turnToolCalls.length === 0) return
   const msg: SessionMessage = {
     id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
     timestamp: Date.now(), agentName: state.streamingAgent, taskId,
   }
-  if (state.turnToolCalls.length > 0) {
-    msg.toolCalls = [...state.turnToolCalls]
-    state.turnToolCalls = []
-  }
+  state.turnToolCalls = []
   if (state.turnContentBlocks.length > 0) {
     msg.contentBlocks = [...state.turnContentBlocks]
     state.turnContentBlocks = []
@@ -191,11 +198,7 @@ export function flushCompletedAssistantMessage(state: TurnState, taskId?: string
     id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
     timestamp: Date.now(), agentName: state.streamingAgent, taskId,
   }
-  const completedToolCalls: ToolCallEntry[] = []
-  for (const b of completed) {
-    if (b.type === 'tool_call') completedToolCalls.push(b.toolCall)
-  }
-  if (completedToolCalls.length > 0) msg.toolCalls = completedToolCalls
+  // contentBlocks only — see flushAssistantMessage on why no toolCalls copy.
   if (completed.length > 0) msg.contentBlocks = completed
   state.messageLog.push(msg)
 
@@ -221,7 +224,7 @@ export function createSaveSnapshot(state: TurnState): SessionMessage[] {
     id: genId(), type: 'assistant', role: 'assistant', content: state.streamBuffer,
     timestamp: Date.now(), agentName: state.streamingAgent,
   }
-  if (state.turnToolCalls.length > 0) tempMsg.toolCalls = [...state.turnToolCalls]
+  // contentBlocks only — see flushAssistantMessage on why no toolCalls copy.
   if (state.turnContentBlocks.length > 0) tempMsg.contentBlocks = [...state.turnContentBlocks]
   return [...state.messageLog, tempMsg]
 }

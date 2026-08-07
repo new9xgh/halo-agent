@@ -404,6 +404,13 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   // Assistant + notification: render the same in both modes
   const hasBlocks = isAssistant && message.contentBlocks && message.contentBlocks.length > 0
+  // How many tool calls this turn has, counted off contentBlocks — NOT off
+  // `toolCalls`. Persisted assistant messages carry blocks only (the server
+  // stopped writing the byte-identical duplicate array), so counting there
+  // read `undefined` on every reloaded session.
+  const blockToolCallCount = hasBlocks
+    ? message.contentBlocks!.filter((b) => b.type === 'tool_call').length
+    : 0
 
   // The watchdog / send-failure path converged this placeholder — it never
   // received any event and never will (the turn was lost, see chat-store's
@@ -431,6 +438,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   if (hasBlocks) {
     const blocks = message.contentBlocks!
+    let toolSeen = 0
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i]
       if (block.type === 'thinking' && block.text.trim() && debugMode) {
@@ -438,9 +446,8 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       } else if (block.type === 'text' && block.text.trim()) {
         elements.push(<TextBlock key={`b${i}`} text={block.text} />)
       } else if (block.type === 'tool_call') {
-        const idx = blocks.slice(0, i + 1).filter((b) => b.type === 'tool_call').length - 1
-        const isLast = idx === (message.toolCalls?.length ?? 0) - 1
-        elements.push(<InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={isLast} />)
+        toolSeen++
+        elements.push(<InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />)
       }
       // Insert usage badge at end of each turn (when next block has different turnId, or this is last block)
       if (usageByTurn && block.turnId) {

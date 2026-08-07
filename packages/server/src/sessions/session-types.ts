@@ -80,6 +80,20 @@ export interface SessionMessage {
   deleted?: boolean
 }
 
+/**
+ * The assistant turn's tool calls, in call order. `contentBlocks` is the
+ * authoritative source (it also carries the interleaving with text/thinking);
+ * `toolCalls` only exists on sessions persisted before blocks were written, so
+ * it's a pure legacy fallback — never a supplement. Same priority the admin
+ * renderer applies (design/storage.md "Assistant rendering priority").
+ */
+export function messageToolCalls(msg: SessionMessage): ToolCallEntry[] {
+  if (msg.contentBlocks) {
+    return msg.contentBlocks.filter((b) => b.type === 'tool_call').map((b) => b.toolCall)
+  }
+  return msg.toolCalls ?? []
+}
+
 /** Infer MessageType from legacy messages that lack the type field */
 export function inferMessageType(msg: SessionMessage): MessageType {
   if (msg.type) return msg.type

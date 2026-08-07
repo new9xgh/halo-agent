@@ -772,7 +772,7 @@ export class SessionManager implements SessionManagerInternals {
         fsSync.mkdirSync(dir, { recursive: true })
         atomicWriteSessionFile(
           path.join(dir, `${fileSegment(sessionId)}.json`),
-          JSON.stringify({ id: sessionId, agentId, title, createdAt: new Date(now).toISOString() }, null, 2),
+          JSON.stringify({ id: sessionId, agentId, title, createdAt: new Date(now).toISOString() }),
         )
       } catch (err) {
         console.warn(`[SessionManager] Failed to pre-seed title for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`)
@@ -2599,7 +2599,7 @@ export class SessionManager implements SessionManagerInternals {
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) } catch { /* new file */ }
         data.rawMessages = repaired
-        atomicWriteSessionFile(filePath, JSON.stringify(data, null, 2))
+        atomicWriteSessionFile(filePath, JSON.stringify(data))
       }
     }
 

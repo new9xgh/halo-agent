@@ -210,7 +210,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
       ...(existingOutput !== undefined ? { output: existingOutput } : {}),
     }
 
-    atomicWriteJsonSync(filePath, JSON.stringify(session, null, 2))
+    atomicWriteJsonSync(filePath, JSON.stringify(session))
   } catch (err) {
     console.debug(`[SessionStore] Failed to save session: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -347,7 +347,7 @@ export function findAndUpdateSessionTitle(sessionId: string, title: string, proj
       try {
         const data = JSON.parse(fsSync.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
         data.title = title
-        atomicWriteJsonSync(filePath, JSON.stringify(data, null, 2))
+        atomicWriteJsonSync(filePath, JSON.stringify(data))
         return true
       } catch { /* not in this agent's dir, or unreadable — try next */ }
     }

@@ -75,7 +75,7 @@ export class SessionStateStore {
       existing.messageCount = Array.isArray(session.agent.messages) ? session.agent.messages.length : 0
       existing.output = session.output
       existing.rawMessages = session.agent.messages
-      atomicWriteSessionFile(filePath, JSON.stringify(existing, null, 2))
+      atomicWriteSessionFile(filePath, JSON.stringify(existing))
     } catch (err) {
       console.error(`[SessionStateStore] Failed to save state for ${session.id}: ${err instanceof Error ? err.message : String(err)}`)
     }
