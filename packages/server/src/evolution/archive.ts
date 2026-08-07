@@ -24,7 +24,8 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { pipeline } from 'node:stream/promises'
+import JSZip from 'jszip'
 import { eq, and, isNull, lte, isNotNull, lt } from 'drizzle-orm'
 import { evolutionRuns, evolutionApplies, getEvoDb } from '../db/evo-db.js'
 import { wsEvoHistoryDir, evoWrapperLogFile, evoApplyLogFile } from '../paths.js'
@@ -45,14 +46,61 @@ interface ArchiveSummary {
   errors: string[]
 }
 
-/** Produce a zip of `srcDir` at `outZip`. Uses the system `zip` binary —
- *  available on macOS / Linux / WSL. Returns true on success. */
-function zipDir(srcDir: string, outZip: string): boolean {
+/** Produce a zip of `srcDir` at `outZip`. Pure JS (jszip, already a repo
+ *  dependency via admin) — the previous `spawnSync('zip', …)` depended on
+ *  a system binary that Windows installs don't have, so every archive pass
+ *  failed there forever and artifacts grew unbounded. Entry paths are kept
+ *  relative to srcDir (same layout the old `zip -rq <out> .` produced),
+ *  empty dirs included, file mtimes preserved. Contents are buffered
+ *  per-file (fs.createReadStream would open every fd up-front — EMFILE
+ *  risk on file-heavy sandboxes; artifact dirs are small text-heavy trees
+ *  and this runs once a day, so dir-sized transient memory is the cheaper
+ *  risk) and the output zip is streamed to disk. Returns true on success. */
+async function zipDir(srcDir: string, outZip: string): Promise<boolean> {
   if (!fs.existsSync(srcDir)) return false
   fs.mkdirSync(path.dirname(outZip), { recursive: true })
-  // `zip -rq <out> .` from inside the dir keeps paths relative to srcDir.
-  const result = spawnSync('zip', ['-rq', outZip, '.'], { cwd: srcDir })
-  return result.status === 0
+  const zip = new JSZip()
+  // Manual walk instead of a recursive readdir: empty dirs need explicit
+  // folder entries, and dir-symlinks must NOT be recursed (an agent runs
+  // inside the sandbox during evaluation and could leave a cycle).
+  const walk = (dir: string, rel: string): void => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+    if (entries.length === 0 && rel) {
+      zip.folder(rel)
+      return
+    }
+    for (const e of entries) {
+      const abs = path.join(dir, e.name)
+      const childRel = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        walk(abs, childRel)
+      } else if (e.isFile()) {
+        zip.file(childRel, fs.readFileSync(abs), { date: fs.statSync(abs).mtime })
+      } else if (e.isSymbolicLink()) {
+        // File symlinks: store the target's contents (what the system
+        // `zip` without -y did). Broken links are skipped rather than
+        // failing the whole pass.
+        try {
+          if (fs.statSync(abs).isFile()) zip.file(childRel, fs.readFileSync(abs))
+        } catch { /* broken link — skip */ }
+      }
+    }
+  }
+  try {
+    walk(srcDir, '')
+    await pipeline(
+      zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true, compression: 'DEFLATE' }),
+      fs.createWriteStream(outZip),
+    )
+    return true
+  } catch (err) {
+    // Don't leave a truncated zip behind — archiveRun/archiveApply skip
+    // the rmDir + archived_at stamp on failure, so a retry next pass
+    // must start clean.
+    rmFile(outZip)
+    console.log(`[evo-archive] zip of ${srcDir} failed: ${err instanceof Error ? err.message : String(err)}`)
+    return false
+  }
 }
 
 /** Remove a directory tree, ignoring missing-path errors. */
@@ -64,11 +112,11 @@ function rmFile(p: string): void {
   try { fs.rmSync(p, { force: true }) } catch { /* best effort */ }
 }
 
-function archiveRun(
+async function archiveRun(
   workspacePath: string,
   runId: string,
   errors: string[],
-): boolean {
+): Promise<boolean> {
   const runDir = path.join(workspacePath, '.halo', 'evo', 'runs', runId)
   const archiveDir = path.join(workspacePath, '.halo', 'evo', 'archive')
   const outZip = path.join(archiveDir, `run-${runId}.zip`)
@@ -78,7 +126,7 @@ function archiveRun(
     return true
   }
 
-  if (!zipDir(runDir, outZip)) {
+  if (!(await zipDir(runDir, outZip))) {
     errors.push(`zip failed for run ${runId}`)
     return false
   }
@@ -86,18 +134,18 @@ function archiveRun(
   return true
 }
 
-function archiveApply(
+async function archiveApply(
   workspacePath: string,
   applyId: string,
   errors: string[],
-): boolean {
+): Promise<boolean> {
   const applyDir = path.join(workspacePath, '.halo', 'evo', 'applies', applyId)
   const archiveDir = path.join(workspacePath, '.halo', 'evo', 'archive')
   const outZip = path.join(archiveDir, `apply-${applyId}.zip`)
 
   if (!fs.existsSync(applyDir)) return true
 
-  if (!zipDir(applyDir, outZip)) {
+  if (!(await zipDir(applyDir, outZip))) {
     errors.push(`zip failed for apply ${applyId}`)
     return false
   }
@@ -144,7 +192,7 @@ export function removeApplyArtifacts(workspacePath: string, applyId: string): vo
 }
 
 /** Run one archive pass. Idempotent — call as often as you want. */
-export function runArchivePass(): ArchiveSummary {
+export async function runArchivePass(): Promise<ArchiveSummary> {
   const summary: ArchiveSummary = { archived: 0, purged: 0, errors: [] }
   const db = getEvoDb()
   const now = Date.now()
@@ -168,7 +216,7 @@ export function runArchivePass(): ArchiveSummary {
       ))
       .all()
     for (const row of stale) {
-      if (archiveRun(row.workspacePath, row.id, summary.errors)) {
+      if (await archiveRun(row.workspacePath, row.id, summary.errors)) {
         db.update(evolutionRuns)
           .set({ archivedAt: now })
           .where(eq(evolutionRuns.id, row.id))
@@ -189,7 +237,7 @@ export function runArchivePass(): ArchiveSummary {
       ))
       .all()
     for (const row of stale) {
-      if (archiveApply(row.workspacePath, row.id, summary.errors)) {
+      if (await archiveApply(row.workspacePath, row.id, summary.errors)) {
         db.update(evolutionApplies)
           .set({ archivedAt: now })
           .where(eq(evolutionApplies.id, row.id))
@@ -240,31 +288,21 @@ let _archiveTimer: NodeJS.Timeout | null = null
 /** Start a daily archive pass. Runs once at startup, then every 24h. */
 export function startArchiveDaemon(): void {
   if (_archiveTimer) return
+  const pass = (label: string): void => {
+    runArchivePass().then((s) => {
+      if (s.archived || s.purged || s.errors.length) {
+        console.log(`[evo-archive] ${label} pass: archived=${s.archived} purged=${s.purged} errors=${s.errors.length}`)
+        for (const err of s.errors) console.log(`[evo-archive]   ${err}`)
+      }
+    }).catch((err) => {
+      console.log(`[evo-archive] ${label} pass crashed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  }
   // Run shortly after server boot so any rows already past the threshold
   // are processed without waiting a full day.
-  setTimeout(() => {
-    try {
-      const s = runArchivePass()
-      if (s.archived || s.purged || s.errors.length) {
-        console.log(`[evo-archive] startup pass: archived=${s.archived} purged=${s.purged} errors=${s.errors.length}`)
-        for (const err of s.errors) console.log(`[evo-archive]   ${err}`)
-      }
-    } catch (err) {
-      console.log(`[evo-archive] startup pass crashed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }, 60_000) // 1 minute after boot
+  setTimeout(() => pass('startup'), 60_000) // 1 minute after boot
 
-  _archiveTimer = setInterval(() => {
-    try {
-      const s = runArchivePass()
-      if (s.archived || s.purged || s.errors.length) {
-        console.log(`[evo-archive] daily pass: archived=${s.archived} purged=${s.purged} errors=${s.errors.length}`)
-        for (const err of s.errors) console.log(`[evo-archive]   ${err}`)
-      }
-    } catch (err) {
-      console.log(`[evo-archive] daily pass crashed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }, DAY_MS)
+  _archiveTimer = setInterval(() => pass('daily'), DAY_MS)
 }
 
 export function stopArchiveDaemon(): void {

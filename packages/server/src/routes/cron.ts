@@ -39,6 +39,11 @@ interface CreateBody {
   enabled?: boolean
 }
 
+/** PUT body — same fields as create, all optional. `runAt: null` explicitly
+ *  clears the one-shot fire time (the admin form sends it when switching a
+ *  job back to recurring). */
+type UpdateBody = Partial<Omit<CreateBody, 'runAt'>> & { runAt?: number | null }
+
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -137,19 +142,52 @@ export function createCronRoutes(): Hono {
   // PUT /api/cron/jobs/:id — update an existing job.
   router.put('/cron/jobs/:id', async (c) => {
     const id = c.req.param('id')
-    const body = await c.req.json().catch(() => null) as Partial<CreateBody> | null
+    const body = await c.req.json().catch(() => null) as UpdateBody | null
     if (!body) return c.json({ error: 'invalid body' }, 400)
 
     const db = getCronDb()
     const existing = db.select().from(cronJobs).where(eq(cronJobs.id, id)).get()
     if (!existing) return c.json({ error: 'not found' }, 404)
 
+    if (body.schedule !== undefined && typeof body.schedule !== 'string') {
+      return c.json({ error: 'schedule must be a string' }, 400)
+    }
     if (body.schedule !== undefined && body.schedule.length > 0) {
       const err = validateSchedule(body.schedule)
       if (err) return c.json({ error: `invalid schedule: ${err}` }, 400)
     }
-    if (body.runAt !== undefined && body.runAt !== null && body.runAt <= Date.now()) {
-      return c.json({ error: 'runAt must be in the future' }, 400)
+    // runAt: future epoch-ms number, or null (= clear). Reject other types
+    // here — a garbage-typed runAt would slip past the exclusivity check
+    // below and land in the db as-is.
+    if (body.runAt !== undefined && body.runAt !== null) {
+      if (typeof body.runAt !== 'number' || !Number.isFinite(body.runAt)) {
+        return c.json({ error: 'runAt must be a number (epoch ms) or null' }, 400)
+      }
+      if (body.runAt <= Date.now()) return c.json({ error: 'runAt must be in the future' }, 400)
+    }
+
+    // Recurring vs at-mode exclusivity on the MERGED row (db contract:
+    // exactly one of schedule/runAt is set per job — see cron-db.ts).
+    // Create enforces this at insert; without the same check here a
+    // partial PUT could leave both set — the runner silently prefers
+    // runAt (runner.ts scheduleJob) and its post-fire auto-disable would
+    // kill the recurring schedule too. Setting both in one body is a
+    // client error (400, same as create); setting only one side is a mode
+    // switch and implicitly clears the other.
+    const hasSchedule = typeof body.schedule === 'string' && body.schedule.trim().length > 0
+    const hasRunAt = typeof body.runAt === 'number'
+    if (hasSchedule && hasRunAt) {
+      return c.json({ error: 'schedule and runAt are mutually exclusive' }, 400)
+    }
+    const clearRunAt = hasSchedule && body.runAt === undefined
+    const clearSchedule = hasRunAt && body.schedule === undefined
+    // The merged row must still have a trigger — reject a PUT that clears
+    // the active side and supplies nothing (a triggerless job would sit
+    // enabled but never fire).
+    const nextSchedule = clearSchedule ? '' : (body.schedule ?? existing.schedule)
+    const nextRunAt = clearRunAt ? null : (body.runAt !== undefined ? body.runAt : existing.runAt)
+    if (nextSchedule.trim().length === 0 && typeof nextRunAt !== 'number') {
+      return c.json({ error: 'schedule or runAt required' }, 400)
     }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() }
@@ -157,8 +195,8 @@ export function createCronRoutes(): Hono {
     if (body.workspacePath !== undefined) patch.workspacePath = body.workspacePath
     if (body.agentId !== undefined) patch.agentId = body.agentId
     if (body.userPrompt !== undefined) patch.userPrompt = body.userPrompt
-    if (body.schedule !== undefined) patch.schedule = body.schedule
-    if (body.runAt !== undefined) patch.runAt = body.runAt
+    if (body.schedule !== undefined || clearSchedule) patch.schedule = nextSchedule
+    if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
