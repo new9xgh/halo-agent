@@ -18,7 +18,7 @@ import { startLogin, waitLogin } from '../channels/wechat/login.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, normalizeAccountId, updateAccount,
 } from '../channels/wechat/accounts.js'
-import { ensureWorkspaceHalo } from '../init.js'
+import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import fs from 'node:fs'
 
 export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel }) {
@@ -53,16 +53,22 @@ export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel
     }
     if (!body.sessionKey) return c.json({ error: 'sessionKey required' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
+    // Real difference from the other four channels: this handler blocks on a
+    // QR scan, so the absolute-path check runs up front (reject a typo before
+    // asking the user to scan) while existence + `.halo/` scaffolding wait
+    // until the scan lands — an abandoned login must not scaffold a directory.
     if (!path.isAbsolute(body.workspacePath)) return c.json({ error: 'workspacePath must be absolute' }, 400)
-    const accessLevel = body.accessLevel === 'full' ? 'full' : body.accessLevel === 'workspace' ? 'workspace' : 'readonly'
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
+    const accessLevel = body.accessLevel ?? 'readonly'
 
     const result = await waitLogin({ sessionKey: body.sessionKey, timeoutMs: body.timeoutMs })
     if (!result.connected || !result.accountId || !result.botToken || !result.baseUrl) {
       return c.json({ connected: false, message: result.message }, 200)
     }
 
-    if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-    ensureWorkspaceHalo(body.workspacePath)
+    const wsError = validateWorkspaceBody(body.workspacePath)
+    if (wsError) return c.json({ error: wsError }, 400)
 
     const normalized = normalizeAccountId(result.accountId)
     const existing = getAccount(db, normalized)
@@ -107,17 +113,13 @@ export function createWechatRoutes(deps: { db: ChannelDb; channel: WechatChannel
       accessLevel?: 'full' | 'workspace' | 'readonly' | 'observer'
       language?: string
     }
-    if (body.workspacePath !== undefined && !path.isAbsolute(body.workspacePath)) {
-      return c.json({ error: 'workspacePath must be absolute' }, 400)
-    }
-    if (body.accessLevel !== undefined && body.accessLevel !== 'full' && body.accessLevel !== 'workspace' && body.accessLevel !== 'readonly') {
-      return c.json({ error: 'accessLevel must be full, workspace, or readonly' }, 400)
-    }
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
 
     const patch: Parameters<typeof updateAccount>[2] = { ...body }
     if (body.workspacePath !== undefined) {
-      if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-      ensureWorkspaceHalo(body.workspacePath)
+      const wsError = validateWorkspaceBody(body.workspacePath)
+      if (wsError) return c.json({ error: wsError }, 400)
       patch.workspacePath = body.workspacePath
     }
     updateAccount(db, id, patch)

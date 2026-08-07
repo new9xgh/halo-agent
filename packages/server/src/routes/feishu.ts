@@ -9,14 +9,13 @@
  */
 import { Hono } from 'hono'
 import fs from 'node:fs'
-import path from 'node:path'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { FeishuChannel } from '../channels/feishu/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/feishu/accounts.js'
+import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import { searchFeishuTargets, getBotInfo } from '../channels/feishu/api.js'
-import { ensureWorkspaceHalo } from '../init.js'
 
 export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel }) {
   const { db, channel } = deps
@@ -71,9 +70,10 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
     if (!body.appId) return c.json({ error: 'appId required' }, 400)
     if (!body.appSecret) return c.json({ error: 'appSecret required' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    if (!path.isAbsolute(body.workspacePath)) return c.json({ error: 'workspacePath must be absolute' }, 400)
-    if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-    ensureWorkspaceHalo(body.workspacePath)
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
+    const wsError = validateWorkspaceBody(body.workspacePath)
+    if (wsError) return c.json({ error: wsError }, 400)
 
     // Resolve botOpenId from credentials. /bot/v3/info doesn't require
     // any scope (the only failure mode in practice is bad app_secret —
@@ -139,6 +139,8 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
       verificationToken: string
       encryptKey: string
     }>
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
     const patch: Record<string, unknown> = {}
     if (body.label !== undefined) patch.label = body.label
     if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
@@ -146,9 +148,9 @@ export function createFeishuRoutes(deps: { db: ChannelDb; channel: FeishuChannel
     if (body.verificationToken !== undefined) patch.verificationToken = body.verificationToken
     if (body.encryptKey !== undefined) patch.encryptKey = body.encryptKey
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath) {
-      if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-      ensureWorkspaceHalo(body.workspacePath)
+    if (body.workspacePath !== undefined) {
+      const wsError = validateWorkspaceBody(body.workspacePath)
+      if (wsError) return c.json({ error: wsError }, 400)
       patch.workspacePath = body.workspacePath
     }
     updateAccount(db, id, patch)

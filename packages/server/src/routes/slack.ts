@@ -9,14 +9,13 @@
  */
 import { Hono } from 'hono'
 import fs from 'node:fs'
-import path from 'node:path'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { SlackChannel } from '../channels/slack/handler.js'
 import {
   deleteAccount, getAccount, insertAccount, listAccounts, updateAccount,
 } from '../channels/slack/accounts.js'
+import { accessLevelError, CHAT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import { authTest, searchSlackTargets } from '../channels/slack/api.js'
-import { ensureWorkspaceHalo } from '../init.js'
 
 export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }) {
   const { db, channel } = deps
@@ -71,9 +70,10 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
     if (!body.appToken) return c.json({ error: 'appToken required (xapp-... — needed for Socket Mode)' }, 400)
     if (!body.appToken.startsWith('xapp-')) return c.json({ error: 'appToken must start with xapp-' }, 400)
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    if (!path.isAbsolute(body.workspacePath)) return c.json({ error: 'workspacePath must be absolute' }, 400)
-    if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-    ensureWorkspaceHalo(body.workspacePath)
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
+    const wsError = validateWorkspaceBody(body.workspacePath)
+    if (wsError) return c.json({ error: wsError }, 400)
 
     // Resolve botUserId + teamId via auth.test — also doubles as a
     // token-validity check. A bad token will throw with `invalid_auth`
@@ -133,15 +133,17 @@ export function createSlackRoutes(deps: { db: ChannelDb; channel: SlackChannel }
       language: string
       appToken: string
     }>
+    const levelError = accessLevelError(body.accessLevel, CHAT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
     const patch: Record<string, unknown> = {}
     if (body.label !== undefined) patch.label = body.label
     if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
     if (body.language !== undefined) patch.language = body.language
     if (body.appToken !== undefined) patch.appToken = body.appToken
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath) {
-      if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-      ensureWorkspaceHalo(body.workspacePath)
+    if (body.workspacePath !== undefined) {
+      const wsError = validateWorkspaceBody(body.workspacePath)
+      if (wsError) return c.json({ error: wsError }, 400)
       patch.workspacePath = body.workspacePath
     }
     updateAccount(db, id, patch)

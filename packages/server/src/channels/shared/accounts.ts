@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import { eq, and } from 'drizzle-orm'
 import { channelAccounts, type ChannelDb } from '../../db/channel-db.js'
 import { ensureWorkspaceHalo } from '../../init.js'
@@ -24,6 +25,53 @@ export function resolveAccountWorkspace(account: { workspacePath: string }): str
  *  the sandbox, which only knows full/workspace/readonly (observer is
  *  normalized to readonly the moment a session is built from it). */
 export type AccountAccessLevel = 'full' | 'workspace' | 'readonly' | 'observer'
+
+/** Every legal stored value — the set `toAccount` normalizes against and the
+ *  set the web channel accepts (that's where halo-city / metrics tokens are
+ *  minted). */
+export const ACCOUNT_ACCESS_LEVELS: readonly string[] = ['full', 'workspace', 'readonly', 'observer']
+
+/** Legal values on the four chat channels. `observer` is a dashboard role,
+ *  not a chat identity: their admin forms offer three, and chat-side session
+ *  routing treats observer as readonly anyway. */
+export const CHAT_ACCESS_LEVELS: readonly string[] = ['full', 'workspace', 'readonly']
+
+/**
+ * REST-boundary check for an inbound `accessLevel` field. Returns an error
+ * message when the field is present but outside `allowed`, else `null`
+ * (absent = "leave it alone", which each caller's patch build already
+ * handles).
+ *
+ * Without this only wechat's PATCH rejected junk; the other four channels
+ * wrote any string straight into the row and relied on `toAccount` quietly
+ * normalizing it back to `readonly` on every read (audit B-L1) — so the db
+ * held a value no code path agreed with.
+ */
+export function accessLevelError(value: unknown, allowed: readonly string[]): string | null {
+  if (value === undefined) return null
+  if (typeof value === 'string' && allowed.includes(value)) return null
+  return `accessLevel must be one of: ${allowed.join(', ')}`
+}
+
+/**
+ * REST-boundary check for a `workspacePath` a channel is about to bind an
+ * account to: absolute, exists, and (on success) `.halo/` scaffolded — the
+ * side effect that always followed the check. Returns an error message for
+ * the caller to render in its own response shape, or `null` when usable.
+ *
+ * Presence stays with the caller: POST words it alongside its other
+ * required-field errors, PATCH treats absence as "leave the binding alone".
+ * Before this, all ten call sites (POST + PATCH × 5 channels) carried their
+ * own copy and drifted — four PATCHes never checked `isAbsolute`, so a
+ * relative path got stored verbatim and later resolved against whatever CWD
+ * the server happened to run in (audit B hotspot #2).
+ */
+export function validateWorkspaceBody(workspacePath: string): string | null {
+  if (!path.isAbsolute(workspacePath)) return 'workspacePath must be absolute'
+  if (!fs.existsSync(workspacePath)) return 'workspace path not found'
+  ensureWorkspaceHalo(workspacePath)
+  return null
+}
 
 export interface ChannelAccount {
   accountId: string

@@ -8,7 +8,7 @@ import type { WebChannel } from '../channels/web/handler.js'
 import {
   deleteAccount, getAccount, getAccountByToken, insertAccount, listAccounts, updateAccount,
 } from '../channels/web/accounts.js'
-import { ensureWorkspaceHalo } from '../init.js'
+import { accessLevelError, ACCOUNT_ACCESS_LEVELS, validateWorkspaceBody } from '../channels/shared/accounts.js'
 import { getClientIp, isLockedOut, recordFailure, clearFailures } from '../middleware/brute-force.js'
 
 /** Bucket name for the brute-force tracker — keeps this surface's
@@ -50,10 +50,12 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
       language?: string
     }
     if (!body.workspacePath) return c.json({ error: 'workspacePath required' }, 400)
-    if (!path.isAbsolute(body.workspacePath)) return c.json({ error: 'workspacePath must be absolute' }, 400)
-
-    if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-    ensureWorkspaceHalo(body.workspacePath)
+    // Web is the one channel where `observer` is legal — halo-city / metrics
+    // tokens are minted here.
+    const levelError = accessLevelError(body.accessLevel, ACCOUNT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
+    const wsError = validateWorkspaceBody(body.workspacePath)
+    if (wsError) return c.json({ error: wsError }, 400)
 
     const accountId = crypto.randomUUID().slice(0, 8)
     const token = crypto.randomBytes(24).toString('base64url')
@@ -81,14 +83,16 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
       accessLevel: 'full' | 'workspace' | 'readonly' | 'observer'
       language: string
     }>
+    const levelError = accessLevelError(body.accessLevel, ACCOUNT_ACCESS_LEVELS)
+    if (levelError) return c.json({ error: levelError }, 400)
     const patch: Record<string, unknown> = {}
     if (body.label !== undefined) patch.label = body.label
     if (body.accessLevel !== undefined) patch.accessLevel = body.accessLevel
     if (body.language !== undefined) patch.language = body.language
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
-    if (body.workspacePath) {
-      if (!fs.existsSync(body.workspacePath)) return c.json({ error: 'workspace path not found' }, 400)
-      ensureWorkspaceHalo(body.workspacePath)
+    if (body.workspacePath !== undefined) {
+      const wsError = validateWorkspaceBody(body.workspacePath)
+      if (wsError) return c.json({ error: wsError }, 400)
       patch.workspacePath = body.workspacePath
     }
     updateAccount(db, id, patch)
