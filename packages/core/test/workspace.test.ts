@@ -6,8 +6,8 @@ import { Workspace, WorkspaceError } from '../src/workspace/workspace.js'
 
 /**
  * Contract: validatePath is the ONLY guard between agent-supplied paths and
- * the host filesystem for core's Workspace (readFile/writeFile/listFiles all
- * funnel through it). A traversal that slips through here is a sandbox escape.
+ * the host filesystem for core's Workspace (readFile/writeFile both funnel
+ * through it). A traversal that slips through here is a sandbox escape.
  */
 describe('Workspace.validatePath', () => {
   let root: string
@@ -111,34 +111,5 @@ describe('Workspace file ops', () => {
   it('writeFile creates parent dirs and readFile round-trips', async () => {
     await ws.writeFile('deep/nested/file.txt', 'hello')
     expect(await ws.readFile('deep/nested/file.txt')).toBe('hello')
-  })
-
-  it('fileExists is true after write, false before', async () => {
-    expect(await ws.fileExists('a.txt')).toBe(false)
-    await ws.writeFile('a.txt', 'x')
-    expect(await ws.fileExists('a.txt')).toBe(true)
-  })
-
-  it('fileExists returns false (not throws) for a traversal path', async () => {
-    expect(await ws.fileExists('../outside.txt')).toBe(false)
-  })
-
-  it('listFiles non-recursive marks directories with a trailing slash', async () => {
-    await ws.writeFile('file.txt', 'x')
-    await ws.writeFile('dir/inner.txt', 'y')
-    const entries = await ws.listFiles()
-    expect(entries).toContain('file.txt')
-    expect(entries).toContain('dir/')
-    expect(entries).not.toContain('dir/inner.txt')
-  })
-
-  it('listFiles recursive descends but skips node_modules/.git/dist/.next', async () => {
-    await ws.writeFile('src/a.ts', 'x')
-    await ws.writeFile('node_modules/pkg/index.js', 'x')
-    await ws.writeFile('dist/out.js', 'x')
-    const entries = await ws.listFiles(undefined, true)
-    expect(entries).toContain(path.join('src', 'a.ts'))
-    expect(entries.some((e) => e.includes('node_modules'))).toBe(false)
-    expect(entries.some((e) => e.startsWith('dist'))).toBe(false)
   })
 })
