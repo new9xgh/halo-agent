@@ -365,7 +365,6 @@ export function createEditorStore() {
         set((state) => {
           if (state.groups.length <= 1) return state
           if (groupIdx < 0 || groupIdx >= state.groups.length) return state
-          const removed = state.groups[groupIdx]
           const groups = state.groups.filter((_, i) => i !== groupIdx)
           // Drop buffers that were only kept alive by the removed pane.
           const remainingPaths = new Set<string>()
@@ -378,9 +377,6 @@ export function createEditorStore() {
           for (const p of state.modifiedPaths) if (remainingPaths.has(p)) modifiedPaths.add(p)
           const activeGroupIdx = Math.max(0, Math.min(state.activeGroupIdx, groups.length - 1))
           const next = { ...state, groups, activeGroupIdx, buffers, modifiedPaths }
-          // Reference `removed` so an inadvertent unused-var lint stays happy
-          // (the destructuring above carries the intent — this is a no-op.)
-          void removed
           return { groups, activeGroupIdx, buffers, modifiedPaths, ...deriveActiveView(next) }
         })
       },

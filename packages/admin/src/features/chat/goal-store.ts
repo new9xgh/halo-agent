@@ -41,7 +41,7 @@ export const useGoalStore = create<GoalStore>((set) => ({
   setGoal: (goal) => set({ goal }),
   dismiss: (goalId) => {
     set({ dismissedGoalId: goalId })
-    const projectId = useProjectStore.getState().activeProject?.path
+    const projectId = useProjectStore.getState().activeProject?.id
     if (projectId && typeof window !== 'undefined') {
       localStorage.setItem(dismissKey(projectId), goalId)
     }

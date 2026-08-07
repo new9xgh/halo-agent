@@ -186,8 +186,8 @@ export function ChatPanel() {
   // Seed the goal banner / input lock on mount + project switch — live
   // updates ride the `goal:changed` WS push (state-handlers re-fetches).
   useEffect(() => {
-    if (activeProject?.path) void refreshGoal(activeProject.path)
-  }, [activeProject?.path])
+    if (activeProject?.id) void refreshGoal(activeProject.id)
+  }, [activeProject?.id])
 
   const handleNew = useCallback(() => {
     // Drop any in-flight load — its snapshot (matched by sid) can't collide

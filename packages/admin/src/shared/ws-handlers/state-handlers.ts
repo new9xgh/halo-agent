@@ -114,7 +114,7 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
   // the session lists' 🎯 badge → bump the bus.
   unsubs.push(
     wsClient.on('goal:changed', () => {
-      const projectId = useProjectStore.getState().activeProject?.path
+      const projectId = useProjectStore.getState().activeProject?.id
       if (projectId) void refreshGoal(projectId)
       bumpSessionBus()
     }),
