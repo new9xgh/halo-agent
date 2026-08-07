@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { parseArgs } from 'node:util'
 import type { Harness } from './harness.js'
 import type { Lang } from '@turmind/halo-server/channels/shared/i18n'
+import { SUPERVISE_ENV, requestStop } from './server-supervisor.js'
 
 // harness.js / cli.js / tui.js statically import the whole @turmind/halo-server
 // world (SessionManager, db, sandbox, file-watching, logger). Keeping them as
@@ -147,6 +148,10 @@ Port resolution: --port flag > HALO_PORT env > config.yaml > 9527.
 
 Daemon logs go to ~/.halo/logs/server.log; pidfile is
 ~/.halo/global/server.lock.
+
+Under -d a crashed server (non-zero exit) is restarted automatically, at
+most 5 times per 5 minutes; past that the daemon gives up and logs why.
+A clean exit — including \`halo server stop\` — never restarts.
 `
 
 const HELP_AGENTS = `Usage: halo agents [options]
@@ -983,6 +988,14 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
   }
 
   if (!values.daemon) {
+    // Detached middle process of `-d`: supervise instead of becoming the server,
+    // so a crashed server gets a bounded number of restarts. Only ever set by
+    // cmdServerStart below — a user-run `halo server start` is plain foreground.
+    if (process.env[SUPERVISE_ENV]) {
+      const { superviseServer } = await import('./server-supervisor.js')
+      await superviseServer()
+      return
+    }
     // Foreground: import the server module — its top-level statements take
     // over the process (lock, listen, signal handlers). No PID-probe precheck
     // here — the server's own flock guard is authoritative and, unlike a bare
@@ -1007,7 +1020,11 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
 
   // Spawn a child process and detach. We re-exec the same `halo`
   // binary with `server start` (no -d) so the child runs foreground inside
-  // its own session.
+  // its own session — with HALO_SUPERVISE set, so that child becomes the
+  // bounded respawn supervisor and the *server* is its child (topology and
+  // pid ownership documented in server-supervisor.ts). systemd / Docker
+  // deployments run the server directly and never come through here, so they
+  // keep using their own supervisor.
   const { spawn } = await import('node:child_process')
   fs.mkdirSync(path.dirname(SERVER_LOG_PATH), { recursive: true })
   const out = fs.openSync(SERVER_LOG_PATH, 'a')
@@ -1017,7 +1034,7 @@ async function cmdServerStart(argv: string[], _unused: boolean): Promise<void> {
   const child = spawn(process.argv[0]!, [process.argv[1]!, 'server', 'start'], {
     detached: true,
     stdio: ['ignore', out, out],
-    env: process.env,
+    env: { ...process.env, [SUPERVISE_ENV]: '1' },
   })
   child.unref()
 
@@ -1049,6 +1066,16 @@ async function cmdServerStop(argv: string[]): Promise<void> {
     options: { force: { type: 'boolean', default: false } },
   })
   const pid = readServerPid()
+
+  // Tell a `-d` supervisor this death is intentional, BEFORE the signal — it
+  // reacts to the exit, so a marker written afterwards could lose the race and
+  // get the server respawned. Also covers "server already dead but its
+  // supervisor is mid-backoff", which is why it runs on the not-running path
+  // too. No-op when nothing is supervising (plain foreground / systemd), and
+  // single-slot: at most one stale marker can linger, only consumable by a
+  // future server child that both reuses that exact pid and crashes.
+  if (pid != null) requestStop(pid)
+
   if (pid == null || !isAlive(pid)) {
     process.stderr.write('Server not running.\n')
     return
