@@ -135,6 +135,31 @@ function spliceMove<T>(arr: T[], from: number, to: number): T[] {
   return next
 }
 
+/** Structural-sharing helper for the file-tree mutators: shallow-clone the
+ *  root plus the directory chain named by `dirParts` (as deep as it exists
+ *  and is loaded), returning the new root, the deepest cloned node, and how
+ *  many segments were entered. Callers write into the cloned spine; every
+ *  subtree off the spine keeps its object identity. These mutators run per
+ *  `file:changed` WS event (agent builds emit hundreds) — the previous
+ *  whole-tree JSON deep clone per event was a main-thread hog on large
+ *  workspaces (audit C-M2). */
+function cloneDirPath(root: FileTreeNode, dirParts: string[]): { root: FileTreeNode; node: FileTreeNode; depth: number } {
+  const newRoot: FileTreeNode = { ...root, children: root.children && [...root.children] }
+  let node = newRoot
+  let depth = 0
+  for (const part of dirParts) {
+    if (!node.children) break
+    const idx = node.children.findIndex((c) => c.name === part && c.type === 'directory')
+    if (idx === -1) break
+    const cloned: FileTreeNode = { ...node.children[idx] }
+    if (cloned.children) cloned.children = [...cloned.children]
+    node.children[idx] = cloned
+    node = cloned
+    depth++
+  }
+  return { root: newRoot, node, depth }
+}
+
 export function createEditorStore() {
   return create<EditorStore>((set, get) => {
     const initialGroup: EditorGroup = { id: newGroupId(), tabs: [], activeTab: null }
@@ -428,26 +453,17 @@ export function createEditorStore() {
       setDirChildren(dirPath, children) {
         set((state) => {
           if (!state.fileTree) return state
+          const parts = dirPath.split('/').filter(Boolean)
+          const { root, node, depth } = cloneDirPath(state.fileTree, parts)
+          // Target dir (or an ancestor) missing or not loaded — nothing to update.
+          if (depth < parts.length) return state
           const sorted = [...children].sort((a, b) => {
             if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
             return a.name.localeCompare(b.name)
           })
-          const newTree = JSON.parse(JSON.stringify(state.fileTree)) as FileTreeNode
-          if (!dirPath) {
-            newTree.children = sorted
-            newTree.hasChildren = sorted.length > 0
-            return { fileTree: newTree }
-          }
-          const parts = dirPath.split('/').filter(Boolean)
-          let current: FileTreeNode | undefined = newTree
-          for (const part of parts) {
-            if (!current?.children) return state
-            current = current.children.find((c) => c.name === part && c.type === 'directory')
-            if (!current) return state
-          }
-          current.children = sorted
-          current.hasChildren = sorted.length > 0
-          return { fileTree: newTree }
+          node.children = sorted
+          node.hasChildren = sorted.length > 0
+          return { fileTree: root }
         })
       },
 
@@ -545,31 +561,29 @@ export function createEditorStore() {
           if (!state.fileTree) return state
           const parts = relativePath.split('/').filter(Boolean)
           if (parts.length === 0) return state
-          const newTree = JSON.parse(JSON.stringify(state.fileTree)) as FileTreeNode
-          let current: FileTreeNode = newTree
-          for (let i = 0; i < parts.length - 1; i++) {
-            const child = current.children?.find((c) => c.name === parts[i] && c.type === 'directory')
-            if (!child) {
-              if (current.children === undefined) current.hasChildren = true
-              return { fileTree: newTree }
+          const parentParts = parts.slice(0, -1)
+          const { root, node, depth } = cloneDirPath(state.fileTree, parentParts)
+          // Walk stopped before the parent: either an unloaded dir (children
+          // never fetched — flip hasChildren so the expand chevron appears) or
+          // a genuinely missing path (no-op; return state so subscribers skip).
+          if (depth < parentParts.length || node.children === undefined) {
+            if (node.children === undefined && node.hasChildren !== true) {
+              node.hasChildren = true
+              return { fileTree: root }
             }
-            current = child
-          }
-          if (current.children === undefined) {
-            current.hasChildren = true
-            return { fileTree: newTree }
+            return state
           }
           const name = parts[parts.length - 1]
-          if (current.children.some((c) => c.name === name)) return { fileTree: newTree }
+          if (node.children.some((c) => c.name === name)) return state
           const newNode: FileTreeNode = nodeType === 'directory'
             ? { name, path: relativePath, type: 'directory', hasChildren: false, children: [] }
             : { name, path: relativePath, type: 'file' }
-          current.children.push(newNode)
-          current.children.sort((a, b) => {
+          node.children.push(newNode)
+          node.children.sort((a, b) => {
             if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
             return a.name.localeCompare(b.name)
           })
-          return { fileTree: newTree }
+          return { fileTree: root }
         })
       },
 
@@ -578,19 +592,14 @@ export function createEditorStore() {
           if (!state.fileTree) return state
           const parts = relativePath.split('/').filter(Boolean)
           if (parts.length === 0) return state
-          const newTree = JSON.parse(JSON.stringify(state.fileTree)) as FileTreeNode
-          let current = newTree
-          for (let i = 0; i < parts.length - 1; i++) {
-            const child = current.children?.find((c) => c.name === parts[i] && c.type === 'directory')
-            if (!child) return state
-            current = child
-          }
+          const parentParts = parts.slice(0, -1)
+          const { root, node, depth } = cloneDirPath(state.fileTree, parentParts)
+          if (depth < parentParts.length || !node.children) return state
           const targetName = parts[parts.length - 1]
-          if (!current.children) return state
-          const idx = current.children.findIndex((c) => c.name === targetName)
+          const idx = node.children.findIndex((c) => c.name === targetName)
           if (idx === -1) return state
-          current.children.splice(idx, 1)
-          return { fileTree: newTree }
+          node.children.splice(idx, 1)
+          return { fileTree: root }
         })
       },
 
