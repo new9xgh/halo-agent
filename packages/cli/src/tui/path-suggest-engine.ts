@@ -1,8 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { IMAGE_EXTS } from '@turmind/halo-core'
 import type { PathItem } from './components/path-suggest.js'
-
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 
 /** What kind of `@` reference is currently being typed.
  *  - file/image: insert file content / image (resolveRefs, client-side)

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { IMAGE_EXTS, imageMimeFromExt } from '@turmind/halo-core'
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 const MAX_FILE_BYTES = 100 * 1024
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -10,17 +10,6 @@ export interface ResolvedInput {
   images: Array<{ data: string; mimeType: string }>
   attachments: string[]
   warnings: string[]
-}
-
-function mimeFromExt(ext: string): string {
-  switch (ext) {
-    case '.png': return 'image/png'
-    case '.jpg': case '.jpeg': return 'image/jpeg'
-    case '.gif': return 'image/gif'
-    case '.webp': return 'image/webp'
-    case '.bmp': return 'image/bmp'
-    default: return 'application/octet-stream'
-  }
 }
 
 // Matches @file or @image followed by a quoted or unquoted path
@@ -65,7 +54,10 @@ export function resolveRefs(input: string, workspace: string): ResolvedInput {
           continue
         }
         const data = fs.readFileSync(resolved).toString('base64')
-        images.push({ data, mimeType: mimeFromExt(ext) })
+        // Explicit `@image foo.tiff` forces the image path even for an ext the
+        // table doesn't know — tag it octet-stream and let the model reject it,
+        // as before.
+        images.push({ data, mimeType: imageMimeFromExt(ext) ?? 'application/octet-stream' })
       } else {
         const relPath = path.relative(workspace, resolved)
         if (stat.size > MAX_FILE_BYTES) {

@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs'
 import { Readable } from 'node:stream'
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { type FileTreeNode } from '@turmind/halo-core'
+import { imageMimeFromExt, type FileTreeNode } from '@turmind/halo-core'
 import { isInTempDir } from '../channels/shared/media.js'
 import { resolveProjectPath, validatePath } from './workspace-path.js'
 
@@ -423,12 +423,11 @@ export function createFileRoutes() {
     }
   })
 
-  // Extension → MIME type for inline viewing
+  // Extension → MIME type for inline viewing. Images (incl. svg / ico / avif)
+  // come from core's shared table; the rest is this route's own doc/AV list.
   const MIME_MAP: Record<string, string> = {
     pdf: 'application/pdf',
     html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-    webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
     mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/quicktime',
     mp3: 'audio/mpeg', wav: 'audio/wav', flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4',
   }
@@ -464,7 +463,7 @@ export function createFileRoutes() {
 
       const fileName = path.basename(filePath)
       const ext = fileName.split('.').pop()?.toLowerCase() ?? ''
-      const mime = inline ? (MIME_MAP[ext] ?? 'application/octet-stream') : 'application/octet-stream'
+      const mime = inline ? (imageMimeFromExt(ext) ?? MIME_MAP[ext] ?? 'application/octet-stream') : 'application/octet-stream'
       const disposition = inline ? `inline; filename="${encodeURIComponent(fileName)}"` : `attachment; filename="${encodeURIComponent(fileName)}"`
       const fileSize = stat.size
 

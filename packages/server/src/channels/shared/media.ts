@@ -9,6 +9,7 @@
  */
 import path from 'node:path'
 import os from 'node:os'
+import { IMAGE_EXTS } from '@turmind/halo-core'
 
 /** OS temp dir, resolved (e.g. /tmp on unix, C:\Users\…\Temp on Windows).
  *  Channels treat files here as a valid media source alongside the
@@ -64,7 +65,6 @@ export function isMediaPathAllowed(filePath: string, workspacePath: string): boo
   return resolved === ws || resolved.startsWith(ws + path.sep) || isInTempDir(resolved)
 }
 
-export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
 export const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.avi'])
 export const VOICE_EXTS = new Set(['.ogg', '.oga', '.opus'])
 

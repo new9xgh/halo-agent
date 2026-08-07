@@ -3,6 +3,7 @@ import { streamSSE } from 'hono/streaming'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
+import { imageMimeFromExt } from '@turmind/halo-core'
 import type { ChannelDb } from '../db/channel-db.js'
 import type { WebChannel } from '../channels/web/handler.js'
 import {
@@ -270,13 +271,14 @@ export function createWebRoutes(deps: { db: ChannelDb; channel: WebChannel }) {
     if (stat.isDirectory()) return c.json({ error: 'cannot serve directory' }, 400)
 
     const ext = path.default.extname(real).toLowerCase()
-    const mimeMap: Record<string, string> = {
-      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+    // Images come from core's shared table (so a new format lands here too);
+    // this route additionally serves the handful of non-image types the web
+    // chat renders inline.
+    const nonImageMimes: Record<string, string> = {
       '.mp4': 'video/mp4', '.webm': 'video/webm',
       '.pdf': 'application/pdf', '.txt': 'text/plain',
     }
-    const contentType = mimeMap[ext] || 'application/octet-stream'
+    const contentType = imageMimeFromExt(ext) || nonImageMimes[ext] || 'application/octet-stream'
     const fileName = path.default.basename(resolved)
     const data = fs.readFileSync(real)
 

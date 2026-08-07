@@ -193,6 +193,9 @@ importers:
       '@turmind/halo-acp-adapter':
         specifier: workspace:*
         version: link:../acp-adapter
+      '@turmind/halo-core':
+        specifier: workspace:*
+        version: link:../core
       '@turmind/halo-server':
         specifier: workspace:*
         version: link:../server

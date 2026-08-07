@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@turmind/halo-acp-adapter": "workspace:*",
+    "@turmind/halo-core": "workspace:*",
     "@turmind/halo-server": "workspace:*",
     "ink": "^7.0.3",
     "ink-spinner": "^5.0.0",

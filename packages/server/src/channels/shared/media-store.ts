@@ -10,11 +10,17 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { extFromImageMime } from '@turmind/halo-core'
 
 /** Image MIME types vision APIs accept as inline base64 blocks. Anything else
  *  must not reach the model as an image block — the API rejects the whole
  *  request. Single source for the web channel's inbound filter and
- *  session-manager's buildInput (admin WS images arrive there unfiltered). */
+ *  session-manager's buildInput (admin WS images arrive there unfiltered).
+ *
+ *  Deliberately NOT derived from core's image table: this is the *vision API's*
+ *  format list, not halo's. bmp is a first-class halo image (channels send it,
+ *  `@image` inlines it) yet Anthropic rejects it, and a format added to core
+ *  later must not silently start being sent to the model. */
 export const VISION_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 
 /**
@@ -30,11 +36,9 @@ export function inferImageMime(buf: Buffer): string {
   return 'image/jpeg'
 }
 
-const EXT_BY_MIME: Record<string, string> = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/gif': '.gif',
-  'image/webp': '.webp',
+/** Non-image types channels deliver. The image half of this lookup lives in
+ *  core (`extFromImageMime`) — see `extForMime`. */
+const EXT_BY_AV_MIME: Record<string, string> = {
   'video/mp4': '.mp4',
   'audio/silk': '.silk',
   'audio/wav': '.wav',
@@ -43,6 +47,10 @@ const EXT_BY_MIME: Record<string, string> = {
   'audio/ogg': '.ogg',
   'audio/mp4': '.m4a',
   'application/pdf': '.pdf',
+}
+
+function extForMime(mime: string): string | undefined {
+  return extFromImageMime(mime) ?? EXT_BY_AV_MIME[mime]
 }
 
 function inferExtFromBytes(buf: Buffer): string {
@@ -94,7 +102,7 @@ export async function saveInboundMedia(params: SaveMediaParams): Promise<string>
   if (params.originalFilename) {
     filename = `${ts}_${suffix}_${sanitizeFilename(params.originalFilename)}`
   } else {
-    const ext = params.mimeType ? (EXT_BY_MIME[params.mimeType] ?? inferExtFromBytes(params.buffer))
+    const ext = params.mimeType ? (extForMime(params.mimeType) ?? inferExtFromBytes(params.buffer))
                                 : inferExtFromBytes(params.buffer)
     filename = `${params.kind}_${ts}_${suffix}${ext}`
   }
