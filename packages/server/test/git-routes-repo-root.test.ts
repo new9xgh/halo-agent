@@ -138,6 +138,95 @@ describe('git routes: isRepoRoot gate on read endpoints', () => {
   })
 })
 
+describe('git routes: isRepoRoot gate on write endpoints', () => {
+  // Counterpart to the read gate above: run from a nested workspace, the write
+  // commands used to operate on the ANCESTOR repo — stage into its index,
+  // commit onto its HEAD, push its commits, rewrite its origin URL. Pin the
+  // guard per endpoint (409 + the file's `{ error }` shape) and prove the
+  // ancestor repo is left untouched. `/git/init` stays ungated (covered above).
+  let ancestor: string
+  let nested: string
+  const app = createGitRoutes()
+
+  const post = async (route: string, body: Record<string, unknown>) => {
+    const res = await app.request(route, { method: 'POST', body: JSON.stringify(body) })
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> }
+  }
+
+  beforeAll(() => {
+    ancestor = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-git-writes-'))
+    git(ancestor, 'init')
+    fs.writeFileSync(path.join(ancestor, 'tracked.txt'), 'ancestor content')
+    git(ancestor, 'add', '-A')
+    git(ancestor, 'commit', '-m', 'ancestor commit')
+    git(ancestor, 'remote', 'add', 'origin', 'https://github.com/ancestor-org/private-repo.git')
+
+    nested = path.join(ancestor, 'sub', 'workspace')
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(nested, 'file.txt'), 'nested content')
+  })
+
+  afterAll(() => {
+    fs.rmSync(ancestor, { recursive: true, force: true })
+  })
+
+  it('every write endpoint rejects a nested workspace with 409 { error }', async () => {
+    const attempts: Array<[string, Record<string, unknown>]> = [
+      ['/git/stage', { projectId: nested, paths: ['file.txt'] }],
+      ['/git/unstage', { projectId: nested, paths: ['file.txt'] }],
+      ['/git/commit', { projectId: nested, message: 'nope' }],
+      ['/git/push', { projectId: nested }],
+      ['/git/pull', { projectId: nested }],
+      ['/git/remote', { projectId: nested, name: 'evil', url: 'https://github.com/evil/hijack.git' }],
+      ['/git/remote/protocol', { projectId: nested, to: 'ssh' }],
+    ]
+    for (const [route, body] of attempts) {
+      const { status, body: json } = await post(route, body)
+      expect(status, route).toBe(409)
+      expect(json.error, route).toBe('Not a git repository root')
+    }
+  })
+
+  it('the rejected writes left the ancestor repo untouched', async () => {
+    // Nothing staged into its index, history still one commit, remotes intact.
+    expect(git(ancestor, 'diff', '--cached', '--name-only').trim()).toBe('')
+    expect(git(ancestor, 'rev-list', '--count', 'HEAD').trim()).toBe('1')
+    expect(git(ancestor, 'remote').trim()).toBe('origin')
+    expect(git(ancestor, 'remote', 'get-url', 'origin').trim()).toBe(
+      'https://github.com/ancestor-org/private-repo.git',
+    )
+  })
+
+  it('a repo-root workspace still passes every gated write', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-git-root-'))
+    try {
+      git(root, 'init')
+      // The route's simple-git children don't get the helper's env identity.
+      git(root, 'config', 'user.email', 'test@example.com')
+      git(root, 'config', 'user.name', 'test')
+      fs.writeFileSync(path.join(root, 'a.txt'), 'v1')
+      git(root, 'add', '-A')
+      git(root, 'commit', '-m', 'init')
+      fs.writeFileSync(path.join(root, 'a.txt'), 'v2')
+
+      expect((await post('/git/stage', { projectId: root, paths: ['a.txt'] })).body).toEqual({ ok: true })
+      expect((await post('/git/unstage', { projectId: root, paths: ['a.txt'] })).body).toEqual({ ok: true })
+      await post('/git/stage', { projectId: root, paths: ['a.txt'] })
+      const commit = await post('/git/commit', { projectId: root, message: 'second' })
+      expect(commit.status).toBe(200)
+      expect(commit.body.ok).toBe(true)
+      expect(git(root, 'rev-list', '--count', 'HEAD').trim()).toBe('2')
+
+      expect((await post('/git/remote', { projectId: root, url: 'https://github.com/me/mine.git' })).body).toEqual({ ok: true })
+      const proto = await post('/git/remote/protocol', { projectId: root, to: 'ssh' })
+      expect(proto.status).toBe(200)
+      expect(proto.body.url).toBe('git@github.com:me/mine.git')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('git routes: a plain non-repo folder (not nested in any repo)', () => {
   // The highest regression risk of the guard change: the ordinary first-run
   // workspace. It must read as isRepo:false (gate ② empty state, no 500) and

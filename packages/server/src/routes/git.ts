@@ -75,23 +75,42 @@ export function createGitRoutes() {
    * the response shape stays the documented one so the client never reads
    * `undefined`.
    *
-   * On the write side, `/git/init` is the ONLY endpoint with a legitimate
-   * reason to bypass this gate: initializing a nested folder's own repo is
-   * exactly its purpose (see git-manager.ts init(), which deliberately tests
-   * isRepoRoot rather than checkIsRepo for the same reason). Every other write
-   * (stage/unstage/commit/push/pull/remote) is ungated only because the UI
-   * can't reach it from a non-root folder — the three-gate onboarding puts all
-   * write controls behind gate ①, which a nested workspace never passes. That
-   * is reachability, NOT semantic safety: run from a nested folder these
-   * commands operate on the ANCESTOR repo (stage into its index, commit onto
-   * its HEAD, push its commits to its remote, rewrite its origin URL). So if a
-   * write endpoint ever becomes callable from a non-root folder — new UI entry
-   * point, a tool, an API consumer — it must go through this guard first.
+   * Write endpoints carry the same gate via `getGitForWrite` below.
    */
   async function getGitForRead(projectId: string | undefined) {
     const res = await getGit(projectId)
     if ('error' in res) return res
     if (!(await res.git.isRepoRoot())) return { notRepo: true as const }
+    return res
+  }
+
+  /**
+   * `getGit` for WRITE endpoints — every write except `/git/init`: same
+   * resolution plus the same isRepoRoot gate. Run from a folder that merely
+   * sits inside an ancestor repo, these commands operate on the ANCESTOR repo
+   * (stage into its index, commit onto its HEAD, push its commits to its
+   * remote, rewrite its origin URL). The UI can't reach write controls from a
+   * non-root folder — the three-gate onboarding puts them behind gate ① — but
+   * that is reachability, not semantic safety: any other consumer (an agent
+   * tool, a script, a new UI entry point) must hit this wall instead of the
+   * ancestor repo.
+   *
+   * Unlike reads, where "not a repo" is a normal state answered with an
+   * empty-but-valid payload, a write on a non-root is an error. It reuses the
+   * `{ error, status }` result of the other guard failures, so callers return
+   * the documented `{ error: string }` shape — 409, because the operation
+   * conflicts with the folder's current state (git init would resolve it).
+   *
+   * `/git/init` must NEVER use this: initializing a nested folder's own repo
+   * is exactly its purpose (see git-manager.ts init(), which deliberately
+   * tests isRepoRoot rather than checkIsRepo for the same reason).
+   */
+  async function getGitForWrite(projectId: string | undefined) {
+    const res = await getGit(projectId)
+    if ('error' in res) return res
+    if (!(await res.git.isRepoRoot())) {
+      return { error: 'Not a git repository root', status: 409 as const }
+    }
     return res
   }
 
@@ -199,7 +218,7 @@ export function createGitRoutes() {
   app.post('/git/stage', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string; paths?: string[] }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!Array.isArray(body.paths) || body.paths.length === 0) {
         return c.json({ error: 'paths is required' }, 400)
@@ -218,7 +237,7 @@ export function createGitRoutes() {
   app.post('/git/unstage', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string; paths?: string[] }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!Array.isArray(body.paths) || body.paths.length === 0) {
         return c.json({ error: 'paths is required' }, 400)
@@ -237,7 +256,7 @@ export function createGitRoutes() {
   app.post('/git/commit', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string; message?: string }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (!body.message?.trim()) return c.json({ error: 'message is required' }, 400)
       const hash = await res.git.commit(body.message)
@@ -255,7 +274,7 @@ export function createGitRoutes() {
   app.post('/git/push', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       await res.git.push()
       notifyGitChanged()
@@ -271,7 +290,7 @@ export function createGitRoutes() {
   app.post('/git/pull', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       await res.git.pull()
       notifyGitChanged()
@@ -321,7 +340,7 @@ export function createGitRoutes() {
   app.post('/git/remote', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string; name?: string; url?: string }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       const url = body.url?.trim()
       if (!url) return c.json({ error: 'url is required' }, 400)
@@ -433,7 +452,7 @@ export function createGitRoutes() {
   app.post('/git/remote/protocol', async (c) => {
     try {
       const body = await c.req.json<{ projectId?: string; to?: 'https' | 'ssh' }>()
-      const res = await getGit(body.projectId)
+      const res = await getGitForWrite(body.projectId)
       if ('error' in res) return c.json({ error: res.error }, res.status)
       if (body.to !== 'https' && body.to !== 'ssh') {
         return c.json({ error: "to must be 'https' or 'ssh'" }, 400)
