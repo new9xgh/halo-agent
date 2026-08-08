@@ -738,6 +738,13 @@ export class SessionManager implements SessionManagerInternals {
     this.saveAgentState(session)
     this.sessions.delete(sessionId)
     console.debug(`[SessionManager] Released session ${sessionId}`)
+    // Deliberately NOT dropping the root's UIState here. Turn end is the wrong
+    // eviction point for the hot case: a session the admin has open (or a
+    // channel chat mid-conversation) would pay a full-file disk rehydrate on
+    // its very next message, every turn. And for the fire-and-forget pattern
+    // the root releases while its subs still run — their live buffers sit in
+    // the root's UIState. Eviction is the uiStore's idle sweep (10min TTL,
+    // gated on hasActiveWorkInTree), which this release makes eligible.
   }
 
   /**
@@ -2197,6 +2204,18 @@ export class SessionManager implements SessionManagerInternals {
 
   hasRunningSessions(): boolean {
     for (const session of this.sessions.values()) {
+      if (session.promise !== null || session.isCompacting) return true
+    }
+    return false
+  }
+
+  /** Any in-flight turn or compact anywhere in a root's session tree (root or
+   *  `root>…` descendants). SessionUIStoreHost member — the UI store's idle
+   *  sweep gates eviction on this, because a root's UIState carries its running
+   *  subs' live buffers even while the root itself is between turns. */
+  hasActiveWorkInTree(rootId: string): boolean {
+    for (const [id, session] of this.sessions) {
+      if (id !== rootId && !id.startsWith(`${rootId}>`)) continue
       if (session.promise !== null || session.isCompacting) return true
     }
     return false

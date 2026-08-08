@@ -35,7 +35,19 @@ export interface SessionUIStoreHost {
   getSessionById(id: string): { agentId: string; agentName: string } | null
   isSessionDeleted(id: string): boolean
   persistSessionFile(opts: SessionSaveOptions): void
+  /** True when any in-memory session in the root's tree has an in-flight turn
+   *  or compact. The idle sweep gates on this — a root's UIState carries its
+   *  running subs' live stream/tool buffers (fire-and-forget subs keep running
+   *  after the root's turn released), so it must never be evicted mid-work. */
+  hasActiveWorkInTree(rootId: string): boolean
 }
+
+/** How long a root's UIState may sit untouched (no event reduced in, no view
+ *  built) before the idle sweep evicts it. Deliberately above
+ *  `timeout.sessionGrace` (5min): a WS detach → grace-reattach cycle lands on
+ *  the still-warm state instead of paying a disk rehydrate. */
+const UI_STATE_IDLE_TTL_MS = 10 * 60_000
+const UI_STATE_SWEEP_PERIOD_MS = 60_000
 
 /**
  * SessionUIStore — owns the per-root-session UI log state (`UIState`) and the
@@ -65,9 +77,21 @@ export class SessionUIStore {
   private uiStateProjectPaths: Map<string, string | null> = new Map()
   /** Debounced persist timers — prevents flooding disk with writes during rapid tool loops */
   private persistTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+  /** Last activity (event reduced / view built) per uiStates key — the idle
+   *  sweep's eviction clock. Invariant: every uiStates key has an entry. */
+  private uiStateTouched: Map<string, number> = new Map()
 
   constructor(private host: SessionUIStoreHost) {
     this.db = host.getDb()
+    // Idle sweep: uiStates grew without bound (every root session ever driven
+    // or viewed pinned its full messageLog — up to ~3MB each — until manual
+    // archive/delete). Eviction-by-idleness is inherently time-driven: the
+    // event-driven candidates are either hot-path-dangerous (turn end would
+    // re-read the file from disk on EVERY next message of an admin-open
+    // session) or don't exist at all (view-only states never see a turn end;
+    // channel listeners never detach). Unref'd so the interval never holds a
+    // CLI/TUI process open; one per SessionManager, bounded by workspace count.
+    setInterval(() => this.sweepIdleUIStates(), UI_STATE_SWEEP_PERIOD_MS).unref()
   }
 
   // ── Event routing ──────────────────────────────────────────────────
@@ -227,6 +251,9 @@ export class SessionUIStore {
    * from the on-disk messages so the view is complete.
    */
   ensureUIState(rootId: string): UIState {
+    // Every access path (event reduce, view build, notification append) funnels
+    // through here — the one chokepoint where the idle clock can be reset.
+    this.uiStateTouched.set(rootId, Date.now())
     const existing = this.uiStates.get(rootId)
     if (existing) return existing
 
@@ -476,10 +503,46 @@ export class SessionUIStore {
   /**
    * Drop the in-memory UIState for a session (e.g. after stopSession / clear).
    * The disk file stays. This is a no-op if not loaded.
+   *
+   * A pending debounced persist is flushed BEFORE eviction: dropping first
+   * would let a later ensureUIState rehydrate from a disk file that's missing
+   * the last batch, and the next persist of that shorter log would overwrite
+   * the orphaned timer's eventual write — messages lost. Must not be called
+   * while the session tree is mid-turn (callers gate on that): flushing then
+   * would snapshot a temp in-flight assistant message that the turn's own
+   * flush would later duplicate.
    */
   dropUIState(sessionId: string): void {
+    const state = this.uiStates.get(sessionId)
+    if (state && this.persistTimers.has(sessionId)) this.flushPersist(sessionId, state)
     this.uiStates.delete(sessionId)
     this.uiStateProjectPaths.delete(sessionId)
+    this.uiStateTouched.delete(sessionId)
+  }
+
+  /**
+   * Evict UIStates whose tree has been idle past the TTL. This is THE eviction
+   * point for the common leak (channel / cron / admin-viewed sessions that just
+   * stop getting traffic) — archive and delete only cover explicit user action.
+   *
+   * Safety gates, in order:
+   *  - tree activity: an in-flight turn/compact anywhere in the tree keeps the
+   *    root's state (it holds the live sub buffers + streaming state);
+   *  - pending debounced persist counts as activity-in-progress? No — drop
+   *    flushes it first (see dropUIState), so a just-debounced write is safe.
+   *
+   * Re-entry cost after eviction: one loadSessionMessages disk read on the next
+   * event/view — turn-start cadence at worst (ensureSession already does a
+   * full-file read there anyway), never per-event.
+   */
+  private sweepIdleUIStates(): void {
+    const cutoff = Date.now() - UI_STATE_IDLE_TTL_MS
+    for (const [rootId, touched] of this.uiStateTouched) {
+      if (touched > cutoff) continue
+      if (this.host.hasActiveWorkInTree(rootId)) continue
+      this.dropUIState(rootId)
+      console.debug(`[SessionUIStore] evicted idle UIState ${rootId}`)
+    }
   }
 
   // ── Operations the manager's session-lifecycle methods delegate here ──
@@ -522,6 +585,7 @@ export class SessionUIStore {
   purge(id: string): void {
     this.uiStates.delete(id)
     this.uiStateProjectPaths.delete(id)
+    this.uiStateTouched.delete(id)
     const timer = this.persistTimers.get(id)
     if (timer) {
       clearTimeout(timer)

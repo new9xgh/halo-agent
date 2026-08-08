@@ -114,6 +114,40 @@ describe('deleteSession — purge + tombstone wiring (UIStore, first knife)', ()
   })
 })
 
+describe('dropUIState → ensureUIState roundtrip (uiStates leak fix)', () => {
+  it('a dropped state rehydrates from disk with the full messageLog', () => {
+    seedRow('rootR', { agentId: 'default' })
+    sm.appendUserMessage('rootR', 'first msg')
+    sm.emitEvent('rootR', { type: 'complete' })  // synchronous flush to disk
+    sm.appendNotification('rootR', 'a system note')
+    expect(sm.getCachedUIState('rootR')!.messageLog).toHaveLength(2)
+
+    sm.dropUIState('rootR')
+    expect(sm.getCachedUIState('rootR')).toBeNull()
+
+    // getUIState → ensureUIState → loadSessionMessages: the log must be
+    // complete, or the idle sweep would silently truncate history.
+    const state = sm.getUIState('rootR')
+    expect(state).not.toBeNull()
+    expect(state!.messageLog.map((m) => m.content)).toEqual(['first msg', 'a system note'])
+  })
+
+  it('drop with a PENDING debounced write does not lose the last batch', () => {
+    // The brief's pit #1: UI persistence is 500ms-debounced. A drop that
+    // discards the timer without flushing loses the final messages; a drop
+    // that leaves the timer running forks the log (rehydrate reads short
+    // file, orphaned timer later overwrites with a different tail).
+    seedRow('rootP', { agentId: 'default' })
+    sm.appendUserMessage('rootP', 'not yet on disk')  // debounced 'user' event
+
+    sm.dropUIState('rootP')  // must flush-then-evict
+
+    const state = sm.getUIState('rootP')
+    expect(state).not.toBeNull()
+    expect(state!.messageLog.map((m) => m.content)).toEqual(['not yet on disk'])
+  })
+})
+
 describe('query store wired into the real manager (second knife)', () => {
   it('getSessionById / listSessions resolve status against the real db', () => {
     seedRow('q1', { updatedAt: 100 })

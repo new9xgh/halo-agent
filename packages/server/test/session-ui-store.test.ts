@@ -38,6 +38,7 @@ function makeHost(over: Partial<Host> = {}): { host: Host; persisted: Array<{ se
     getSessionById: () => null,
     isSessionDeleted: () => false,
     persistSessionFile: (opts) => { persisted.push(opts as { sessionId: string }) },
+    hasActiveWorkInTree: () => false,
     ...over,
   }
   return { host, persisted }
@@ -186,5 +187,63 @@ describe('SessionUIStore UIState access', () => {
     expect(store.getCachedUIState('s1')).not.toBeNull()
     store.dropUIState('s1')
     expect(store.getCachedUIState('s1')).toBeNull()
+  })
+})
+
+describe('SessionUIStore idle sweep (uiStates leak fix)', () => {
+  /** Reach the private sweep + clock — the sweep interval is 60s/10min real
+   *  time, so tests drive it directly instead of advancing fake timers. */
+  function sweepNow(store: InstanceType<typeof SessionUIStore>, idleFor: Record<string, number> = {}): void {
+    const s = store as unknown as {
+      uiStateTouched: Map<string, number>
+      sweepIdleUIStates(): void
+    }
+    for (const [id, ms] of Object.entries(idleFor)) {
+      s.uiStateTouched.set(id, Date.now() - ms)
+    }
+    s.sweepIdleUIStates()
+  }
+  const PAST_TTL = 11 * 60_000
+
+  it('evicts a state idle past the TTL, flushing its pending debounced write first', () => {
+    vi.useFakeTimers()
+    try {
+      const { host, persisted } = makeHost()
+      const store = new SessionUIStore(host)
+      store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+      expect(persisted).toHaveLength(0)  // still debounced
+
+      sweepNow(store, { s1: PAST_TTL })
+
+      // Evicted AND the pending batch landed via the drop-time flush — without
+      // the flush the write would ride an orphaned timer, and a rehydrate in
+      // between would fork the log.
+      expect(store.getCachedUIState('s1')).toBeNull()
+      expect(persisted.some((p) => p.sessionId === 's1')).toBe(true)
+      vi.advanceTimersByTime(500)
+      expect(persisted.filter((p) => p.sessionId === 's1')).toHaveLength(1)  // timer was cleared, not re-fired
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a state whose tree still has active work (mid-turn / running subs)', () => {
+    const { host } = makeHost({ hasActiveWorkInTree: (id) => id === 's1' })
+    const store = new SessionUIStore(host)
+    store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+
+    sweepNow(store, { s1: PAST_TTL })
+
+    expect(store.getCachedUIState('s1')).not.toBeNull()
+  })
+
+  it('keeps a recently-touched state', () => {
+    const { host } = makeHost()
+    const store = new SessionUIStore(host)
+    store.emitEvent('s1', { type: 'user', text: 'hi' } as AgentSessionEvent)
+
+    sweepNow(store)  // touched just now — inside TTL
+
+    expect(store.getCachedUIState('s1')).not.toBeNull()
   })
 })
