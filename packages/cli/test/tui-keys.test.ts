@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import os from 'node:os'
 import { createElement as h } from 'react'
 import { render } from 'ink'
-import { fakeTty, captureOutput, stripAnsi, flush } from './fixtures/fake-tty.js'
+import { fakeTty, captureOutput, stripAnsi, flush, waitFor, INK_TEST_OPTIONS } from './fixtures/fake-tty.js'
 
 // The TUI persists input history to ~/.halo/global/tui-history.json; a test
 // that submits a message must not append to the developer's real history.
@@ -77,18 +77,26 @@ async function mountApp() {
   const stdin = fakeTty()
   const stub = stubHarness()
   const app = render(h(App, { harness: stub.harness, verbose: false }), {
-    stdout, stdin, patchConsole: false, exitOnCtrlC: false,
+    stdout, stdin, ...INK_TEST_OPTIONS,
   })
-  await flush(120)
-  const press = async (bytes: string, wait = 90) => {
+  await flush(app)
+  const press = async (bytes: string) => {
     stdin.write(bytes)
-    await flush(wait)
+    await flush(app)
   }
+  const frame = () => stripAnsi(read())
   let exited = false
   app.waitUntilExit().then(() => { exited = true }, () => { exited = true })
   return {
     press,
-    frame: () => stripAnsi(read()),
+    frame,
+    /** Forget frames written so far, so the next assertion reads fresh output. */
+    resetFrames: () => read.reset(),
+    /** Press a key, then wait until the frame it produces shows `text`. */
+    async pressUntil(bytes: string, text: string) {
+      await press(bytes)
+      await waitFor(() => frame().includes(text), `${JSON.stringify(text)} after key ${JSON.stringify(bytes)}`, frame)
+    },
     interrupts: stub.interrupts,
     exited: () => exited,
     async done() {
@@ -101,38 +109,50 @@ async function mountApp() {
 const ESC = '\x1b'
 const ENTER = '\r'
 const CTRL_O = '\x0f'
+const CTRL_C = '\x03'
+
+/**
+ * Settle time for the NEGATIVE assertions ("Esc did not interrupt", "one Ctrl+C
+ * did not exit"). A positive assertion can poll until it comes true, but proving
+ * absence needs a real window in which the wrong thing could have happened —
+ * several render cycles plus a fixed grace period, so the test isn't merely
+ * asserting "faster than the bug".
+ */
+async function flushAndSettle(t: Awaited<ReturnType<typeof mountApp>>) {
+  for (let i = 0; i < 3; i++) await t.press('')
+  await new Promise((r) => setTimeout(r, 150))
+}
 
 /** Get the app into `running` state the way a real turn does: submit a message
- *  whose `send()` resolves to 'running'. */
+ *  whose `send()` resolves to 'running'. The hint switching to "esc to
+ *  interrupt" is the observable proof that `state.running` is set — waiting for
+ *  it removes the "did the turn start yet?" race from every test below. */
 async function startTurn(t: Awaited<ReturnType<typeof mountApp>>) {
   await t.press('hello')
-  await t.press(ENTER, 140)
+  await t.pressUntil(ENTER, 'esc to interrupt')
 }
 
 describe('E-H1 — Esc while a modal is open must not interrupt the turn', () => {
-  beforeEach(() => { /* each test mounts its own ink instance */ })
-
   it('baseline: Esc with nothing open DOES interrupt the running turn', async () => {
     const t = await mountApp()
     await startTurn(t)
     expect(t.interrupts()).toBe(0)
-    await t.press(ESC)
+    await t.pressUntil(ESC, 'interrupting')
     expect(t.interrupts()).toBe(1)
-    expect(t.frame()).toContain('interrupting')
     await t.done()
   })
 
   it('log navigator open: Esc closes it and leaves the turn running', async () => {
     const t = await mountApp()
     await startTurn(t)
-    await t.press(CTRL_O)
-    expect(t.frame()).toContain('Session log')
-    await t.press(ESC)
+    await t.pressUntil(CTRL_O, 'Session log')
+    // Navigator gone → the input box (and its hint) is back. Reset first: the
+    // reader accumulates, so the pre-navigator hint is still in the buffer.
+    t.resetFrames()
+    await t.pressUntil(ESC, 'esc to interrupt')
     expect(t.interrupts()).toBe(0)
-    // Navigator gone → the input box (and its hint) is back.
-    expect(t.frame()).toContain('esc to interrupt')
     // …and Esc now reaches the interrupt handler again.
-    await t.press(ESC)
+    await t.pressUntil(ESC, 'interrupting')
     expect(t.interrupts()).toBe(1)
     await t.done()
   })
@@ -140,10 +160,10 @@ describe('E-H1 — Esc while a modal is open must not interrupt the turn', () =>
   it('log viewer open: Esc closes it and leaves the turn running', async () => {
     const t = await mountApp()
     await startTurn(t)
-    await t.press(CTRL_O)
-    await t.press(ENTER, 160) // pick the root session → viewer opens
-    expect(t.frame()).toContain('q to close')
-    await t.press(ESC)
+    await t.pressUntil(CTRL_O, 'Session log')
+    await t.pressUntil(ENTER, 'q to close') // pick the root session → viewer opens
+    t.resetFrames()
+    await t.pressUntil(ESC, 'esc to interrupt')
     expect(t.interrupts()).toBe(0)
     await t.done()
   })
@@ -151,12 +171,14 @@ describe('E-H1 — Esc while a modal is open must not interrupt the turn', () =>
   it('completion popup open: Esc dismisses the popup and leaves the turn running', async () => {
     const t = await mountApp()
     await startTurn(t)
-    await t.press('/h')
-    expect(t.frame()).toContain('show help')
+    await t.pressUntil('/h', 'show help')
     await t.press(ESC)
+    // The popup owns this Esc: give the interrupt path every chance to fire
+    // wrongly (it would land within a poll tick) before asserting it didn't.
+    await flushAndSettle(t)
     expect(t.interrupts()).toBe(0)
     // Second Esc — popup already dismissed, so this one interrupts.
-    await t.press(ESC)
+    await t.pressUntil(ESC, 'interrupting')
     expect(t.interrupts()).toBe(1)
     await t.done()
   })
@@ -164,11 +186,12 @@ describe('E-H1 — Esc while a modal is open must not interrupt the turn', () =>
   it('Ctrl+C is unaffected by the guard — still exits (twice) with a modal open', async () => {
     const t = await mountApp()
     await startTurn(t)
-    await t.press(CTRL_O)
-    await t.press('\x03')
+    await t.pressUntil(CTRL_O, 'Session log')
+    await t.press(CTRL_C)
+    await flushAndSettle(t)
     expect(t.exited()).toBe(false)
-    await t.press('\x03')
-    expect(t.exited()).toBe(true)
+    await t.press(CTRL_C)
+    await waitFor(() => t.exited(), 'the app to exit on the second Ctrl+C', t.frame)
     expect(t.interrupts()).toBe(0)
     await t.done()
   })

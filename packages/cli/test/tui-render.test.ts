@@ -6,7 +6,7 @@ import { LogViewer } from '../src/tui/components/log-viewer.js'
 import { Streaming } from '../src/tui/components/streaming.js'
 import { truncateLines, messagesToLogLines } from '../src/tui/app.js'
 import type { ChatBlock } from '../src/tui/types.js'
-import { fakeTty, captureOutput, stripAnsi, displayWidth, flush } from './fixtures/fake-tty.js'
+import { fakeTty, captureOutput, stripAnsi, displayWidth, flush, INK_TEST_OPTIONS } from './fixtures/fake-tty.js'
 
 /**
  * Byte-level assertions on what ink actually writes to a (pseudo-)TTY. ink's
@@ -14,7 +14,8 @@ import { fakeTty, captureOutput, stripAnsi, displayWidth, flush } from './fixtur
  * only truncates what a component asks it to — so the three fixes below can
  * only be pinned by looking at the emitted frame.
  *
- * Mutation checks (each verified to go red when the fix is reverted):
+ * Mutation checks (each verified to go red when the fix is reverted, with and
+ * without CI=true in the environment):
  *   E-H2 — drop `sanitizeToolOutput` from `truncateLines` / `messagesToLogLines`
  *          → "no CR reaches the terminal" tests fail.
  *   E-M1 — put the hand-rolled `truncateForCols` back in LogViewer (or drop
@@ -22,17 +23,25 @@ import { fakeTty, captureOutput, stripAnsi, displayWidth, flush } from './fixtur
  *          the fixed-height viewport pushes the footer out of the frame.
  *   E-M2 — render `liveText` instead of the row-capped tail → a long streaming
  *          reply makes ink emit clearTerminal (`2J` + `3J`) per frame.
+ *
+ * Every render goes through INK_TEST_OPTIONS — see fake-tty.ts for why
+ * `interactive: true` is mandatory rather than cosmetic.
  */
 
 async function renderFrame(node: React.ReactElement, columns = 80, rows = 24): Promise<string> {
   const stdout = fakeTty(columns, rows)
   const read = captureOutput(stdout)
   const stdin = fakeTty()
-  const app = render(node, { stdout, stdin, patchConsole: false, exitOnCtrlC: false })
-  await flush()
+  const app = render(node, { stdout, stdin, ...INK_TEST_OPTIONS })
+  await flush(app)
   const out = read()
   app.unmount()
   await app.waitUntilExit()
+  // Guard the whole file's negative assertions: an empty frame satisfies every
+  // `not.toMatch(/\r/)` / `isWellFormed()` check for the wrong reason. That is
+  // exactly how non-interactive ink (CI=true) turned real coverage into silent
+  // vacuous passes — fail loudly instead.
+  if (out === '') throw new Error('ink wrote no frame — INK_TEST_OPTIONS.interactive must be true')
   return out
 }
 
@@ -149,12 +158,16 @@ describe('E-M2 — the live streaming zone is capped to the terminal height', ()
       h(Box, { key: 'i', borderStyle: 'round' }, h(Text, null, '> ')),
     )
     let text = ''
-    const app = render(frame(text), { stdout, stdin, patchConsole: false, exitOnCtrlC: false })
-    await flush(60)
+    const app = render(frame(text), { stdout, stdin, ...INK_TEST_OPTIONS })
+    await flush(app)
     for (let i = 0; i < lineCount; i++) {
       text += `paragraph line ${i}\n`
       app.rerender(frame(text))
-      await flush(45)
+      // Per-frame flush, not a fixed sleep: every frame must actually reach
+      // stdout, otherwise ink coalesces the stream into one write and the
+      // clearTerminal check below never sees the incremental growth that
+      // triggers it.
+      await flush(app)
     }
     const out = read()
     app.unmount()
@@ -187,5 +200,29 @@ describe('E-M2 — the live streaming zone is capped to the terminal height', ()
     const plain = stripAnsi(out)
     expect(plain).toContain('line 59')
     expect(plain).not.toContain('line 0\n')
+  })
+})
+
+describe('the harness itself renders live frames regardless of environment', () => {
+  // Meta-test: the CI failure was environmental, not logical — ink writes
+  // dynamic frames only in interactive mode, and `is-in-ci` flips that off on
+  // any machine with CI set. Pin it here so a future edit to INK_TEST_OPTIONS
+  // (or an ink upgrade that changes the default) fails one obvious test instead
+  // of quietly hollowing out every assertion above.
+  it('emits a frame while mounted, not just at unmount', async () => {
+    const stdout = fakeTty(80, 24)
+    const read = captureOutput(stdout)
+    const app = render(h(Text, null, 'LIVE-FRAME-MARKER'), {
+      stdout, stdin: fakeTty(), ...INK_TEST_OPTIONS,
+    })
+    await flush(app)
+    const whileMounted = read()
+    app.unmount()
+    await app.waitUntilExit()
+    expect(whileMounted).toContain('LIVE-FRAME-MARKER')
+  })
+
+  it('INK_TEST_OPTIONS forces interactive mode even when CI is set', () => {
+    expect(INK_TEST_OPTIONS.interactive).toBe(true)
   })
 })

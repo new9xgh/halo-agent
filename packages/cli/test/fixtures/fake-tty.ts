@@ -26,11 +26,19 @@ export function fakeTty(columns = 80, rows = 24): FakeTty {
   return s
 }
 
-/** Collect everything written to a fake stdout. */
-export function captureOutput(stream: PassThrough): () => string {
-  const chunks: string[] = []
+/**
+ * Collect everything written to a fake stdout.
+ *
+ * `reset()` drops what's been seen so far — needed for "is the modal gone?":
+ * the reader returns accumulated output, so a modal's bytes linger forever
+ * once written and `not.toContain(...)` on the running total would pass for
+ * the wrong reason. Reset, press, then assert on freshly written frames.
+ */
+export function captureOutput(stream: PassThrough): (() => string) & { reset(): void } {
+  let chunks: string[] = []
   stream.on('data', (c: Buffer | string) => chunks.push(c.toString()))
-  return () => chunks.join('')
+  const read = () => chunks.join('')
+  return Object.assign(read, { reset() { chunks = [] } })
 }
 
 /** Drop ANSI escapes (OSC, CSI, two-byte) so a frame can be read as text. */
@@ -63,7 +71,60 @@ export function displayWidth(s: string): number {
   return w
 }
 
-/** Let ink's React commits + throttled frame writes settle. */
-export function flush(ms = 120): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms))
+/**
+ * ink 7 render options every TUI test must pass.
+ *
+ * `interactive: true` is load-bearing, not a nicety: ink resolves
+ * `interactive ?? (!isInCi && stdout.isTTY)`, and `is-in-ci` trips on a bare
+ * `CI=true` (GitHub Actions sets it). Non-interactive ink "writes only the
+ * final frame at unmount" — dynamic output is buffered in `lastOutput` and
+ * never reaches stdout while the app runs, so on CI every frame assertion
+ * either failed outright or, worse, passed vacuously against an empty string
+ * (`expect('').not.toMatch(/\r/)`). Forcing interactive mode makes the fake
+ * TTY behave the same everywhere; these tests exist precisely to assert on
+ * live interactive frames.
+ */
+export const INK_TEST_OPTIONS = {
+  patchConsole: false,
+  exitOnCtrlC: false,
+  interactive: true,
+} as const
+
+/**
+ * Wait until ink has flushed pending render output to stdout, then let queued
+ * async work (effects, harness promises, ink's own render throttle) drain.
+ *
+ * `waitUntilRenderFlush()` covers the render ink already knows about; the
+ * extra macrotask hop covers state updates that a keypress kicks off
+ * asynchronously (an effect → setState → another render). Deterministic on a
+ * loaded CI runner, unlike a bare `setTimeout`.
+ */
+export async function flush(instance?: { waitUntilRenderFlush(): Promise<void> }): Promise<void> {
+  if (instance) await instance.waitUntilRenderFlush()
+  await new Promise((r) => setTimeout(r, 0))
+  if (instance) await instance.waitUntilRenderFlush()
+}
+
+/**
+ * Poll until `predicate` holds, or fail with `what` and the last frame seen.
+ *
+ * The keypress tests need this: ink dispatches a key synchronously, but the
+ * modal it opens lands one or more async React commits later, so "press, wait
+ * a fixed 90ms, assert" is a race that a slow runner loses. Polling turns the
+ * wait into "as long as it actually takes, up to a generous ceiling" without
+ * weakening what's asserted — the predicate IS the assertion, and a timeout
+ * throws with the frame for diagnosis.
+ */
+export async function waitFor(
+  predicate: () => boolean,
+  what: string,
+  frame: () => string = () => '(not captured)',
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for ${what}.\nLast frame:\n${frame()}`)
 }
