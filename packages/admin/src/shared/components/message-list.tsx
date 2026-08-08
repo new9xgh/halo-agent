@@ -50,14 +50,19 @@ interface MessageListProps {
    *  `resolveTargetSession` would mis-resolve them onto the live session and
    *  the server refuses `exchange:delete` on archived sessions anyway. */
   readOnly?: boolean
+  /** Number of user turns that exist ABOVE `messages[0]` in the full session
+   *  log. The chat panel render-windows long sessions (slices the tail), but
+   *  the server's `exchange:delete` counts ordinals over the whole log — this
+   *  base keeps the two aligned. Defaults to 0 (unsliced callers). */
+  userOrdinalBase?: number
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Entry point
 // ═══════════════════════════════════════════════════════════════════════
 
-export function MessageList({ messages, debugMode, readOnly }: MessageListProps) {
-  return <ExchangeView messages={messages} debugMode={debugMode} readOnly={readOnly} />
+export function MessageList({ messages, debugMode, readOnly, userOrdinalBase }: MessageListProps) {
+  return <ExchangeView messages={messages} debugMode={debugMode} readOnly={readOnly} userOrdinalBase={userOrdinalBase} />
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -87,7 +92,7 @@ function buildExchanges(messages: ChatMessage[]): Exchange[] {
   return exchanges
 }
 
-function ExchangeView({ messages, debugMode, readOnly }: { messages: ChatMessage[]; debugMode?: boolean; readOnly?: boolean }) {
+function ExchangeView({ messages, debugMode, readOnly, userOrdinalBase }: { messages: ChatMessage[]; debugMode?: boolean; readOnly?: boolean; userOrdinalBase?: number }) {
   const exchanges = useMemo(() => buildExchanges(messages), [messages])
 
   // Every message in one MessageList belongs to one session, so resolve
@@ -102,8 +107,9 @@ function ExchangeView({ messages, debugMode, readOnly }: { messages: ChatMessage
   // Assign each user-role exchange its 0-based ordinal among user turns — the
   // same count the server derives over the root UI log, so a Delete click maps
   // to the right turn regardless of id/content divergence. Non-user leading
-  // exchanges get -1 (no Delete button).
-  let userCount = 0
+  // exchanges get -1 (no Delete button). `userOrdinalBase` offsets the count
+  // when the caller passed a tail slice of the log (chat-panel windowing).
+  let userCount = userOrdinalBase ?? 0
 
   return (
     <div className="flex flex-col">

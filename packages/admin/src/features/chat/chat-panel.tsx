@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
+import { useRef, useEffect, useLayoutEffect, useMemo, useCallback, useState } from 'react'
 import { MessageList } from '@/shared/components/message-list'
 import { MessageInput } from './message-input'
 import { GoalBanner } from './goal-banner'
@@ -18,6 +18,7 @@ import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
 import { cn, confirmAction } from '@/shared/utils'
+import { useT } from '@/shared/i18n'
 
 interface AgentOption {
   id: string
@@ -130,7 +131,17 @@ function AgentSelector() {
  *  `halo_session_${projectId}` current-session keys). */
 const SIDEBAR_OPEN_KEY = 'halo_session_sidebar_open'
 
+/** Render window over the in-memory log, counted in exchanges (user turns).
+ *  Opening a long session used to mount every exchange at once (one
+ *  ReactMarkdown tree each — the "slower the longer you chat" DOM half of the
+ *  problem); now only the last INITIAL turns render, and each scroll-to-top
+ *  gesture widens by STEP. 30 turns ≈ 60+ bubbles plus tool cards — several
+ *  screens, so the window is invisible until the user actually digs. */
+const WINDOW_INITIAL_TURNS = 30
+const WINDOW_STEP_TURNS = 30
+
 export function ChatPanel() {
+  const t = useT()
   const { messages, sendMessage, isStreaming, clearSession, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
@@ -221,6 +232,95 @@ export function ChatPanel() {
 
   const userScrolledUp = useRef(false)
 
+  // A fresh session always opens pinned to its newest messages — drop the
+  // previous session's scrolled-up latch. Without this, a user parked at the
+  // very top (scrollTop 0, so emptying the log fires no scroll event) carries
+  // `true` into the next session: the snapshot render would then skip the
+  // window clamp below and mount every exchange at once.
+  useEffect(() => {
+    userScrolledUp.current = false
+  }, [sessionId])
+
+  // ── Render window over the in-memory log ─────────────────────────────
+  // Only the last `totalUserTurns - hiddenTurns` user turns (plus their
+  // responses) are mounted; `hiddenTurns` counts the user turns sliced off
+  // above the window. Scroll-to-top widens the window BEFORE any archive
+  // fetch (two-level loading: local slice first, network segments second).
+  const totalUserTurns = useMemo(() => {
+    let n = 0
+    for (const m of mainMessages) if (m.role === 'user') n++
+    return n
+  }, [mainMessages])
+
+  // Adjust-during-render (not an effect) for the scroll-independent cases:
+  // the clamp must land in the same render as a snapshot's setMessages,
+  // otherwise a 3000-message session mounts every exchange once before an
+  // effect can shrink the window — exactly the freeze this window exists to
+  // prevent. (Render-phase code must not read refs, so anything needing the
+  // scroll position lives in the layout effect below instead.)
+  //  - session switched → reset to the last WINDOW_INITIAL_TURNS
+  //  - log shrank under the window (mid-session compact / clear replaced the
+  //    active log) → clamp, or the slice walk would run past the end and
+  //    render an empty window
+  //  - first fill after a reset (`seenTurns === 0` = no turns seen yet, i.e.
+  //    the subscribe snapshot landing on an empty panel) → clamp to the tail
+  const [windowState, setWindowState] = useState<{ sessionId: string | null; hiddenTurns: number; seenTurns: number }>({ sessionId: null, hiddenTurns: 0, seenTurns: 0 })
+  const clampTarget = Math.max(0, totalUserTurns - WINDOW_INITIAL_TURNS)
+  if (windowState.sessionId !== (sessionId ?? null)) {
+    setWindowState({ sessionId: sessionId ?? null, hiddenTurns: clampTarget, seenTurns: totalUserTurns })
+  } else if (windowState.hiddenTurns > clampTarget || (windowState.seenTurns === 0 && totalUserTurns > 0)) {
+    setWindowState({ sessionId: windowState.sessionId, hiddenTurns: clampTarget, seenTurns: totalUserTurns })
+  }
+  const hiddenTurns = windowState.hiddenTurns
+
+  // Incremental turns (streaming, another client, snapshot refresh) — the
+  // slide-vs-grow choice needs the scroll position, so it runs post-render
+  // (refs are legal here; layout = settled before paint). At the bottom the
+  // window SLIDES to stay a tail (invisible — the oldest exchange unmounts
+  // off-screen above); scrolled up it GROWS: `hiddenTurns` stays, so the
+  // slice start — the content above the viewport — is stable and the reading
+  // position doesn't jump. The interim render mounts only the new exchange
+  // itself, so there's no flash of unwindowed content. Guarded setState:
+  // re-runs settle at `seenTurns === totalUserTurns`.
+  useLayoutEffect(() => {
+    if (windowState.seenTurns === totalUserTurns) return
+    setWindowState((w) => ({
+      sessionId: w.sessionId,
+      hiddenTurns: userScrolledUp.current ? w.hiddenTurns : Math.max(0, totalUserTurns - WINDOW_INITIAL_TURNS),
+      seenTurns: totalUserTurns,
+    }))
+  })
+
+  // The slice starts AT the (hiddenTurns+1)-th user message — an exchange
+  // boundary, so buildExchanges never sees orphaned responses. Leading
+  // non-user messages are hidden along with the prefix once anything is.
+  const windowMessages = useMemo(() => {
+    if (hiddenTurns <= 0) return mainMessages
+    let seen = 0
+    for (let i = 0; i < mainMessages.length; i++) {
+      if (mainMessages[i].role === 'user' && ++seen > hiddenTurns) return mainMessages.slice(i)
+    }
+    return mainMessages // hiddenTurns >= total user turns — clamp above prevents this
+  }, [mainMessages, hiddenTurns])
+
+  // Distance-from-bottom captured before the window widens — same anchoring
+  // trick as the archive prepend below (growing content above the viewport
+  // while the browser keeps `scrollTop` would yank the reader down). Restored
+  // in a layout effect so the correction lands before paint.
+  const windowScrollAnchor = useRef<number | null>(null)
+  const expandWindow = useCallback(() => {
+    const el = scrollRef.current
+    windowScrollAnchor.current = el ? el.scrollHeight - el.scrollTop : null
+    setWindowState((w) => ({ ...w, hiddenTurns: Math.max(0, w.hiddenTurns - WINDOW_STEP_TURNS) }))
+  }, [])
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const anchor = windowScrollAnchor.current
+    if (!el || anchor === null) return
+    el.scrollTop = el.scrollHeight - anchor
+    windowScrollAnchor.current = null
+  }, [hiddenTurns])
+
   // Distance from the bottom captured just before an archive segment is
   // prepended. Prepending grows the content ABOVE the viewport while the
   // browser keeps `scrollTop`, which yanks the reader downward; restoring this
@@ -238,6 +338,9 @@ export function ChatPanel() {
     void loadOlderArchive()
   }, [])
 
+  // `hasHiddenTurns` routes the top gesture; as a boolean dep it rebinds the
+  // listener only when the window crosses "fully expanded", not per step.
+  const hasHiddenTurns = hiddenTurns > 0
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -247,12 +350,16 @@ export function ChatPanel() {
       if (el.scrollTop > 200) topTriggerArmed.current = true
       else if (el.scrollTop < 80 && topTriggerArmed.current) {
         topTriggerArmed.current = false
-        handleLoadOlderArchive()
+        // Two-level loading: widen the local render window first (in-memory,
+        // no I/O); only once every in-memory turn is mounted does the gesture
+        // fall through to the archive segment fetch.
+        if (hasHiddenTurns) expandWindow()
+        else handleLoadOlderArchive()
       }
     }
     el.addEventListener('scroll', handleScroll)
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [handleLoadOlderArchive])
+  }, [handleLoadOlderArchive, expandWindow, hasHiddenTurns])
 
   // Restore the reading position after a prepend. Keyed on the archive store's
   // message array so it runs exactly when new history lands (the bottom-anchor
@@ -327,8 +434,22 @@ export function ChatPanel() {
             </div>
           ) : (
             <>
-              <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
-              <MessageList messages={mainMessages} />
+              {/* Two-level history: while local turns are still sliced off,
+                  the top row expands the render window (no I/O). Only at
+                  hiddenTurns === 0 does the archive block (and its
+                  network-backed "load earlier") take the slot — so a gesture
+                  can never fetch segments while unrendered local turns remain. */}
+              {hiddenTurns > 0 ? (
+                <button
+                  onClick={expandWindow}
+                  className="flex w-full items-center justify-center gap-1.5 border-b border-[var(--border)]/50 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                >
+                  {t('chat.window.showEarlier', { count: hiddenTurns })}
+                </button>
+              ) : (
+                <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
+              )}
+              <MessageList messages={windowMessages} userOrdinalBase={hiddenTurns} />
             </>
           )}
         </div>

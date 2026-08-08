@@ -198,6 +198,7 @@ export const en: Record<string, string> = {
   'chat.sendFailed': 'Send failed — the server never confirmed receipt. Please resend.',
   'chat.sendFailedBadge': 'send failed',
   'chat.interrupted': 'No response received — the connection may have dropped. Resend if needed.',
+  'chat.window.showEarlier': 'Show earlier messages ({count} more in this session)',
   'chat.archive.loadOlder': 'Load earlier messages',
   'chat.archive.loading': 'Loading earlier messages…',
   'chat.archive.noEarlier': 'No earlier messages',
