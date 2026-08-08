@@ -4,6 +4,8 @@ All REST endpoints are served by Hono on port 9527 at `/api/`.
 
 Auth: most `/api/*` routes require a valid JWT cookie (`halo_token`). Exceptions in `PUBLIC_PATHS` (`middleware/auth.ts`) bypass the cookie: `/api/auth/login|check|logout` (but **not** `/api/auth/change-password`), the web-channel routes (`/api/web/chat|stop|history|subscribe|file`), `/api/show/state|session`, and `/api/metrics` — these are unauthenticated or use a web-channel `x-token` instead.
 
+Compression: every response negotiates gzip/deflate via `hono/compress` (`threshold: 1024` — bodies under 1 KiB pass through uncompressed), mounted after CORS so it covers both `/api/*` JSON and the served admin static assets. `text/event-stream` (SSE) is excluded, so `/api/web/chat`'s streamed reply is unaffected; WS upgrades never enter the Hono fetch pipeline either.
+
 ## Health
 
 | Method | Path | Purpose |
