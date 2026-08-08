@@ -9,7 +9,9 @@ import {
   getSessionDir, loadSessionMessages, fileSegment, countMainUserMessages,
   type SessionSaveOptions,
 } from '../sessions/session-store.js'
-import { archiveSplitIndex, readArchiveCount, writeArchiveSegment } from '../sessions/session-archive.js'
+import {
+  ARCHIVE_SIZE_THRESHOLD, activeFileSize, archiveSplitIndex, readArchiveCount, writeArchiveSegment,
+} from '../sessions/session-archive.js'
 import type { SessionMessage, SessionFileData } from '../sessions/session-types.js'
 import {
   applyEvent, createEmptyUIState, createSaveSnapshot, genId,
@@ -292,9 +294,14 @@ export class SessionUIStore {
   }
 
   /**
-   * Move the older part of a root session's UI log out into a gzipped archive
-   * segment, keeping the recent tail in the active file. Called from the
-   * compact path — the only place that already accepts "history shrinks here".
+   * Move a root session's UI log out into a gzipped archive segment, keeping
+   * only the newest main exchange in the active file. Called from the compact
+   * path — the only place that already accepts "history shrinks here".
+   *
+   * Gated on the active file's SIZE (`ARCHIVE_SIZE_THRESHOLD`), not its exchange
+   * count: bytes are what make a log slow to load, and per-exchange size varies
+   * by orders of magnitude. Under the threshold this returns 0 after a single
+   * stat(), so the common compact pays almost nothing.
    *
    * Two-step write, segment FIRST:
    *   1. write `<seg>.arch.<N>.json.gz` (a brand-new path, nothing references it yet)
@@ -317,15 +324,20 @@ export class SessionUIStore {
     // is already loaded, which is the normal mid-turn case.
     const state = this.ensureUIState(rootId)
     try {
-      const cut = archiveSplitIndex(state.messageLog)
-      if (cut === 0) return 0
-
       const inMem = this.host.getSession(rootId)
       const row = inMem ? null : this.db.select().from(agentSessions)
         .where(eq(agentSessions.id, rootId)).get()
       const agentId = inMem?.agentId ?? row?.agentId ?? 'default'
       const dir = getSessionDir(agentId, this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot)
       const seg = fileSegment(rootId)
+
+      // Size gate first — below the threshold this is a pure stat() and out.
+      if (activeFileSize(dir, seg) <= ARCHIVE_SIZE_THRESHOLD) return 0
+      // Over the threshold: keep only the newest exchange, archive the rest. A
+      // log with a single exchange yields cut 0 and is left alone (there is
+      // nothing to move without splitting the turn the user is looking at).
+      const cut = archiveSplitIndex(state.messageLog, 1)
+      if (cut === 0) return 0
 
       const older = state.messageLog.slice(0, cut)
       const kept = state.messageLog.slice(cut)

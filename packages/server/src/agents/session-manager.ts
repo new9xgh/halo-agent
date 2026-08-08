@@ -2385,13 +2385,14 @@ export class SessionManager implements SessionManagerInternals {
       // The UI log's only shrink point. rawMessages just collapsed to
       // [summary, ...recent]; the UI log keeps the full conversation and would
       // otherwise grow forever (measured: 6.9MB of a 7.4MB session file). Move
-      // its older exchanges into a gzipped archive segment here — the one
-      // moment where "history moves out of the active file" is already the
-      // semantics of the operation. Root sessions only: a sub-agent's compact
+      // it into a gzipped archive segment here — the one moment where "history
+      // moves out of the active file" is already the semantics of the
+      // operation. No-op unless the file is over the size threshold, so most
+      // compacts pay one stat(). Root sessions only: a sub-agent's compact
       // must not truncate its parent's log (findRootSessionId would resolve a
       // sub id to the root's UI state), and sub logs are the next round's job.
       // Runs BEFORE the callers emit their compaction notices, so the summary
-      // notice lands in the kept tail rather than the archived segment.
+      // notice lands in the kept exchange rather than the archived segment.
       if (!session.parentId) this.uiStore.archiveOldMessages(session.id)
 
       const estimatedTokens = estimateMessageTokens(session.agent.messages) + estimateMessageTokens([{ role: 'user', content: session.systemPrompt }])

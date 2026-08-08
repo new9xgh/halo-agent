@@ -3,9 +3,11 @@
  * `rawMessages` has compaction; the UI log had nothing, so a long-lived
  * session ended up multi-MB (measured: 6.9MB of 7.4MB was UI messages).
  *
- * On compact the older exchanges move out into `<seg>.arch.<N>.json.gz` next
- * to the active `.json`, and the recent tail stays in place. The active file's
- * shape is unchanged, so every existing reader keeps working untouched.
+ * On compact, if the active file has grown past `ARCHIVE_SIZE_THRESHOLD`, all
+ * but the newest main exchange moves out into `<seg>.arch.<N>.json.gz` next to
+ * the active `.json`. Below the threshold nothing happens at all, however many
+ * exchanges have piled up. The active file's shape is unchanged, so every
+ * existing reader keeps working untouched.
  *
  * Segments are append-only: `N` counts up from 1, and a written segment is
  * read-only forever. The active file's `archiveCount` header field is the
@@ -20,17 +22,29 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import type { SessionMessage } from './session-types.js'
 
 /**
- * How many trailing main user exchanges stay in the active file.
+ * Active-file size above which a compact archives. Bytes, not an exchange
+ * count, because bytes are the actual problem: file size is what makes the log
+ * slow to read, parse and ship, and exchange size varies by ~three orders of
+ * magnitude (a bare "yes" versus a turn carrying several 50KB tool results), so
+ * a count is a badly distorted proxy — the same "15 exchanges" is 40KB in one
+ * session and 40MB in another. Measuring the thing we care about removes the
+ * guesswork.
  *
- * Not aligned with `config.compact.keep_messages`: that counts raw
- * (LLM-facing) messages, and one raw turn expands into many UI messages
- * (tool_call / tool_result / usage / context rows), so there is no honest
- * mapping between the two granularities — matching them would need the same
- * text-matching heuristic `deleteExchange` uses, which already degrades
- * silently. A fixed exchange count is the predictable degradation the design
- * calls for. No setting: one number, tuned once.
+ * Also self-limiting: after an archive the file restarts near-empty, so it must
+ * grow another 3MB of real content before the next one fires. Segment count is
+ * therefore bounded by total bytes written, not by how often the user compacts.
+ *
+ * Not aligned with `config.compact.keep_messages` (that counts raw LLM-facing
+ * messages, a different granularity with no honest mapping to UI rows). No
+ * setting: one number, tuned once.
+ *
+ * Known, accepted edge — do not "fix" it: `rawMessages` shares the file, so if
+ * raw alone approaches the threshold (rare — compaction is what bounds it), the
+ * file can still exceed it right after the UI log is archived, and the next
+ * compact writes another very small segment. Slight churn, harmless; guarding it
+ * would mean second-guessing which half owns the bytes.
  */
-export const ARCHIVE_KEEP_EXCHANGES = 15
+export const ARCHIVE_SIZE_THRESHOLD = 3 * 1024 * 1024
 
 /** `<seg>.arch.<N>.json.gz` — `seg` is `fileSegment(sessionId)`, the same leaf
  *  base the active `<seg>.json` uses. */
@@ -51,7 +65,7 @@ function segmentPath(dir: string, seg: string, n: number): string {
  */
 export function archiveSplitIndex(
   messages: SessionMessage[],
-  keepExchanges: number = ARCHIVE_KEEP_EXCHANGES,
+  keepExchanges: number,
 ): number {
   const starts: number[] = []
   for (let i = 0; i < messages.length; i++) {
@@ -59,6 +73,16 @@ export function archiveSplitIndex(
   }
   if (starts.length <= keepExchanges) return 0
   return starts[starts.length - keepExchanges]
+}
+
+/** Active `<seg>.json` size in bytes. 0 when it does not exist yet (a session
+ *  whose first persist has not landed can't be over any threshold). */
+export function activeFileSize(dir: string, seg: string): number {
+  try {
+    return fsSync.statSync(path.join(dir, `${seg}.json`)).size
+  } catch {
+    return 0
+  }
 }
 
 /** Committed segment count, read from the active file's header. 0 when the

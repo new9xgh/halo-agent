@@ -123,7 +123,9 @@ Written as **compact JSON** (no indent) by all five writers of this path — not
 
 Path: `.halo/sessions/{agentId}/{sessionId}.arch.{N}.json.gz`
 
-gzipped `JSON.stringify(SessionMessage[])` — the plain array, no wrapper object, oldest-first, in the same order the messages had in the active file. `N` counts up from 1. A segment is **immutable once committed** and the active file's `archiveCount` is the commit marker: `N > archiveCount` means the segment was written but the commit never landed, and no reader may reference it. Deleting a session deletes segments by **globbing `{sessionId}.arch.*.json.gz`** — not by iterating `archiveCount` — so crash-orphaned uncommitted segments are cleaned up too. Design + read path in [session.md](session.md#ui-log-archiving).
+gzipped `JSON.stringify(SessionMessage[])` — the plain array, no wrapper object, oldest-first, in the same order the messages had in the active file. `N` counts up from 1. A segment is **immutable once committed** and the active file's `archiveCount` is the commit marker: `N > archiveCount` means the segment was written but the commit never landed, and no reader may reference it. Deleting a session deletes segments by **globbing `{sessionId}.arch.*.json.gz`** — not by iterating `archiveCount` — so crash-orphaned uncommitted segments are cleaned up too.
+
+A segment is written by a compact only when the active `.json` exceeded `ARCHIVE_SIZE_THRESHOLD` (3 MB), and then holds everything except the newest main exchange — so segment sizes are uneven by design and their count is bounded by total bytes written, not by compact frequency. Design + read path in [session.md](session.md#ui-log-archiving).
 
 ### SessionMessage
 

@@ -56,6 +56,15 @@ function exchanges(n: number, from = 0): SessionMessage[] {
   return out
 }
 
+/** Same, but fat enough that the seeded file clears ARCHIVE_SIZE_THRESHOLD —
+ *  archiving is size-triggered, so a small log never produces a segment. */
+function fatExchanges(n: number, from = 0): SessionMessage[] {
+  const per = Math.ceil((archive.ARCHIVE_SIZE_THRESHOLD * 1.2) / n)
+  return exchanges(n, from).map((m) => (
+    m.role === 'assistant' ? { ...m, content: `${m.content}${'.'.repeat(per)}` } : m
+  ))
+}
+
 function sessionDir(agentId = 'default'): string {
   return path.join(ws, '.halo', 'sessions', agentId)
 }
@@ -134,26 +143,30 @@ beforeEach(() => {
 
 describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
   it('returns exactly the messages the writer gzipped', async () => {
-    const log = exchanges(archive.ARCHIVE_KEEP_EXCHANGES + 4)
+    const log = fatExchanges(10)
     seedRow('r1')
     seedFile('r1', log)
-    expect(archiveOldMessages('r1')).toBe(8)
+    expect(archiveOldMessages('r1')).toBe(18)
 
     const res = await get('r1', 1)
     expect(res.status).toBe(200)
     const body = await res.json() as { messages: SessionMessage[] }
     expect(body.messages).toEqual(segmentOnDisk('r1', 1))
-    expect(body.messages.map((m) => m.content)).toEqual(log.slice(0, 8).map((m) => m.content))
+    expect(body.messages.map((m) => m.content)).toEqual(log.slice(0, 18).map((m) => m.content))
   })
 
   it('walking down from archiveCount rejoins the whole log in order', async () => {
-    const log = exchanges(archive.ARCHIVE_KEEP_EXCHANGES + 2)
+    const log = fatExchanges(4)
     seedRow('r1')
     seedFile('r1', log)
     archiveOldMessages('r1')
-    // Session keeps chatting, then compacts again → segment 2.
-    const later = exchanges(5, 100)
-    sm.getUIState('r1')!.messageLog.push(...later)
+    // Session keeps chatting until it is over the threshold again (each segment
+    // costs another 3MB of content), then compacts → segment 2.
+    const later = fatExchanges(4, 100)
+    // replaceMessageLog (not seedFile) so the fattened log reaches disk through
+    // the normal read-merge-write, which carries archiveCount forward — a raw
+    // re-seed would drop the marker and make the next archive overwrite segment 1.
+    sm.replaceMessageLog('r1', [...sm.getUIState('r1')!.messageLog, ...later])
     archiveOldMessages('r1')
 
     const seg1 = (await (await get('r1', 1)).json() as { messages: SessionMessage[] }).messages
@@ -164,7 +177,7 @@ describe('GET /sessions/logs/:id/archive/:n — committed segments', () => {
   })
 
   it('404s a segment beyond archiveCount even though the file is on disk', async () => {
-    const log = exchanges(archive.ARCHIVE_KEEP_EXCHANGES + 2)
+    const log = fatExchanges(4)
     seedRow('r1')
     seedFile('r1', log)
     archiveOldMessages('r1')
@@ -192,7 +205,7 @@ describe('GET /sessions/logs/:id/archive/:n — guards', () => {
 
   it('rejects a non-positive-integer segment number with 400', async () => {
     seedRow('r1')
-    seedFile('r1', exchanges(archive.ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     archiveOldMessages('r1')
     for (const n of ['0', '-1', 'abc', '1.5']) {
       expect((await get('r1', n)).status, n).toBe(400)
@@ -217,7 +230,7 @@ describe('GET /sessions/logs/:id/archive/:n — guards', () => {
 describe('auth gate', () => {
   it('is NOT in PUBLIC_PATHS — the admin cookie is required', async () => {
     seedRow('r1')
-    seedFile('r1', exchanges(archive.ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     archiveOldMessages('r1')
 
     // Composed exactly as index.ts does.

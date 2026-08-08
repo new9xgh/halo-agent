@@ -7,7 +7,7 @@ import { SessionManager } from '../src/agents/session-manager.js'
 import { SessionManagerRegistry } from '../src/agents/session-manager-registry.js'
 import { agentSessions } from '../src/db/schema.js'
 import { createSessionRoutes } from '../src/routes/sessions.js'
-import { ARCHIVE_KEEP_EXCHANGES } from '../src/sessions/session-archive.js'
+import { ARCHIVE_SIZE_THRESHOLD } from '../src/sessions/session-archive.js'
 import type { SessionMessage } from '../src/sessions/session-types.js'
 
 /**
@@ -37,6 +37,15 @@ function exchanges(n: number, from = 0): SessionMessage[] {
   const out: SessionMessage[] = []
   for (let i = from; i < from + n; i++) out.push(uiMsg('user', `u${i}`), uiMsg('assistant', `a${i}`))
   return out
+}
+
+/** Same, but fat enough that the seeded file clears ARCHIVE_SIZE_THRESHOLD —
+ *  archiving is size-triggered, so a small log never fires. */
+function fatExchanges(n: number): SessionMessage[] {
+  const per = Math.ceil((ARCHIVE_SIZE_THRESHOLD * 1.2) / n)
+  return exchanges(n).map((m) => (
+    m.role === 'assistant' ? { ...m, content: `${m.content}${'.'.repeat(per)}` } : m
+  ))
 }
 
 function seedRow(id: string): void {
@@ -139,22 +148,22 @@ describe('persist mirrors the file header onto the row', () => {
 
 describe('exchangeCount survives compaction', () => {
   it('does not shrink when older messages move into an archive segment', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 4)
+    const log = fatExchanges(10)
     seedRow('r1')
     seedFile('r1', log)
     // Bring the seeded file into the mirror first (cold session → row columns).
     persist('r1', log)
-    expect(row('r1').exchangeCount).toBe(ARCHIVE_KEEP_EXCHANGES + 4)
+    expect(row('r1').exchangeCount).toBe(10)
 
     const moved = uiStore().archiveOldMessages('r1')
-    expect(moved).toBe(8)
+    expect(moved).toBe(18)   // all but the newest exchange
 
-    // 4 exchanges left the active file but the lifetime count is unchanged.
-    expect(row('r1').exchangeCount).toBe(ARCHIVE_KEEP_EXCHANGES + 4)
+    // 9 exchanges left the active file but the lifetime count is unchanged.
+    expect(row('r1').exchangeCount).toBe(10)
 
     // And a later ordinary persist (which knows only the kept tail) keeps it.
     persist('r1', sm.getUIState('r1')!.messageLog)
-    expect(row('r1').exchangeCount).toBe(ARCHIVE_KEEP_EXCHANGES + 4)
+    expect(row('r1').exchangeCount).toBe(10)
   })
 })
 

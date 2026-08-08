@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { SessionManager } from '../src/agents/session-manager.js'
 import { agentSessions } from '../src/db/schema.js'
 import {
-  ARCHIVE_KEEP_EXCHANGES, archiveSplitIndex, readArchiveCount,
+  ARCHIVE_SIZE_THRESHOLD, activeFileSize, archiveSplitIndex, readArchiveCount,
   writeArchiveSegment, deleteArchiveSegments,
 } from '../src/sessions/session-archive.js'
 import { findAndDeleteSessionFile } from '../src/sessions/session-store.js'
@@ -15,17 +15,21 @@ import type { SessionMessage } from '../src/sessions/session-types.js'
 /**
  * UI-log archiving (`<seg>.arch.<N>.json.gz`). The UI half of a session file had
  * no compaction and grew without bound (measured: 6.9MB of a 7.4MB file). These
- * tests pin the four properties the design depends on:
+ * tests pin the five properties the design depends on:
  *
- *  1. the split lands on a main-user-exchange boundary, never mid-turn
- *  2. the active file keeps its exact shape — only `messages` shrinks and an
+ *  1. the trigger is the active file's SIZE, not its exchange count — under
+ *     `ARCHIVE_SIZE_THRESHOLD` a compact is a pure no-op however long the log is
+ *  2. over the threshold exactly ONE main exchange stays behind, and the split
+ *     lands on a main-user-exchange boundary, never mid-turn
+ *  3. the active file keeps its exact shape — only `messages` shrinks and an
  *     `archiveCount` header appears, so every existing reader is unaffected
- *  3. `archiveCount` is a COMMIT MARKER: a segment written but not committed is
+ *  4. `archiveCount` is a COMMIT MARKER: a segment written but not committed is
  *     unreachable, and re-running the archive re-derives the same N (idempotent)
- *  4. deletion is filesystem-glob driven, so uncommitted/orphan segments go too
+ *  5. deletion is filesystem-glob driven, so uncommitted/orphan segments go too
  *
- * Real disk + real gzip throughout — the crash-consistency and glob behaviours
- * are exactly the parts a mocked fs would fake away.
+ * Real disk + real gzip throughout — the size gate, crash-consistency and glob
+ * behaviours are exactly the parts a mocked fs would fake away, so fixtures are
+ * genuinely inflated past 3MB rather than stubbing statSync.
  */
 
 let ws: string
@@ -35,11 +39,38 @@ function uiMsg(role: 'user' | 'assistant', content: string, over: Partial<Sessio
   return { id: `m_${content}_${role}`, role, type: role, content, timestamp: 1000, ...over }
 }
 
-/** `n` main exchanges: user + assistant each. */
+/** `n` main exchanges: user + assistant each. Small — stays under the threshold. */
 function exchanges(n: number, from = 0): SessionMessage[] {
   const out: SessionMessage[] = []
   for (let i = from; i < from + n; i++) {
     out.push(uiMsg('user', `u${i}`), uiMsg('assistant', `a${i}`))
+  }
+  return out
+}
+
+/** Bytes of filler per assistant turn needed to push `n` exchanges past the
+ *  threshold, with ~20% headroom over it. */
+function fatBytes(n: number): number {
+  return Math.ceil((ARCHIVE_SIZE_THRESHOLD * 1.2) / n)
+}
+
+/**
+ * `n` main exchanges whose assistant turns carry a big tool output, so the
+ * seeded file lands over ARCHIVE_SIZE_THRESHOLD. Filler is unique per turn
+ * (`String.fromCharCode`) — a single repeated char would still be over the
+ * threshold on disk, but unique bytes keep the fixture honest about real logs.
+ */
+function fatExchanges(n: number, from = 0): SessionMessage[] {
+  const per = fatBytes(n)
+  const out: SessionMessage[] = []
+  for (let i = from; i < from + n; i++) {
+    const filler = String.fromCharCode(97 + (i % 26)).repeat(per)
+    out.push(
+      uiMsg('user', `u${i}`),
+      uiMsg('assistant', `a${i}`, {
+        contentBlocks: [{ type: 'tool_result', toolUseId: `tu_${i}`, content: filler } as never],
+      }),
+    )
   }
   return out
 }
@@ -106,70 +137,138 @@ afterEach(() => {
 })
 
 describe('archiveSplitIndex — where the log is cut', () => {
-  it('returns 0 while the log holds at most the keep count', () => {
-    expect(archiveSplitIndex(exchanges(ARCHIVE_KEEP_EXCHANGES))).toBe(0)
-    expect(archiveSplitIndex([])).toBe(0)
+  it('returns 0 when the log holds at most the keep count', () => {
+    expect(archiveSplitIndex(exchanges(1), 1)).toBe(0)
+    expect(archiveSplitIndex([], 1)).toBe(0)
   })
 
-  it('cuts so exactly the last keep-count exchanges remain', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 3)
-    const cut = archiveSplitIndex(log)
-    // 3 extra exchanges × 2 messages each move out.
-    expect(cut).toBe(6)
-    expect(log.slice(cut).filter((m) => m.role === 'user')).toHaveLength(ARCHIVE_KEEP_EXCHANGES)
+  it('keep=1 cuts everything but the newest exchange', () => {
+    const log = exchanges(4)
+    const cut = archiveSplitIndex(log, 1)
+    expect(cut).toBe(6)                 // 3 exchanges × 2 messages move out
+    expect(log.slice(cut).map((m) => m.content)).toEqual(['u3', 'a3'])
   })
 
   it('always cuts at the START of a main user exchange', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 5)
-    const cut = archiveSplitIndex(log)
+    const log = exchanges(5)
+    const cut = archiveSplitIndex(log, 1)
     expect(log[cut].role).toBe('user')
     expect(log[cut].taskId).toBeUndefined()
   })
 
   it('ignores sub-agent (taskId) user messages when counting exchanges', () => {
-    // Sub-agent turns are not main exchanges; a log made only of them plus a few
-    // main ones must not be cut on a taskId row.
+    // Sub-agent turns are not main exchanges; the cut must not land on a taskId
+    // row, and the kept slice must hold exactly one MAIN user turn.
     const log: SessionMessage[] = []
-    for (let i = 0; i < ARCHIVE_KEEP_EXCHANGES + 2; i++) {
+    for (let i = 0; i < 4; i++) {
       log.push(uiMsg('user', `u${i}`))
       log.push(uiMsg('user', `sub${i}`, { taskId: 'root>child' }))
       log.push(uiMsg('assistant', `a${i}`))
     }
-    const cut = archiveSplitIndex(log)
+    const cut = archiveSplitIndex(log, 1)
     expect(log[cut].taskId).toBeUndefined()
-    expect(log.slice(cut).filter((m) => m.role === 'user' && !m.taskId)).toHaveLength(ARCHIVE_KEEP_EXCHANGES)
+    expect(log.slice(cut).filter((m) => m.role === 'user' && !m.taskId)).toHaveLength(1)
   })
 
   it('keeps the in-flight turn out of the archive (its user msg is the newest)', () => {
-    // A mid-turn compact: last user message has no assistant reply yet.
-    const log = [...exchanges(ARCHIVE_KEEP_EXCHANGES + 4), uiMsg('user', 'in-flight')]
-    const cut = archiveSplitIndex(log)
-    const kept = log.slice(cut)
-    expect(kept.at(-1)?.content).toBe('in-flight')
-    // and the archived part never contains it
+    // A mid-turn compact: last user message has no assistant reply yet. Keeping
+    // the newest exchange means the running turn is the one that stays.
+    const log = [...exchanges(4), uiMsg('user', 'in-flight')]
+    const cut = archiveSplitIndex(log, 1)
+    expect(log.slice(cut).map((m) => m.content)).toEqual(['in-flight'])
     expect(log.slice(0, cut).some((m) => m.content === 'in-flight')).toBe(false)
   })
 })
 
+describe('the trigger is file size, not exchange count', () => {
+  it('no-ops on a long but small log (hundreds of exchanges, well under 3MB)', () => {
+    seedRow('r1')
+    const log = exchanges(300)
+    const path = seedFile('r1', log)
+    expect(activeFileSize(sessionDir(), 'r1')).toBeLessThan(ARCHIVE_SIZE_THRESHOLD)
+
+    expect(uiStore().archiveOldMessages('r1')).toBe(0)
+    expect(segmentNames()).toEqual([])
+    expect(readActive('r1').archiveCount).toBeUndefined()
+    // File untouched entirely — not even rewritten.
+    expect(readFileSync(path, 'utf-8')).toBe(JSON.stringify({
+      version: 1, id: 'r1', agentId: 'default', agentName: 'Default', title: 'seeded', source: 'explorer',
+      createdAt: new Date(1000).toISOString(), updatedAt: new Date(1000).toISOString(),
+      messageCount: log.length, contextTokens: 111, totalOutputTokens: 222,
+      messages: log, rawMessages: [{ role: 'user', content: 'raw' }],
+    }, null, 2))
+  })
+
+  it('fires on a short log once it is over 3MB', () => {
+    seedRow('r1')
+    // Only 4 exchanges — a count-based rule would never trigger here.
+    seedFile('r1', fatExchanges(4))
+    expect(activeFileSize(sessionDir(), 'r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
+
+    expect(uiStore().archiveOldMessages('r1')).toBe(6)
+    expect(readActive('r1').messages.map((m) => m.content)).toEqual(['u3', 'a3'])
+  })
+
+  it('archives 1 and keeps 1 when there are only two exchanges', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(2))
+
+    expect(uiStore().archiveOldMessages('r1')).toBe(2)
+    expect(readSegment('r1', 1).map((m) => m.content)).toEqual(['u0', 'a0'])
+    expect(readActive('r1').messages.map((m) => m.content)).toEqual(['u1', 'a1'])
+    expect(readActive('r1').archiveCount).toBe(1)
+  })
+
+  it('no-ops on a single oversized exchange — nothing to move without splitting it', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(1))
+    expect(activeFileSize(sessionDir(), 'r1')).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
+
+    expect(uiStore().archiveOldMessages('r1')).toBe(0)
+    expect(segmentNames()).toEqual([])
+    expect(readActive('r1').archiveCount).toBeUndefined()
+  })
+
+  it('activeFileSize reports 0 for a session with no file yet', () => {
+    expect(activeFileSize(sessionDir(), 'never-written')).toBe(0)
+    seedRow('r1')
+    expect(uiStore().archiveOldMessages('r1')).toBe(0)
+  })
+})
+
 describe('archiveOldMessages — segment write + active-file slim down', () => {
-  it('moves older messages into segment 1 and keeps the tail in place', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 4)
+  it('moves everything but the newest exchange into segment 1', () => {
+    const log = fatExchanges(10)
     seedRow('r1')
     seedFile('r1', log)
 
     const moved = uiStore().archiveOldMessages('r1')
 
-    expect(moved).toBe(8)                     // 4 extra exchanges × 2
+    expect(moved).toBe(18)                    // 9 archived exchanges × 2
     expect(segmentNames()).toEqual(['r1.arch.1.json.gz'])
-    expect(readSegment('r1', 1).map((m) => m.content)).toEqual(log.slice(0, 8).map((m) => m.content))
+    expect(readSegment('r1', 1).map((m) => m.content)).toEqual(log.slice(0, 18).map((m) => m.content))
 
     const active = readActive('r1')
-    expect(active.messages.map((m) => m.content)).toEqual(log.slice(8).map((m) => m.content))
+    expect(active.messages.map((m) => m.content)).toEqual(['u9', 'a9'])
     expect(active.archiveCount).toBe(1)
   })
 
+  it('shrinks the active file below the threshold it was over', () => {
+    seedRow('r1')
+    seedFile('r1', fatExchanges(10))
+    const before = activeFileSize(sessionDir(), 'r1')
+
+    uiStore().archiveOldMessages('r1')
+
+    const after = activeFileSize(sessionDir(), 'r1')
+    expect(before).toBeGreaterThan(ARCHIVE_SIZE_THRESHOLD)
+    expect(after).toBeLessThan(ARCHIVE_SIZE_THRESHOLD)
+    // Roughly one exchange's worth of bytes left behind, not nine.
+    expect(after).toBeLessThan(before / 5)
+  })
+
   it('segment + active file together still hold every message, in order', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 6)
+    const log = fatExchanges(8)
     seedRow('r1')
     seedFile('r1', log)
 
@@ -180,7 +279,7 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
   })
 
   it('leaves the active file shape untouched apart from messages + archiveCount', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 2)
+    const log = fatExchanges(4)
     seedRow('r1')
     const before = JSON.parse(readFileSync(seedFile('r1', log), 'utf-8'))
 
@@ -200,36 +299,33 @@ describe('archiveOldMessages — segment write + active-file slim down', () => {
     expect(after.messageCount).toBe(after.messages.length)
   })
 
-  it('is a no-op when the log is short enough (no segment, no header)', () => {
-    seedRow('r1')
-    seedFile('r1', exchanges(3))
-
-    expect(uiStore().archiveOldMessages('r1')).toBe(0)
-    expect(segmentNames()).toEqual([])
-    expect(readActive('r1').archiveCount).toBeUndefined()
-  })
-
   it('increments N across successive archives, older segment untouched', () => {
     seedRow('r1')
-    seedFile('r1', exchanges(ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     uiStore().archiveOldMessages('r1')
     const firstSegment = readSegment('r1', 1)
 
-    // Session keeps chatting: append more exchanges to the (already slimmed)
-    // active log through the same in-memory state, then archive again.
+    // Session keeps chatting until it is over the threshold again, then compacts.
+    // (The re-grow is what bounds segment count: each one costs 3MB of content.)
     const state = sm.getUIState('r1')!
-    state.messageLog = [...state.messageLog, ...exchanges(5, 100)]
+    state.messageLog = [...state.messageLog, ...fatExchanges(4, 100)]
+    sm.appendNotification('r1', 'flush the fattened log to disk')
     const moved = uiStore().archiveOldMessages('r1')
 
-    expect(moved).toBe(10)
+    // Log was [u3,a3] + 4 new exchanges + the notification row; everything up to
+    // the last main user turn moves out, so the notification rides along in the
+    // kept slice (it is not an exchange boundary).
+    expect(moved).toBe(8)
     expect(segmentNames()).toEqual(['r1.arch.1.json.gz', 'r1.arch.2.json.gz'])
     expect(readSegment('r1', 1)).toEqual(firstSegment)   // read-only forever
+    expect(readActive('r1').messages.map((m) => m.content))
+      .toEqual(['u103', 'a103', 'flush the fattened log to disk'])
     expect(readActive('r1').archiveCount).toBe(2)
   })
 
   it('skips a tombstoned session (no segment written)', () => {
     seedRow('r1')
-    seedFile('r1', exchanges(ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     vi.spyOn(sm, 'isSessionDeleted').mockReturnValue(true)
 
     expect(uiStore().archiveOldMessages('r1')).toBe(0)
@@ -242,7 +338,7 @@ describe('archiveCount as commit marker — crash safety', () => {
     // Simulate a crash between step 1 (segment written) and step 2 (commit):
     // segment 1 exists on disk, the active file has no archiveCount and still
     // holds the complete log.
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 4)
+    const log = fatExchanges(5)
     seedRow('r1')
     seedFile('r1', log)
     mkdirSync(sessionDir(), { recursive: true })
@@ -264,7 +360,7 @@ describe('archiveCount as commit marker — crash safety', () => {
   })
 
   it('rolls the in-memory log back when the commit write does not land', () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 4)
+    const log = fatExchanges(5)
     seedRow('r1')
     seedFile('r1', log)
     // persistSessionFile swallows IO errors in prod; emulate a failed commit.
@@ -281,7 +377,7 @@ describe('archiveCount as commit marker — crash safety', () => {
 
   it('ordinary persists preserve an existing archiveCount', () => {
     seedRow('r1')
-    seedFile('r1', exchanges(ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     uiStore().archiveOldMessages('r1')
     expect(readActive('r1').archiveCount).toBe(1)
 
@@ -317,7 +413,7 @@ describe('deletion — filesystem glob, not header state', () => {
 
   it('findAndDeleteSessionFile (the DELETE /api route) clears segments too', async () => {
     seedRow('r1')
-    seedFile('r1', exchanges(ARCHIVE_KEEP_EXCHANGES + 2))
+    seedFile('r1', fatExchanges(4))
     uiStore().archiveOldMessages('r1')
     expect(segmentNames()).toHaveLength(1)
 
@@ -330,7 +426,7 @@ describe('deletion — filesystem glob, not header state', () => {
 
 describe('deleteExchange refuses once history is archived', () => {
   it('returns archived and leaves both streams untouched', async () => {
-    const log = exchanges(ARCHIVE_KEEP_EXCHANGES + 2)
+    const log = fatExchanges(4)
     seedRow('r1')
     seedFile('r1', log)
     uiStore().archiveOldMessages('r1')
