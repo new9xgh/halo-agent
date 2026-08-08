@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import { useChatStore } from '@/features/chat/chat-store'
+import { anchorSessionArchive } from './session-archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionBus, bumpSessionBus } from '@/shared/session-bus'
 import { api } from '@/shared/api-client'
@@ -443,9 +444,14 @@ export function AgentSessionsSidebar() {
     }
     try {
       const res = await api.sessionLogs.get(session.id, activeProject?.path)
+      // Bind the detail panel's archive walk from the log-file header — the
+      // committed segment count lives only there, not in the db row (the
+      // list's `archivedAt` is session soft-delete, a different concept).
+      anchorSessionArchive(session.id, typeof res.archiveCount === 'number' ? res.archiveCount : 0)
       setLoadedMessages((res.messages as unknown as ChatMessage[]) ?? [])
     } catch (err) {
       console.error('[Sessions] Load failed:', err)
+      anchorSessionArchive(session.id, 0)
       setLoadedMessages([])
     }
   }, [currentSessionId, activeProject?.id, activeProject?.path, setSelectedSession, setLoadedMessages, setLoading])

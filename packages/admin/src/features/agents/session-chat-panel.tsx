@@ -1,8 +1,10 @@
 'use client'
 
-import { useRef, useEffect, useMemo, useState } from 'react'
+import { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useSessionViewStore } from './agent-sessions-sidebar'
+import { useSessionArchiveStore, anchorSessionArchive, loadOlderSessionArchive } from './session-archive-store'
+import { useArchiveStore } from '@/features/chat/archive-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
@@ -10,6 +12,7 @@ import { onWsReconnect } from '@/shared/ws-reconnect'
 import type { ChatMessage } from '@/shared/types'
 import { MessageList } from '@/shared/components/message-list'
 import { timeAgo } from '@/shared/components/session-list-dropdown'
+import { useT } from '@/shared/i18n'
 import { Bot, Bug, FileText, ListFilter, Loader2, X, Copy, Check } from 'lucide-react'
 import { cn } from '@/shared/utils'
 import { isMainConversationMessage, isDebugMessage, inferMessageType } from '@/shared/types'
@@ -75,6 +78,7 @@ function reconcileMessages(prev: ChatMessage[] | null, next: ChatMessage[]): Cha
 }
 
 export function SessionChatPanel() {
+  const t = useT()
   const currentMessages = useChatStore((s) => s.messages)
   const currentSessionId = useChatStore((s) => s.sessionId)
   const isStreaming = useChatStore((s) => s.isStreaming)
@@ -119,6 +123,10 @@ export function SessionChatPanel() {
     const refetch = () => {
       api.sessionLogs.get(selectedSessionId, activeProject.path)
         .then((res) => {
+          // A compact that fires while the session is on screen rewrites the
+          // active file with a higher archiveCount — re-anchor so the
+          // just-archived turns become reachable (no-op unless it grew).
+          anchorSessionArchive(selectedSessionId, typeof res.archiveCount === 'number' ? res.archiveCount : 0)
           const fresh = (res.messages as unknown as ChatMessage[]) ?? []
           const prev = useSessionViewStore.getState().loadedMessages
           const next = reconcileMessages(prev, fresh)
@@ -176,7 +184,63 @@ export function SessionChatPanel() {
     return null
   }, [selectedSessionId, currentSessionId, currentMessages, loadedMessages])
 
+  // ── Archived history (scroll-to-top segment walk) ──────────────────────
+  // Anchored by the sidebar's session-log GET (non-live selections) or
+  // mirrored from the chat archive store below (live selection — its anchor
+  // arrived on the subscribe snapshot; the segment files on disk don't care
+  // whether the session is live).
+  const archSessionId = useSessionArchiveStore((s) => s.sessionId)
+  const archAnchor = useSessionArchiveStore((s) => s.anchor)
+  const archCursor = useSessionArchiveStore((s) => s.cursor)
+  const archMessages = useSessionArchiveStore((s) => s.messages)
+  const archLoading = useSessionArchiveStore((s) => s.loading)
+  // Bound = the walk belongs to the current selection. A stale binding (from
+  // the previous selection, until its anchor call lands) must not render.
+  const archBound = archSessionId !== null && archSessionId === selectedSessionId
+
+  const chatArchSessionId = useArchiveStore((s) => s.sessionId)
+  const chatArchAnchor = useArchiveStore((s) => s.anchor)
+  useEffect(() => {
+    if (!selectedSessionId || selectedSessionId !== currentSessionId) return
+    if (chatArchSessionId !== selectedSessionId) return
+    anchorSessionArchive(selectedSessionId, chatArchAnchor)
+  }, [selectedSessionId, currentSessionId, chatArchSessionId, chatArchAnchor])
+
+  // Same debug filter the loadedMessages path uses above — archived segments
+  // carry the full raw log (tool calls, usage rows), so non-debug view hides
+  // them the same way.
+  const archivedVisible = useMemo(() => {
+    if (!archBound) return []
+    if (debugMode) return archMessages
+    return archMessages.filter((m) => !isDebugMessage(m))
+  }, [archBound, archMessages, debugMode])
+
   const wasAtBottom = useRef(true)
+  // Distance-from-bottom captured just before a segment prepend. Prepending
+  // grows the content ABOVE the viewport while the browser keeps `scrollTop`,
+  // which would yank the reader; the layout effect below restores the
+  // distance so the same messages stay under the cursor.
+  const archScrollAnchor = useRef<number | null>(null)
+  // One segment per scroll-to-top GESTURE — re-armed only after the user
+  // scrolls back down (>200), so one flick can't cascade through the archive.
+  const topTriggerArmed = useRef(true)
+
+  const handleLoadOlder = useCallback(() => {
+    // Guard before capturing the anchor: an exhausted / in-flight walk must
+    // not leave a stale anchor behind for a later prepend to mis-restore.
+    const st = useSessionArchiveStore.getState()
+    if (st.sessionId !== selectedSessionId || st.cursor < 1 || st.loading) return
+    const el = scrollRef.current
+    archScrollAnchor.current = el ? el.scrollHeight - el.scrollTop : null
+    void loadOlderSessionArchive()
+  }, [selectedSessionId])
+
+  // Selection switch: the store rebinds via anchorSessionArchive (sidebar /
+  // live mirror); the per-panel gesture state resets here.
+  useEffect(() => {
+    topTriggerArmed.current = true
+    archScrollAnchor.current = null
+  }, [selectedSessionId])
 
   // Track scroll position
   useEffect(() => {
@@ -184,10 +248,26 @@ export function SessionChatPanel() {
     if (!el) return
     const onScroll = () => {
       wasAtBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+      if (el.scrollTop > 200) topTriggerArmed.current = true
+      else if (el.scrollTop < 80 && topTriggerArmed.current) {
+        topTriggerArmed.current = false
+        handleLoadOlder()
+      }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [handleLoadOlder])
+
+  // Restore the reading position after a prepend — layout effect so the
+  // correction lands before paint. Keyed on the store's message array: it
+  // changes exactly when a segment lands.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const anchor = archScrollAnchor.current
+    if (!el || anchor === null) return
+    el.scrollTop = el.scrollHeight - anchor
+    archScrollAnchor.current = null
+  }, [archMessages])
 
   // Auto-scroll only when already at bottom
   useEffect(() => {
@@ -320,7 +400,41 @@ export function SessionChatPanel() {
             <p className="text-sm text-[var(--muted-foreground)]">No messages in this session</p>
           </div>
         ) : (
-          <MessageList messages={messages} debugMode={debugMode} />
+          <>
+            {/* Archived history above the transcript. Simpler than the Chat
+                panel's collapsed ArchiveHistory block (that component is
+                coupled to the chat-session singleton store): pulled segments
+                render expanded, with one boundary row marking where the
+                archive ends and the active log begins. readOnly — these turns
+                left the active log, so exchange:delete can't target them. */}
+            {archBound && archAnchor > 0 && (
+              <div className="border-b border-[var(--border)]/50">
+                {archCursor > 0 ? (
+                  <button
+                    onClick={handleLoadOlder}
+                    disabled={archLoading}
+                    className="flex w-full items-center justify-center gap-1.5 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:hover:bg-transparent"
+                  >
+                    {archLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {archLoading ? t('chat.archive.loading') : t('chat.archive.loadOlder')}
+                  </button>
+                ) : (
+                  <div className="px-3 py-2 text-center text-[10px] text-[var(--muted-foreground)]">
+                    {t('chat.archive.noEarlier')}
+                  </div>
+                )}
+                {archivedVisible.length > 0 && (
+                  <>
+                    <MessageList messages={archivedVisible} debugMode={debugMode} readOnly />
+                    <div className="border-t border-[var(--border)]/50 px-3 py-2 text-center text-[10px] text-[var(--muted-foreground)]">
+                      {t('chat.archive.header', { segments: archAnchor - archCursor, messages: archivedVisible.length })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <MessageList messages={messages} debugMode={debugMode} />
+          </>
         )}
       </div>
     </div>
