@@ -327,7 +327,7 @@ export function ChatPanel() {
             </div>
           ) : (
             <>
-              <ArchiveHistory onLoadOlder={handleLoadOlderArchive} />
+              <ArchiveHistory onLoadOlder={handleLoadOlderArchive} scrollRef={scrollRef} />
               <MessageList messages={mainMessages} />
             </>
           )}
