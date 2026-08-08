@@ -22,8 +22,12 @@
  * transcripts, not source under review — worth trading for the storm.
  */
 
-/** Workspace-relative (POSIX) prefixes of the agent's own transcript + log churn. */
-const SESSION_LOG_PREFIXES = ['.halo/sessions/', '.halo/logs/']
+/** Workspace-relative (POSIX) prefixes of the agent's own transcript + log
+ *  churn. `.halo/halo.db` covers the sqlite file plus its WAL/-shm siblings:
+ *  since session meta moved into sqlite, merely LISTING sessions touches the
+ *  WAL — without this prefix, opening the Sessions tab triggered a git
+ *  status+ignored refresh for machine state git decorations never show. */
+const SESSION_LOG_PREFIXES = ['.halo/sessions/', '.halo/logs/', '.halo/halo.db']
 
 /**
  * True when a `file:changed` event is agent transcript / log churn. Takes the
