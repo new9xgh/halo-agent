@@ -15,9 +15,10 @@ import type { ChatMessage } from '@/shared/types'
  * pulls segment `cursor` whole, prepends it, and decrements. 0 means the whole
  * archive is loaded (or there was none).
  *
- * The anchor is pinned at open time on purpose: a segment written while the
- * session is being viewed (a compact mid-conversation) does not move it, so
- * the numbering the client walks down can never shift under it.
+ * The anchor only ever moves UP, and only when a snapshot brings a higher
+ * count (see noteArchiveAnchor): the numbering the client walks down can never
+ * shrink under it, while a mid-session compact still becomes reachable on the
+ * next subscribe/reattach.
  */
 
 /** Pulled segments, keyed `${sessionId}\u0000${n}`. A committed segment file is
@@ -56,13 +57,25 @@ export const useArchiveStore = create<ArchiveStore>(() => ({
 }))
 
 /**
- * Bind the anchor from a `state:snapshot`. Idempotent per session: a
+ * Bind the anchor from a `state:snapshot`. Idempotent per session — a
  * re-subscribe (stale-link reconnect) or a per-turn snapshot must not drop
- * segments the user already pulled, and a segment archived after open must not
- * move the anchor.
+ * segments the user already pulled.
+ *
+ * Exception: a count HIGHER than the current anchor re-anchors. A compact that
+ * fires while the session is open archives a new segment, and the next
+ * subscribe/reattach snapshot both carries the higher count AND replaces the
+ * view with the shrunken active log — so without this the just-archived turns
+ * sit in neither place (not in the view, and below a cursor counting down from
+ * the old anchor) until the user reopens the session.
+ *
+ * Re-anchoring restarts the walk rather than extending it: prepends are
+ * oldest-first, so a newer segment can't be spliced onto an already-pulled
+ * tail. The re-pull is free — `segmentCache` still holds those segments, and a
+ * committed segment file never changes.
  */
 export function noteArchiveAnchor(sessionId: string, archiveCount: number): void {
-  if (useArchiveStore.getState().sessionId === sessionId) return
+  const state = useArchiveStore.getState()
+  if (state.sessionId === sessionId && archiveCount <= state.anchor) return
   useArchiveStore.setState({ sessionId, anchor: archiveCount, cursor: archiveCount, messages: [], loading: false })
 }
 

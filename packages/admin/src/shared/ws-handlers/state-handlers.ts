@@ -20,8 +20,8 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
         useChatStore.getState().setSessionId(snapshot.sessionId)
         // Anchor the scroll-up history walk. Only subscribe/reattach snapshots
         // carry `archiveCount`; the per-turn ones omit it, which is read as
-        // "no archive" — safe because noteArchiveAnchor is a no-op once the
-        // session is already bound.
+        // "no archive" — safe because noteArchiveAnchor only ever re-anchors on
+        // a HIGHER count, and 0 never beats a bound anchor.
         noteArchiveAnchor(snapshot.sessionId, snapshot.archiveCount ?? 0)
       }
       if (snapshot.agentId) {

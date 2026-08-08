@@ -8,18 +8,20 @@ import type { ChatMessage } from '../src/shared/types'
  * Contract: scroll-up archive loading walks a cursor DOWN from the anchor the
  * `state:snapshot` handed over, one immutable segment per step.
  *
- *  - the anchor is pinned per session: a re-subscribe / per-turn snapshot must
- *    not reset it and drop segments the user already pulled, and a segment
- *    archived while the session is open must not shift the numbering
+ *  - the anchor holds per session: a re-subscribe / per-turn snapshot must not
+ *    reset it and drop segments the user already pulled — but a HIGHER count
+ *    re-anchors, so a compact that fires mid-session (whose segment the
+ *    reattach snapshot has already dropped from the view) stays reachable
  *  - the cursor is monotonically decreasing and stops at 0 ("no earlier")
  *  - segments are cached module-side: revisiting a session re-renders its
  *    history with ZERO requests (a committed segment file never changes)
  *  - a failed pull leaves the cursor where it is, so the row stays retryable
  *
  * Mutation check (must fail on revert): drop the same-session early return in
- * `noteArchiveAnchor` → the re-snapshot case goes red; drop the `loading` guard
- * in `loadOlderArchive` → the concurrent case double-pulls; drop `segmentCache`
- * → the cache-replay case goes red.
+ * `noteArchiveAnchor` → the re-snapshot case goes red; narrow its condition back
+ * to `sessionId === sessionId` (ignoring a higher count) → the re-anchor case
+ * goes red; drop the `loading` guard in `loadOlderArchive` → the concurrent case
+ * double-pulls; drop `segmentCache` → the cache-replay case goes red.
  */
 
 const PROJECT = '/ws/arch'
@@ -61,15 +63,43 @@ describe('noteArchiveAnchor', () => {
     await loadOlderArchive()
     expect(ids()).toEqual(['seg2'])
 
-    // Re-subscribe (stale-link reconnect) AND a later compact bumping the count.
+    // Re-subscribe (stale-link reconnect) with the same count, and a per-turn
+    // snapshot whose missing archiveCount reads as 0.
     noteArchiveAnchor('s_idem', 2)
-    noteArchiveAnchor('s_idem', 5)
+    noteArchiveAnchor('s_idem', 0)
 
     const s = useArchiveStore.getState()
-    expect(s.anchor).toBe(2)     // anchor pinned at open time
+    expect(s.anchor).toBe(2)     // anchor held
     expect(s.cursor).toBe(1)     // walk position kept
     expect(ids()).toEqual(['seg2'])
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a higher count re-anchors — a mid-session compact stays reachable', async () => {
+    const spy = segmentSpy()
+    noteArchiveAnchor('s_bump', 2)
+    await loadOlderArchive()
+    expect(ids()).toEqual(['seg2'])
+
+    // Compact archives segment 3 while the session is open; the reattach
+    // snapshot replaces the view with the shrunken log and carries count 3.
+    noteArchiveAnchor('s_bump', 3)
+
+    const s = useArchiveStore.getState()
+    expect(s.anchor).toBe(3)
+    expect(s.cursor).toBe(3)
+    // The walk restarts: prepends are oldest-first, so seg3 can't splice onto
+    // an already-pulled seg2 — those segments are re-pulled from cache.
+    expect(ids()).toEqual([])
+
+    await loadOlderArchive()
+    expect(ids()).toEqual(['seg3'])
+    await loadOlderArchive()
+    expect(ids()).toEqual(['seg2', 'seg3'])
+    expect(useArchiveStore.getState().cursor).toBe(1)
+    // seg3 is the only segment not already cached — seg2's re-pull is free.
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy.mock.calls.map((c) => c[1])).toEqual([2, 3])
   })
 
   it('rebinds on a session switch', () => {
