@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { compress } from 'hono/compress'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { WebSocketServer } from 'ws'
@@ -319,6 +320,13 @@ app.use('/*', cors({
   maxAge: 86400,
   credentials: allowlist.length > 0,
 }))
+
+// Response compression (gzip/deflate via Node's global CompressionStream).
+// Covers /api/* JSON (multi-MB session archive segments) and the serveStatic
+// admin assets below. SSE is safe: hono's compressible content-type regex
+// explicitly excludes text/event-stream, and streamSSE sets Transfer-Encoding
+// (also skipped). Responses under 1 KiB pass through uncompressed.
+app.use('/*', compress({ threshold: 1024 }))
 
 // Auth middleware — protects API routes
 app.use('/api/*', authMiddleware() as never)
