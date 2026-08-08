@@ -112,6 +112,34 @@ export interface SessionSaveOptions {
    *  Only the archiving write passes it; every other write preserves whatever
    *  the file already has. See sessions/session-archive.ts. */
   archiveCount?: number
+  /** Main-conversation user turns this write is moving OUT into an archive
+   *  segment. Added to the header's `archivedUserCount` so `exchangeCount`
+   *  keeps counting the archived tail. Only the archiving write passes it. */
+  archivedUserDelta?: number
+}
+
+/** List-visible header fields, returned by `saveSessionToFile` so the caller can
+ *  mirror them into the session's db row without re-reading the file (the
+ *  listing path reads the row, never the file — see routes/sessions.ts). */
+export interface SessionFileMeta {
+  title: string
+  exchangeCount: number
+  contextTokens: number
+  totalOutputTokens: number
+}
+
+/**
+ * Main-conversation user turns in a UI log — `role === 'user'` without a
+ * `taskId`, the same subset `archiveSplitIndex` splits on and `deleteExchange`
+ * counts ordinals over. Plus the archived tail (header `archivedUserCount`)
+ * this is the session's exchange count.
+ */
+export function countMainUserMessages(messages: SessionMessage[]): number {
+  let n = 0
+  for (const m of messages) {
+    if (m.role === 'user' && !m.taskId) n++
+  }
+  return n
 }
 
 /**
@@ -146,14 +174,16 @@ function atomicWriteJsonSync(filePath: string, content: string): void {
   }
 }
 
-/** Save session messages to JSON file — path determined by agentId */
-export function saveSessionToFile(opts: SessionSaveOptions): void {
+/** Save session messages to JSON file — path determined by agentId.
+ *  Returns the list-visible header fields (so the caller can mirror them into
+ *  the db row), or null when nothing was written. */
+export function saveSessionToFile(opts: SessionSaveOptions): SessionFileMeta | null {
   const { sessionId, projectPath, messages, contextTokens, outputTokens } = opts
   const agentId = opts.agentId ?? 'default'
   const agentName = opts.agentName ?? 'Default'
   const source = opts.source ?? 'explorer'
 
-  if (!sessionId || messages.length === 0) return
+  if (!sessionId || messages.length === 0) return null
   try {
     const dir = getSessionDir(agentId, projectPath)
     fsSync.mkdirSync(dir, { recursive: true })
@@ -167,6 +197,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
     let existingOutput: unknown
     let existingTitle: string | undefined
     let existingArchiveCount: number | undefined
+    let existingArchivedUserCount = 0
     try {
       const existing = JSON.parse(fsSync.readFileSync(filePath, 'utf-8'))
       if (existing.createdAt) createdAt = existing.createdAt
@@ -176,6 +207,7 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
       if (existing.rawMessages) existingRawMessages = existing.rawMessages
       if (existing.output !== undefined) existingOutput = existing.output
       if (typeof existing.archiveCount === 'number') existingArchiveCount = existing.archiveCount
+      if (typeof existing.archivedUserCount === 'number') existingArchivedUserCount = existing.archivedUserCount
     } catch { /* new session */ }
 
     // Title: derived once from the first user message and sticky thereafter.
@@ -199,6 +231,11 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
 
     const parentSessionId = existingParent ?? (opts.parentSessionId || undefined)
     const archiveCount = opts.archiveCount ?? existingArchiveCount
+    // Main user turns already moved out into archive segments. `messages` only
+    // holds the kept tail, so without this the exchange count would shrink
+    // every time a compact archives history.
+    const archivedUserCount = existingArchivedUserCount + (opts.archivedUserDelta ?? 0)
+    const exchangeCount = countMainUserMessages(messages) + archivedUserCount
     const session: Record<string, unknown> = {
       version: 1,
       id: sessionId,
@@ -220,11 +257,14 @@ export function saveSessionToFile(opts: SessionSaveOptions): void {
       // write carries the on-disk value forward. Dropping it here would
       // orphan already-written segments.
       ...(archiveCount ? { archiveCount } : {}),
+      ...(archivedUserCount ? { archivedUserCount } : {}),
     }
 
     atomicWriteJsonSync(filePath, JSON.stringify(session))
+    return { title, exchangeCount, contextTokens, totalOutputTokens: outputTokens }
   } catch (err) {
     console.debug(`[SessionStore] Failed to save session: ${err instanceof Error ? err.message : String(err)}`)
+    return null
   }
 }
 
@@ -288,19 +328,16 @@ export function listSessionFiles(projectPath?: string | null, agentId?: string):
 // ── Per-session jsonl enrichment ──────────────────────────────────
 
 /**
- * Read jsonl-only metadata for a known (agentId, sessionId). Returns the
- * fields the db row doesn't carry (title, messageCount, token counts).
- *
- * This is the per-row enrichment used by the paginated listing path: db
- * gives us the page (default 50), then we read at most that many jsonl
- * headers — orders of magnitude cheaper than the previous "scan every
- * file every time" pattern.
+ * Read the header metadata of a known (agentId, sessionId) straight from its
+ * file. This parses the WHOLE file (multi-MB for a long session), so it is not
+ * a listing primitive: the listing path reads the mirrored db columns and only
+ * falls back here once per row to backfill them (see routes/sessions.ts).
  */
 export function readSessionFileMeta(
   sessionId: string,
   agentId: string,
   projectPath?: string | null,
-): { title: string; messageCount: number; contextTokens?: number; totalOutputTokens?: number } | null {
+): (SessionFileMeta & { messageCount: number }) | null {
   try {
     const dir = getSessionDir(agentId, projectPath)
     const filePath = resolveSessionPath(dir, sessionId, '.json')
@@ -309,8 +346,9 @@ export function readSessionFileMeta(
     return {
       title: data.title ?? '',
       messageCount: data.messageCount ?? 0,
-      contextTokens: data.contextTokens,
-      totalOutputTokens: data.totalOutputTokens,
+      exchangeCount: countMainUserMessages(data.messages ?? []) + (data.archivedUserCount ?? 0),
+      contextTokens: data.contextTokens ?? 0,
+      totalOutputTokens: data.totalOutputTokens ?? 0,
     }
   } catch {
     return null

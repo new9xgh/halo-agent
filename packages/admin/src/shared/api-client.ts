@@ -528,7 +528,7 @@ export const api = {
       if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
       const qs = params.toString() ? `?${params}` : ''
       return request<{
-        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; messageCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number; goalSessionId?: string | null }>
+        sessions: Array<{ id: string; agentId: string; agentName: string; title: string; createdAt: number; updatedAt: number; exchangeCount: number; parentSessionId?: string; stoppedAt?: number | null; archivedAt?: number | null; contextTokens?: number; totalOutputTokens?: number; goalSessionId?: string | null }>
         nextCursor: number | null
       }>(`/sessions/logs${qs}`)
     },

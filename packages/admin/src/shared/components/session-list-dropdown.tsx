@@ -20,7 +20,8 @@ export interface SessionMeta {
   parentSessionId?: string
   createdAt: number
   updatedAt: number
-  messageCount: number
+  /** User turns in the session (lifetime — survives compaction), not raw log length. */
+  exchangeCount: number
   agentSnapshot?: Record<string, unknown>
   /** Goal-mode back-pointer: non-null while this session is the bound worker
    *  of an active goal → 🎯 badge. */
@@ -129,7 +130,7 @@ export function SessionListDropdown({
                       {s.title}
                     </p>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
-                      {s.messageCount} msgs · {formatRelativeTime(s.updatedAt, t)}
+                      {s.exchangeCount} msgs · {formatRelativeTime(s.updatedAt, t)}
                       {typeof s.agentSnapshot?.model === 'string' && (
                         <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
                       )}

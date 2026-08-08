@@ -11,7 +11,14 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   stopped_at INTEGER,
   archived_at INTEGER,
   goal TEXT,
-  goal_session_id TEXT
+  goal_session_id TEXT,
+  -- List-visible metadata mirrored from the session file's header on every
+  -- write, so the listing path never opens (multi-MB) session files.
+  -- NULL = written before these columns existed; the list route backfills.
+  title TEXT,
+  exchange_count INTEGER,
+  context_tokens INTEGER,
+  total_output_tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS disabled_items (

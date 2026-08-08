@@ -17,6 +17,14 @@ export const agentSessions = sqliteTable('agent_sessions', {
   // `goalSessionId` back-points to G so the delivery point routes without scanning.
   goal: text('goal'),
   goalSessionId: text('goal_session_id'),
+  // List-visible metadata mirrored from the session file's header on every
+  // write (see SessionManager.persistSessionFile). The listing path reads these
+  // instead of opening each session file. `null` = row predates the columns —
+  // the list route backfills it from the file on first read.
+  title: text('title'),
+  exchangeCount: integer('exchange_count'),
+  contextTokens: integer('context_tokens'),
+  totalOutputTokens: integer('total_output_tokens'),
 })
 
 export const disabledItems = sqliteTable('disabled_items', {

@@ -22,7 +22,8 @@ export interface SessionItem {
   archivedAt?: number | null
   createdAt: number
   updatedAt: number
-  messageCount: number
+  /** User turns in the session (lifetime — survives compaction), not raw log length. */
+  exchangeCount: number
   /** Goal-mode back-pointer: non-null while this session is the bound worker
    *  of an active goal → 🎯 badge. */
   goalSessionId?: string | null
@@ -196,7 +197,7 @@ function SessionTree({
                   )}
                 </div>
                 <p className="text-[9px] text-[var(--muted-foreground)]">
-                  {sub.messageCount} msgs · {formatRelativeTime(sub.updatedAt, t)}
+                  {sub.exchangeCount} msgs · {formatRelativeTime(sub.updatedAt, t)}
                 </p>
               </div>
               {editingId !== sub.id && (
@@ -696,7 +697,7 @@ export function AgentSessionsSidebar() {
                       )}
                     </div>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
-                      {main.messageCount} msgs · {formatRelativeTime(main.updatedAt, t)}
+                      {main.exchangeCount} msgs · {formatRelativeTime(main.updatedAt, t)}
                     </p>
                   </div>
                   {editingId !== main.id && (

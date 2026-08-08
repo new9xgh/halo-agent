@@ -64,7 +64,9 @@ describe('saveAgentState / loadAgentState roundtrip', () => {
     expect(data.id).toBe('s2')
     expect(data.agentId).toBe('default')
     expect(data.title).toBe('do the thing')   // derived from description
-    expect(data.messageCount).toBe(1)
+    // messageCount is deliberately absent — it counts the UI log and is owned
+    // by saveSessionToFile; this path only sees the raw LLM history.
+    expect(data.messageCount).toBeUndefined()
     expect(data.output).toBe('result text')
     expect(data.createdAt).toBeTruthy()
     expect(data.updatedAt).toBeTruthy()

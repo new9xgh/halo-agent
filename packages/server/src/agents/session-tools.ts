@@ -12,7 +12,6 @@
  */
 import { config } from '../config.js'
 import { loadAgentYaml, loadSkillMetadata, isAgentDisabled, isTeamMember } from './agent-loader.js'
-import { readSessionFileMeta } from '../sessions/session-store.js'
 import { getDisabledSet } from '../db/index.js'
 import type { ToolDef } from './bedrock-agent.js'
 import type { SessionManagerInternals } from './session-manager.js'
@@ -141,14 +140,12 @@ export function buildSessionTools(sm: SessionManagerInternals, sessionId: string
       // Direct children of this session. Cap at 500 — sub-agent fan-out
       // beyond that is an unrelated bug, not a happy-path use case.
       const { sessions } = sm.listSessions({ parentId: sessionId, limit: 500 })
-      // The agent_sessions table only carries `description` (the task summary
-      // from start_session). A user-set `title` lives in the per-session jsonl
-      // log, so enrich each row from there — lets the caller dispatch by the
-      // human-assigned title, matching what the admin sidebar shows. Fall back
-      // to `description` when no title was set, so the field is never empty.
+      // `title` is the session file's header title mirrored onto the row; fall
+      // back to `description` (the start_session task summary) when it's unset,
+      // so the caller can always dispatch by the name the admin sidebar shows.
       const enriched = sessions.map((s) => ({
         ...s,
-        title: readSessionFileMeta(s.id, s.agentId, sm.workspaceRoot)?.title || s.description,
+        title: s.title || s.description,
       }))
       return JSON.stringify({ code: 0, sessions: enriched, count: enriched.length }, null, 2)
     },

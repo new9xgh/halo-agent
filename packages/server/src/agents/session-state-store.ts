@@ -72,7 +72,10 @@ export class SessionStateStore {
       if (!existing.title) existing.title = session.description?.slice(0, 60) || `${session.agentId} session`
       if (!existing.createdAt) existing.createdAt = now
       existing.updatedAt = now
-      existing.messageCount = Array.isArray(session.agent.messages) ? session.agent.messages.length : 0
+      // messageCount is NOT written here: it counts the UI message log and is
+      // owned by saveSessionToFile. This path only knows the raw LLM history
+      // (a different, larger number), and both writing it made the field flap
+      // between the two values depending on which write landed last.
       existing.output = session.output
       existing.rawMessages = session.agent.messages
       atomicWriteSessionFile(filePath, JSON.stringify(existing))

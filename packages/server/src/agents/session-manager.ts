@@ -19,7 +19,7 @@ import { microCompactMessages } from './micro-compact.js'
 import { loadAgentYaml } from './agent-loader.js'
 import type { AgentSessionEvent } from './agent-events.js'
 import { broadcast } from '../ws/broadcast.js'
-import { createDb, type HaloDb } from '../db/index.js'
+import { createDb, mirrorSessionMeta, type HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq, and, isNull, isNotNull } from 'drizzle-orm'
 import { buildSessionTools } from './session-tools.js'
@@ -227,6 +227,14 @@ export interface SessionInfo {
   updatedAt: number
   stoppedAt: number | null
   archivedAt: number | null
+  /** List-visible metadata mirrored from the session file on every write, so
+   *  listing never opens the file. `exchangeCount === null` means this row was
+   *  never mirrored (written before the columns existed) — the list route then
+   *  reads the file once and backfills (see routes/sessions.ts). */
+  title: string | null
+  exchangeCount: number | null
+  contextTokens: number | null
+  totalOutputTokens: number | null
 }
 
 /** Hierarchical view of a session and its descendants. */
@@ -367,10 +375,17 @@ export class SessionManager implements SessionManagerInternals {
    * Without this single entry point, racing background saves could
    * resurrect a freshly-deleted file (this is the bug we hit when the
    * delete UI showed rows reappearing).
+   *
+   * Being the single entry point also makes it the right place to mirror the
+   * file's list-visible header into the session's db row — the listing path
+   * reads those columns instead of opening every file. The mirror is
+   * idempotent (see mirrorSessionMeta), so the 500ms mid-turn persists don't
+   * churn the row.
    */
   persistSessionFile(opts: import('../sessions/session-store.js').SessionSaveOptions): void {
     if (this.deletedSessionIds.has(opts.sessionId)) return
-    saveSessionToFile(opts)
+    const meta = saveSessionToFile(opts)
+    if (meta) mirrorSessionMeta(this.db, opts.sessionId, meta)
   }
 
   constructor(workspaceRoot: string, opts?: { reconcileOrphansOnBoot?: boolean }) {

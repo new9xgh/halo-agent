@@ -6,7 +6,7 @@ import type { HaloDb } from '../db/index.js'
 import { agentSessions } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 import {
-  getSessionDir, loadSessionMessages, fileSegment,
+  getSessionDir, loadSessionMessages, fileSegment, countMainUserMessages,
   type SessionSaveOptions,
 } from '../sessions/session-store.js'
 import { archiveSplitIndex, readArchiveCount, writeArchiveSegment } from '../sessions/session-archive.js'
@@ -253,9 +253,11 @@ export class SessionUIStore {
   }
 
   /** Persist UI state (root messages + token counts) to disk.
-   *  `archiveCount` is passed ONLY by archiveOldMessages (the commit step of an
-   *  archive write); every other call leaves the on-disk value alone. */
-  private persistUIState(rootId: string, state: UIState, archiveCount?: number): void {
+   *  `archive` is passed ONLY by archiveOldMessages (the commit step of an
+   *  archive write): `count` is the new segment count and `userDelta` the main
+   *  user turns leaving the active file. Every other call leaves both on-disk
+   *  values alone. */
+  private persistUIState(rootId: string, state: UIState, archive?: { count: number; userDelta: number }): void {
     try {
       const projectPath = this.uiStateProjectPaths.get(rootId) ?? this.host.workspaceRoot
       const snapshot = createSaveSnapshot(state)
@@ -281,7 +283,8 @@ export class SessionUIStore {
         // slot `agentId` — keep these two distinct so a renamed default slot
         // shows correctly. (agentId still drives the directory above.)
         agentName: inMem?.agentName ?? row?.agentName ?? row?.agentId,
-        archiveCount,
+        archiveCount: archive?.count,
+        archivedUserDelta: archive?.userDelta,
       })
     } catch (err) {
       console.error(`[SessionUIStore] persistUIState failed for ${rootId}: ${err instanceof Error ? err.message : String(err)}`)
@@ -330,7 +333,9 @@ export class SessionUIStore {
       writeArchiveSegment(dir, seg, n, older)
 
       state.messageLog = kept
-      this.persistUIState(rootId, state, n)
+      // The archived slice's main user turns leave the active file — carry them
+      // in the header so exchangeCount stays the session's lifetime count.
+      this.persistUIState(rootId, state, { count: n, userDelta: countMainUserMessages(older) })
       // persistUIState swallows its own IO errors (every session write does), so
       // confirm the commit landed. An active file still at `< n` next to a
       // truncated in-memory log would let the NEXT ordinary persist write the

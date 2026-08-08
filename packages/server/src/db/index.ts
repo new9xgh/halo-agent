@@ -5,6 +5,7 @@ import * as schema from './schema.js'
 import path from 'node:path'
 import fs from 'node:fs'
 import { ensureWorkspaceHalo, TEMPLATES_DIR } from '../init.js'
+import type { SessionFileMeta } from '../sessions/session-store.js'
 
 // schema.sql lives alongside the other templates; resolve via TEMPLATES_DIR
 // so the bundled-cli layout (single dist/) and the monorepo dev layout
@@ -32,6 +33,17 @@ export function createDb(dataDir: string) {
   if (!hasGoal) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal TEXT`)
   const hasGoalSessionId = agentSessionsCols.some((c) => c.name === 'goal_session_id')
   if (!hasGoalSessionId) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN goal_session_id TEXT`)
+  // List-visible session-file metadata (title / counts / tokens) mirrored into
+  // the row so listing doesn't read every session file. Nullable on purpose:
+  // NULL means "never mirrored" and the list route backfills from the file.
+  const hasTitle = agentSessionsCols.some((c) => c.name === 'title')
+  if (!hasTitle) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN title TEXT`)
+  const hasExchangeCount = agentSessionsCols.some((c) => c.name === 'exchange_count')
+  if (!hasExchangeCount) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN exchange_count INTEGER`)
+  const hasContextTokens = agentSessionsCols.some((c) => c.name === 'context_tokens')
+  if (!hasContextTokens) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN context_tokens INTEGER`)
+  const hasTotalOutputTokens = agentSessionsCols.some((c) => c.name === 'total_output_tokens')
+  if (!hasTotalOutputTokens) sqlite.exec(`ALTER TABLE agent_sessions ADD COLUMN total_output_tokens INTEGER`)
 
   // Indexes for the hot listing path (channel /list, admin sidebar, sub-agent
   // children lookup). Without these, `listSessions` falls back to a full table
@@ -45,6 +57,39 @@ export function createDb(dataDir: string) {
 
 export { schema }
 export type HaloDb = ReturnType<typeof createDb>
+
+/**
+ * Mirror a session file's list-visible header (title / exchange count / token
+ * counts) into its `agent_sessions` row, so listing never opens the file.
+ *
+ * Called on every session write (SessionManager.persistSessionFile) and by the
+ * list route's backfill for rows written before these columns existed. Skips
+ * the UPDATE when the row already holds these values — a session persists every
+ * 500ms mid-turn and most of those writes change nothing here, and a no-op
+ * write would churn the row for nothing. `updated_at` is deliberately NOT
+ * touched: the turn lifecycle owns it (and it's the listing's sort key).
+ */
+export function mirrorSessionMeta(db: HaloDb, sessionId: string, meta: SessionFileMeta): void {
+  const row = db.select({
+    title: schema.agentSessions.title,
+    exchangeCount: schema.agentSessions.exchangeCount,
+    contextTokens: schema.agentSessions.contextTokens,
+    totalOutputTokens: schema.agentSessions.totalOutputTokens,
+  }).from(schema.agentSessions).where(eq(schema.agentSessions.id, sessionId)).get()
+  // No row: internal-agent sessions (`__evo_agent__` etc.) live outside any
+  // workspace db by design — nothing to mirror into.
+  if (!row) return
+  if (row.title === meta.title
+    && row.exchangeCount === meta.exchangeCount
+    && row.contextTokens === meta.contextTokens
+    && row.totalOutputTokens === meta.totalOutputTokens) return
+  db.update(schema.agentSessions).set({
+    title: meta.title,
+    exchangeCount: meta.exchangeCount,
+    contextTokens: meta.contextTokens,
+    totalOutputTokens: meta.totalOutputTokens,
+  }).where(eq(schema.agentSessions.id, sessionId)).run()
+}
 
 const dbCache = new Map<string, HaloDb>()
 

@@ -217,6 +217,10 @@ export class SessionQueryStore {
       updatedAt: ts,
       stoppedAt: null,
       archivedAt: null,
+      title: internal.data.title ?? null,
+      exchangeCount: null,
+      contextTokens: null,
+      totalOutputTokens: null,
     }
   }
 
@@ -293,6 +297,10 @@ export class SessionQueryStore {
       updatedAt: row.updatedAt,
       stoppedAt: row.stoppedAt,
       archivedAt: row.archivedAt,
+      title: row.title ?? null,
+      exchangeCount: row.exchangeCount ?? null,
+      contextTokens: row.contextTokens ?? null,
+      totalOutputTokens: row.totalOutputTokens ?? null,
     }
   }
 }

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
-import { getWorkspaceDb } from '../db/index.js'
+import { getWorkspaceDb, mirrorSessionMeta } from '../db/index.js'
 import type { SessionManagerRegistry } from '../agents/session-manager-registry.js'
 import { agentSessions } from '../db/schema.js'
 import { findSessionFileData, findAndDeleteSessionFile, findAndUpdateSessionTitle, readSessionFileMeta } from '../sessions/session-store.js'
@@ -209,26 +209,39 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
       ? sm.listDescendants(rows.map((s) => s.id), { includeArchived })
       : []
 
-    const { workspacePath } = getWorkspaceDb(projectId)
+    const { db, workspacePath } = getWorkspaceDb(projectId)
 
-    // Per-row jsonl enrichment. Bounded by page size + total descendants
-    // of those pages — for typical sub-agent fan-out (handful per root)
-    // this is well under 100 file reads per page request.
+    // Per-row metadata comes from the mirrored db columns — no file reads.
+    // `exchangeCount === null` means the row predates those columns, so read
+    // the file once and mirror it back; subsequent pages hit the db.
     const enrich = (s: typeof rows[number]) => {
-      const meta = readSessionFileMeta(s.id, s.agentId, workspacePath)
+      let title = s.title ?? ''
+      let exchangeCount = s.exchangeCount
+      let contextTokens = s.contextTokens ?? 0
+      let totalOutputTokens = s.totalOutputTokens ?? 0
+      if (exchangeCount === null) {
+        const meta = readSessionFileMeta(s.id, s.agentId, workspacePath)
+        if (meta) {
+          mirrorSessionMeta(db, s.id, meta)
+          title = meta.title
+          exchangeCount = meta.exchangeCount
+          contextTokens = meta.contextTokens
+          totalOutputTokens = meta.totalOutputTokens
+        }
+      }
       return {
         id: s.id,
         agentId: s.agentId,
         agentName: s.agentName,
-        title: meta?.title ?? '',
+        title,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
-        messageCount: meta?.messageCount ?? 0,
+        exchangeCount: exchangeCount ?? 0,
         parentSessionId: s.parentId ?? undefined,
         stoppedAt: s.stoppedAt,
         archivedAt: s.archivedAt,
-        contextTokens: meta?.contextTokens,
-        totalOutputTokens: meta?.totalOutputTokens,
+        contextTokens,
+        totalOutputTokens,
         // Goal-mode: non-null while this session is the bound worker of an
         // active goal — session lists render a 🎯 badge off this.
         goalSessionId: s.goalSessionId,
@@ -315,9 +328,12 @@ export function createSessionRoutes(smRegistry?: SessionManagerRegistry) {
     const title = body.title?.trim()
     if (!title) return c.json({ error: 'title required' }, 400)
 
-    const { workspacePath } = getWorkspaceDb(projectId)
+    const { db, workspacePath } = getWorkspaceDb(projectId)
     const updated = findAndUpdateSessionTitle(id, title, workspacePath)
     if (!updated) return c.json({ error: 'Session not found' }, 404)
+    // The listing reads the mirrored column, so the rename has to land there
+    // too — otherwise the new title only appears after the session's next write.
+    db.update(agentSessions).set({ title }).where(eq(agentSessions.id, id)).run()
     // Push so every admin session list re-fetches the new title live.
     broadcast({ type: 'session:changed' })
     return c.json({ ok: true })

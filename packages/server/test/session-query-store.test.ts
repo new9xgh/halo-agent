@@ -33,7 +33,11 @@ CREATE TABLE agent_sessions (
   stopped_at INTEGER,
   archived_at INTEGER,
   goal TEXT,
-  goal_session_id TEXT
+  goal_session_id TEXT,
+  title TEXT,
+  exchange_count INTEGER,
+  context_tokens INTEGER,
+  total_output_tokens INTEGER
 );
 `
 

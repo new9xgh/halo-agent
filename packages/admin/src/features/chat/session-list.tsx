@@ -150,7 +150,7 @@ export function SessionSidebar({
                   </p>
                 )}
                 <p className="text-[9px] text-[var(--muted-foreground)]">
-                  {s.messageCount} msgs · {formatRelativeTime(s.updatedAt, t)}
+                  {s.exchangeCount} msgs · {formatRelativeTime(s.updatedAt, t)}
                   {typeof s.agentSnapshot?.model === 'string' && (
                     <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
                   )}

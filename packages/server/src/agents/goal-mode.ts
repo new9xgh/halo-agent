@@ -23,7 +23,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { and, eq, isNull, isNotNull } from 'drizzle-orm'
 import { agentSessions } from '../db/schema.js'
-import { readSessionFileMeta, loadSessionMessages } from '../sessions/session-store.js'
+import { loadSessionMessages } from '../sessions/session-store.js'
 import { broadcast } from '../ws/broadcast.js'
 import { config } from '../config.js'
 import type { HaloDb } from '../db/index.js'
@@ -330,7 +330,7 @@ export async function deliverGoalRound(
   if (worker.parentId !== null) return
   const db = host.getDb()
   // Cheap field check first — this runs at EVERY root session's turn end.
-  const row = db.select({ goalSessionId: agentSessions.goalSessionId, agentId: agentSessions.agentId })
+  const row = db.select({ goalSessionId: agentSessions.goalSessionId, totalOutputTokens: agentSessions.totalOutputTokens })
     .from(agentSessions)
     .where(eq(agentSessions.id, worker.id))
     .get()
@@ -393,8 +393,8 @@ export async function deliverGoalRound(
   else if (elapsed > caps.maxWallMs) breach = `wall-time cap (${fmtElapsed(caps.maxWallMs)}) exceeded`
   else if (state.noProgress >= NO_PROGRESS_LIMIT) breach = `no-progress breaker (${NO_PROGRESS_LIMIT} unchanged rounds)`
   else if (caps.maxTokens !== null) {
-    const meta = readSessionFileMeta(worker.id, row!.agentId, host.workspaceRoot)
-    const used = (meta?.totalOutputTokens ?? 0) - state.tokenBaseline
+    // Mirrored on the row by every session write — no need to open the file.
+    const used = (row!.totalOutputTokens ?? 0) - state.tokenBaseline
     if (used > caps.maxTokens) breach = `token budget (${caps.maxTokens}) exceeded (used ${used})`
   }
 
@@ -508,10 +508,9 @@ export function buildGoalTools(host: GoalHost, gSessionId: string): ToolDef[] {
       if (params.caps?.max_tokens && params.caps.max_tokens > 0) s.caps.maxTokens = Math.floor(params.caps.max_tokens)
       if (params.decision_policy) s.decisionPolicy = params.decision_policy
 
-      const workerRow = db().select({ agentId: agentSessions.agentId })
+      const workerRow = db().select({ totalOutputTokens: agentSessions.totalOutputTokens })
         .from(agentSessions).where(eq(agentSessions.id, s.workerSessionId)).get()
-      const meta = workerRow ? readSessionFileMeta(s.workerSessionId, workerRow.agentId, host.workspaceRoot) : null
-      s.tokenBaseline = meta?.totalOutputTokens ?? 0
+      s.tokenBaseline = workerRow?.totalOutputTokens ?? 0
       s.specHash = specHash
       s.status = 'running'
       s.startedAt = Date.now()
