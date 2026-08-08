@@ -81,6 +81,10 @@ export function ArchiveHistory({
 
       {mainMessages.length > 0 && (
         <>
+          {/* Bar BELOW the content: expansion grows upward and the viewport is
+              pinned to the newest end, so the toggle must live where the
+              reader lands — under the cursor, not a full scroll away. */}
+          {open && <MessageList messages={mainMessages} readOnly />}
           <button
             onClick={handleToggle}
             className="flex w-full items-center gap-2 border-t border-[var(--border)]/50 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
@@ -90,7 +94,6 @@ export function ArchiveHistory({
               {t('chat.archive.header', { segments: anchor - cursor, messages: mainMessages.length })}
             </span>
           </button>
-          {open && <MessageList messages={mainMessages} readOnly />}
         </>
       )}
     </div>
