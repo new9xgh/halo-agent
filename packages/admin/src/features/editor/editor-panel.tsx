@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useScopedEditorStore, useEditorStore as useGlobalEditorStore } from '@/shared/stores/editor-store'
+import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath } from '@/shared/stores/editor-store'
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
 import { FileTree, setPathExpanded, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
@@ -172,12 +172,21 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     })
   }, [groups])
 
+  // Keep the store's model-path prefix in sync so buffer-drop points can
+  // dispose the Monaco model built from the same `${projectId}/${path}` URI.
+  useEffect(() => {
+    useEditorStore.getState().setModelPathPrefix(projectId ?? null)
+  }, [projectId, useEditorStore])
+
   // Clear tabs and restore from localStorage when project changes
   useEffect(() => {
     if (!projectId) return
 
     // On project switch, clear editor state first
     if (prevProjectRef.current && prevProjectRef.current !== projectId) {
+      // Models were created under the old project's prefix — release them
+      // before the wholesale buffer reset below orphans them.
+      disposeMonacoModels(prevProjectRef.current, Object.keys(useEditorStore.getState().buffers))
       useEditorStore.setState((s) => {
         const id = s.groups[0]?.id ?? 'g0'
         return {
@@ -1007,7 +1016,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                               )}
                               <div className={cn('h-full', (mdPreview || htmlPreview) && 'hidden')}>
                                 <CodeEditor
-                                  path={`${projectId ?? ''}/${paneFile.path}`}
+                                  path={monacoModelPath(projectId, paneFile.path)}
                                   content={paneFile.content}
                                   language={paneFile.language}
                                   onChange={(value) => handleContentChange(paneFile.path, value)}

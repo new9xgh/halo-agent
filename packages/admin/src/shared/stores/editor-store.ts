@@ -1,10 +1,33 @@
 'use client'
 
-import { createContext, createElement, useContext, useRef, type ReactNode } from 'react'
+import { createContext, createElement, useContext, useEffect, useRef, type ReactNode } from 'react'
 import { create } from 'zustand'
+import { loader } from '@monaco-editor/react'
 import type { FileTreeNode } from '@turmind/halo-core'
 
 export type { FileTreeNode }
+
+/** Monaco model path for a buffer — mirrors the `path` prop EditorPanel
+ *  mounts CodeEditor with, so store-side disposal targets the exact same
+ *  model URI the editor created. Keep the two in sync via this helper. */
+export function monacoModelPath(projectId: string | null | undefined, path: string): string {
+  return `${projectId ?? ''}/${path}`
+}
+
+/** Dispose the Monaco models backing `paths`. Monaco models are global to
+ *  the page while buffers are per-store — without this, every file ever
+ *  opened kept its full text + tokenization state until reload (audit P1-3).
+ *  Safe to call while a pane still renders the closing tab: Monaco editors
+ *  detach on model dispose (onWillDispose → setModel(null)), and the next
+ *  render swaps the surviving editor to its new active tab's model. No-op
+ *  for paths without a model (preview buffers) or before Monaco loads. */
+export function disposeMonacoModels(projectId: string | null | undefined, paths: string[]): void {
+  const monaco = loader.__getMonacoInstance()
+  if (!monaco) return
+  for (const p of paths) {
+    monaco.editor.getModel(monaco.Uri.parse(monacoModelPath(projectId, p)))?.dispose()
+  }
+}
 
 /** A file's editable content (or preview metadata). One per path —
  *  shared by every pane that shows the same file, so editing in one pane
@@ -57,6 +80,12 @@ interface EditorStore {
   buffers: Record<string, EditorBuffer>
   groups: EditorGroup[]                  // length 1 or 2
   activeGroupIdx: number                 // 0 or 1
+
+  /** The projectId this store's Monaco models are mounted under (see
+   *  monacoModelPath). Synced by EditorPanel; buffer-drop points read it to
+   *  dispose the matching model. */
+  modelPathPrefix: string | null
+  setModelPathPrefix(prefix: string | null): void
 
   // ── Legacy convenience fields (derived from active group) ─────────
   tabs: EditorTab[]
@@ -169,6 +198,11 @@ export function createEditorStore() {
       activeGroupIdx: 0,
       tabs: [],
       activeTab: null,
+      modelPathPrefix: null,
+
+      setModelPathPrefix(prefix) {
+        if (get().modelPathPrefix !== prefix) set({ modelPathPrefix: prefix })
+      },
 
       fileTree: null,
       modifiedPaths: new Set(),
@@ -275,6 +309,10 @@ export function createEditorStore() {
           const next = { ...state, buffers, modifiedPaths, ...collapsed }
           return { buffers, modifiedPaths, ...collapsed, ...deriveActiveView(next) }
         })
+        // Buffer gone (or never existed) ⇒ no pane references the path ⇒
+        // release the Monaco model too.
+        const s = get()
+        if (!s.buffers[path]) disposeMonacoModels(s.modelPathPrefix, [path])
       },
 
       closeTabIn(groupIdx, path) {
@@ -304,6 +342,9 @@ export function createEditorStore() {
           const next = { ...state, groups, activeGroupIdx, buffers, modifiedPaths }
           return { groups, activeGroupIdx, buffers, modifiedPaths, ...deriveActiveView(next) }
         })
+        // As in closeTab: buffer dropped ⇒ last reference closed ⇒ dispose model.
+        const s = get()
+        if (!s.buffers[path]) disposeMonacoModels(s.modelPathPrefix, [path])
       },
 
       setActiveTab(path, groupIdx) {
@@ -362,6 +403,7 @@ export function createEditorStore() {
       },
 
       closeGroup(groupIdx) {
+        const dropped: string[] = []
         set((state) => {
           if (state.groups.length <= 1) return state
           if (groupIdx < 0 || groupIdx >= state.groups.length) return state
@@ -372,6 +414,7 @@ export function createEditorStore() {
           const buffers: Record<string, EditorBuffer> = {}
           for (const [p, b] of Object.entries(state.buffers)) {
             if (remainingPaths.has(p)) buffers[p] = b
+            else dropped.push(p)
           }
           const modifiedPaths = new Set<string>()
           for (const p of state.modifiedPaths) if (remainingPaths.has(p)) modifiedPaths.add(p)
@@ -379,6 +422,7 @@ export function createEditorStore() {
           const next = { ...state, groups, activeGroupIdx, buffers, modifiedPaths }
           return { groups, activeGroupIdx, buffers, modifiedPaths, ...deriveActiveView(next) }
         })
+        if (dropped.length > 0) disposeMonacoModels(get().modelPathPrefix, dropped)
       },
 
       moveTabToGroup(srcGroupIdx, path, dstGroupIdx, insertAt) {
@@ -635,6 +679,16 @@ export function EditorStoreProvider({ children }: { children: ReactNode }) {
   // idempotent. react-hooks/refs flags it conservatively.
   // eslint-disable-next-line react-hooks/refs
   if (!storeRef.current) storeRef.current = createEditorStore()
+  // A scoped store dies with its provider (skill/agent switch remounts via
+  // `key`), but Monaco models are page-global — release the ones its buffers
+  // were holding, or every skill ever opened keeps its models until reload.
+  useEffect(() => {
+    const store = storeRef.current!
+    return () => {
+      const s = store.getState()
+      disposeMonacoModels(s.modelPathPrefix, Object.keys(s.buffers))
+    }
+  }, [])
   // eslint-disable-next-line react-hooks/refs
   return createElement(EditorStoreContext.Provider, { value: storeRef.current }, children)
 }
