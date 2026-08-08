@@ -29,17 +29,24 @@ These sessions also do **not** get an `agent_sessions` row in the workspace's `h
   "contextTokens": 85000,
   "totalOutputTokens": 12000,
   "parentSessionId": null,
+  "archiveCount": 2,
+  "archivedUserCount": 30,
   "messages": [...],
   "rawMessages": [...],
   "output": "..."
 }
 ```
 
-- **messages**: event log format (written by the WS handler) — context / usage / tool_call / tool_result / agent_start/done, with full debug info
+- **messages**: event log format (written by the WS handler) — context / usage / tool_call / tool_result / agent_start/done, with full debug info. Assistant rows persist their tool calls **only** in `contentBlocks` (interleaved with text / thinking); the flat `toolCalls` array is no longer written — it duplicated every tool's input *and* output byte-for-byte (measured: 66 MiB of 340 MiB across 195 sessions). Readers are blocks-first with `toolCalls` as a pure legacy fallback (`messageToolCalls()` in `sessions/session-types.ts`; see [storage.md](storage.md#sessionmessage))
 - **rawMessages**: Bedrock API shape (written by SessionManager `saveAgentState`) — raw user/assistant turns with toolUse/toolResult blocks
 - **output**: accumulated assistant text
+- **archiveCount / archivedUserCount**: UI-log archiving bookkeeping — absent until the first archive. See [UI-log archiving](#ui-log-archiving)
 
 `saveSessionToFile()` uses read-merge-write so both halves survive. When loading, the event log `messages` takes priority; only when `messages` is empty (e.g. a sub-session tracked only by SessionManager) does `rawMessages` get converted to display format.
+
+The file is written as **compact JSON** (no 2-space indent) — nothing reads it by eye and every reader is `JSON.parse`. All five writers to the path switch together (`saveSessionToFile`, the title rewrite, `saveAgentState`, `createSession`'s title pre-seed, the cold `deleteExchange` edit) so the shape doesn't flip depending on which write landed last.
+
+**`messageCount` has one writer.** It is the length of the active file's `messages` (the UI log) and is filled only by `saveSessionToFile`. `saveAgentState` used to write `agent.messages.length` (raw LLM history — a different, larger number) into the same key, so the value flapped between two meanings depending on which write landed last; the raw half no longer touches it. Note it *shrinks* when a compact archives history — the list-visible lifetime count is `exchangeCount` (main user turns + `archivedUserCount`), mirrored into sqlite, not this field.
 
 Full field list in [storage.md](storage.md).
 
@@ -53,6 +60,8 @@ Full field list in [storage.md](storage.md).
 **Turn matching.** The raw turn is located by comparing the UI user text (after stripping the server-added `[图片已保存: …]` marker lines) against each raw user turn's text blocks, with an occurrence-rank tiebreak so duplicate prompts map to the right turn. **If no raw turn matches** (e.g. the turn was already compacted away) the raw log is left untouched — the UI soft-delete still lands (silent degrade).
 
 **Ordinal alignment (the sharp edge).** `userOrdinal` is the 0-based index of the target user turn, counted **excluding `taskId` (sub-agent) messages** — matching the admin's `isMainConversationMessage` filter, which is what the frontend counts on. Both the ordinal-locate loop and the duplicate-rank loop skip `taskId` messages; if they didn't, a sub-agent's injected user turn in the root log would drift the count and delete the wrong exchange.
+
+**Archived logs are refused (`'archived'`).** `userOrdinal` is positional over the log both sides can see, so it only means anything while client and server agree where the log *starts*. Archiving moves that start forward, and a chat panel open across the compact still counts from the pre-archive top — the same ordinal then maps onto a different turn on the server. The payload carries no id or anchor to disambiguate, so `deleteExchange` refuses instead of guessing: `readArchiveCount() > 0` → `'archived'`. It is read **from the file header, not memory** — the commit marker on disk is the truth about what was archived. The WS layer surfaces it as an error frame with `code: 'archived'` (see [ws.md](ws.md)); the admin renders the message verbatim, without the `Error:` prefix it adds to unexpected failures. The real fix belongs in the ordinal protocol (an anchor rather than a bare index), not here.
 
 **Memory/disk sync.** A live session mutates `agent.messages` in place then `saveAgentState`; a cold session is edited directly on the `.json` file (read-merge-write). Rejected with `running` / `compacting` while a turn is in flight (mutating raw mid-turn would corrupt the in-flight conversation). Refresh is push-based: the active session gets a `state:snapshot`, other open sessions pick it up via the existing `.halo/sessions/` file watcher — no new WS message. Entry point: WS `exchange:delete` → `handler.ts:handleExchangeDelete` (see [ws.md](ws.md)).
 
@@ -218,8 +227,17 @@ Table `agent_sessions` holds metadata only (no runtime state):
 | created_at / updated_at | INTEGER | Epoch ms |
 | stopped_at | INTEGER | null = active |
 | archived_at | INTEGER | null = not archived |
+| goal / goal_session_id | TEXT | Goal mode: binding JSON on G's row, back-pointer on W's — see [goal-mode.md](goal-mode.md) |
+| title / exchange_count / context_tokens / total_output_tokens | TEXT / INTEGER | List-visible metadata mirrored from the session file header; null = row predates the columns |
 
 Status is derived from memory (`promise !== null`) — not stored.
+
+**The four mirrored columns** exist so the session list doesn't have to open (and `JSON.parse`) every session file just to render a row — at a few hundred sessions of ~1 MiB each that was the dominant cost of `GET /api/sessions/logs`. Invariants:
+
+- **One write seam.** `saveSessionToFile()` returns the header it just wrote (`SessionFileMeta`); `SessionManager.persistSessionFile` — the single funnel every UI-log persist goes through — hands it to `mirrorSessionMeta()`. Nothing else writes these columns except the PATCH rename path, which sets `title` alongside the file rewrite.
+- **Idempotent, and never touches `updated_at`.** `mirrorSessionMeta` selects first and skips the UPDATE when all four values already match; a missing row is a no-op return (sub-sessions of a deleted tree). It deliberately leaves `updated_at` alone — that column drives list ordering and "last activity", and a metadata mirror is not activity.
+- **`exchange_count` is a lifetime count**, `countMainUserMessages(messages) + archivedUserCount`, so it doesn't shrink when a compact archives history (unlike the file's `messageCount`).
+- **Lazy backfill.** The list route treats `exchange_count === null` as "pre-migration row", reads the file once via `readSessionFileMeta`, mirrors it, and never pays that cost again.
 
 ## Conversation repair
 
@@ -342,6 +360,28 @@ All paths share the same split logic — the private `compactCut(messages)` on S
 **Notification contract — a "Compacting context…" preflight is only announced when compaction will actually run, and always gets an outcome line.** Both self-compact entry points (`maybeAutoCompact`, manual `compactSession`) check `compactCut() === 0` *before* emitting the preflight and bail silently when there's nothing to compact. After the preflight, every path closes it out: success pairs it with `Auto-compacted N older messages` / `Context compacted: …`; an empty LLM summary (a thinking-heavy model can legally spend its entire response on non-text blocks) emits `Compaction skipped — no summary produced`; a thrown summarize call emits `Compaction failed — context unchanged` (auto path swallows the error, manual path rethrows after emitting). Previously the preflight fired first and `selfCompactSession`'s silent `return null` paths left an orphan "Compacting context…" with no outcome — see `memory/2026-08-04-compact-preflight-orphan.md` for the production forensics.
 
 Config (see `config.compact`): `keepMessages` / `maxSummaryInput` / `maxMessageSlice` / `summarizeTimeoutSec` — editable in Settings → General → compact.
+
+**Self-compact also archives the UI log.** `selfCompactSession` calls `uiStore.archiveOldMessages(session.id)` for **root sessions only** (`!session.parentId`), right before the compaction notice is emitted so the notice lands in the kept tail rather than inside the archived segment. Compaction is the one path that already means "history shrinks here", which is why archiving hangs off it rather than off a timer or a size threshold. See [UI-log archiving](#ui-log-archiving).
+
+## UI-log archiving
+
+Files: `packages/server/src/sessions/session-archive.ts` (segment IO) · `agents/session-ui-store.ts` `archiveOldMessages` (the write) · `routes/session-archive.ts` (the read)
+
+`rawMessages` has compaction; the UI log had nothing, so it only ever grew — a long-lived session measured 6.9 MB of UI messages out of a 7.4 MB file, all of it re-read and re-written on every persist. Archiving moves the older exchanges out to `<seg>.arch.<N>.json.gz` beside the active `<seg>.json`, keeping the recent tail in place. The active file's shape doesn't change, so every existing reader keeps working with no edit.
+
+**Split point.** `archiveSplitIndex()` keeps the last `ARCHIVE_KEEP_EXCHANGES = 15` **main user exchanges** (`role === 'user'` without `taskId` — the same subset the admin renders and `deleteExchange` counts ordinals over) and cuts at the start of the oldest kept one, so a turn's responses are never split from their user message. This deliberately does *not* track `config.compact.keepMessages`: that counts raw LLM messages, and one raw turn expands into many UI rows (tool_call / tool_result / usage / context), so there is no honest mapping between the two granularities. One constant, no setting.
+
+**The in-flight turn can't be archived** — by construction, not by a guard: the running turn's user message is the newest main user message, so it is always inside the kept window.
+
+**Crash consistency — three parts:**
+
+1. **Segment first, active file second.** `writeArchiveSegment(n)` writes a path nothing references yet; only then is the active file rewritten with the kept tail. The reverse order could drop messages before their archive exists.
+2. **`archiveCount` in the active file is the commit marker.** A segment with `N > archiveCount` was never committed and no reader may reference it (both the WS anchor and the HTTP route check this). So a crash between the two steps leaves an unreachable orphan plus an active file that still holds every message — nothing lost. The next compact re-derives the same `N` and overwrites the orphan, which is why there's no reconciliation pass.
+3. **Read-back verify, else roll memory back.** `persistUIState` swallows IO errors like every session write, so `archiveOldMessages` re-reads `archiveCount` afterwards; if it is `< n` the truncated in-memory `messageLog` is restored from the two halves. Without that, the *next* ordinary persist would write the short log under the old count — that, not the crash, is how messages would actually go missing.
+
+Segments are immutable and append-only (`N` from 1, monotonically). Deletion is filesystem-driven: `deleteArchiveSegments()` globs `<seg>.arch.*.json.gz` in the directory rather than trusting `archiveCount` or any in-memory map, so crash-orphaned segments go too. Both session-file delete paths (`deleteSessionFile`, `findAndDeleteSessionFile`) call it.
+
+**Read side (scroll-up loading).** The admin still loads a session the way it always did — the whole active file — and fetches segments only when the user scrolls to the top: `GET /api/sessions/logs/:id/archive/:n?projectId=` returns `{ messages }` for one whole segment, gunzipped server-side. The anchor is `archiveCount`, delivered on the `state:snapshot` of **subscribe / reattach only** (one header read per session open); per-turn snapshots and the post-`exchange:delete` snapshot deliberately omit it, so a segment written mid-session never moves an open client's anchor. The client walks `archiveCount` → 1 and stops at "no earlier messages"; pulled segments are cached (immutable, so never re-requested) and a failed fetch keeps the cursor so the same segment can be retried. Archived history renders collapsed and **read-only** — no Delete button, which matches `deleteExchange` refusing archived logs.
 
 ## Model message format dependencies
 

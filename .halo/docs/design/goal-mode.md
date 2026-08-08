@@ -79,7 +79,7 @@ Gates, in order:
 | Max rounds | 10 | `round >= caps.maxRounds` |
 | Wall time | 4h | `now − startedAt > caps.maxWallMs` |
 | No-progress breaker | 3 | 3 consecutive byte-identical reports |
-| Token budget | off unless set at attach | W's `totalOutputTokens − tokenBaseline > caps.maxTokens` (G's own consumption is not metered) |
+| Token budget | off unless set at attach | W's `totalOutputTokens − tokenBaseline > caps.maxTokens` (G's own consumption is not metered) — read from W's `agent_sessions.total_output_tokens` column, selected in the same query as `goal_session_id`, so the delivery point that runs at **every** root turn end never opens a session file |
 
 Breach → `halted` + `haltReason`, back-pointer cleared (**revoking the lateral edge** — G's further `query_session` calls are rejected in code), and the report is delivered under a `[Goal HALTED: …]` header instructing G to produce a halt diagnosis instead of more work.
 
@@ -92,7 +92,7 @@ A fifth cap is enforced inside the tools rather than the delivery point: **deleg
 Injected only for the `goal` agent; schemas in [dev/tools.md → Goal tools](../dev/tools.md#goal-tools). Every callback **re-reads goal state from the db** — never a cached copy — so a halt / pause / clear that landed while G was mid-turn is enforced on its very next tool call.
 
 - `goal_context` — read the binding + counters. During `intake` it also embeds `workerRecent`: the worker's last 20 non-empty user/assistant messages (transcript `role=system` noise skipped), each truncated to 400 chars, 8K chars total budget applied newest-first, plus `workerMessageCount`. This is how G seeds the intake conversation without the user re-explaining — and without parsing a 150 KB session JSON (the dogfood failure that motivated embedding it). Running goals don't embed it; G works off delivered round reports.
-- `goal_attach` — the hinge from intake conversation to running loop, callable from any channel (no button). Preconditions: status `intake` + `GOAL_SPEC.md` written. Stamps the spec hash, records W's token baseline, applies cap overrides pinned during intake, flips to `running`, and dispatches the round-1 kickoff to W.
+- `goal_attach` — the hinge from intake conversation to running loop, callable from any channel (no button). Preconditions: status `intake` + `GOAL_SPEC.md` written. Stamps the spec hash, records W's token baseline (from W's `agent_sessions.total_output_tokens`, the same mirrored column the guardrail reads — so baseline and meter can't drift apart), applies cap overrides pinned during intake, flips to `running`, and dispatches the round-1 kickoff to W.
 - `goal_decide` — records a delegated decision as `decision-<n>.md` in the goal dir *before* relaying the answer; counts against the cap of 5.
 - `goal_finish` — final acceptance: `running → done`, dissolves the binding; G then writes the final report as its reply (which must list every delegated decision).
 - `query_session` (goal-scoped) — the lateral edge: only the bound worker is reachable; only while `running`; a `[Goal work order · round N/cap]` header is prepended in code.

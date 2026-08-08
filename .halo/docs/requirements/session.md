@@ -6,7 +6,7 @@ Session history viewer: hierarchy tree, message playback, debug mode, system pro
 
 ### Session tree view
 - Top-level sessions (no parentSessionId) act as roots; child sessions render indented
-- Each row shows: title, agent-name badge, message count, relative time, and status icons (StopCircle for stopped, amber Archive for archived)
+- Each row shows: title, agent-name badge, message count (user turns over the session's lifetime — never shrinks when history is compacted/archived), relative time, and status icons (StopCircle for stopped, amber Archive for archived)
 - Clicking loads the full message list into SessionChatPanel
 - Collapse / expand via arrow buttons
 - Clicking the count badge (e.g. "+3") shows total descendant count
@@ -35,8 +35,8 @@ The Prompt button (FileText icon) shows the system prompt used by this session. 
 - Created on the first `chat` WS message (with a new sessionId)
 - Auto-saved after every `complete` event
 - Sessions restore from disk on refresh / WS reconnect (loaded at subscribe time; running sessions reattach from the detached pool)
-- Deleting a session removes the JSON file and cascade-deletes all descendants in SQLite
-- Assistant messages embed a `toolCalls` array so tool-call cards persist across refresh
+- Deleting a session removes the JSON file (plus any archived history segments) and cascade-deletes all descendants in SQLite
+- Assistant messages persist their `contentBlocks` (text / thinking / tool calls, in the order they happened) so tool-call cards survive a refresh in the right places. Sessions written before content blocks existed carry a flat `toolCalls` array instead and still render, as a fallback
 
 ### Non-destructive /session new
 `/session new` (session:clear) **does not** destroy the old session:
@@ -63,6 +63,7 @@ Unified session logs API (recommended):
 |---|---|
 | List | `GET /api/sessions/logs?projectId=...` |
 | Read | `GET /api/sessions/logs/:id?projectId=...` |
+| Read archived history | `GET /api/sessions/logs/:id/archive/:n?projectId=...` |
 | Delete | `DELETE /api/sessions/logs/:id?projectId=...` |
 
 The List endpoint serves two consumers: this tree view (default — roots + all

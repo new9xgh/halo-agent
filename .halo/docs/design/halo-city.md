@@ -117,6 +117,13 @@ js/
 - `/api/show/state` — 无活跃 UIState 的会话(idle/stopped/重启后)token
   从会话文件头读取(mtime 缓存,不随轮询刷盘),不显示 0;含 `messageCount` 字段
 
+> **`messageCount` 与 admin 的 `exchangeCount` 是两个语义,不要互相对齐**:
+> 这里读的是会话文件里的 `messageCount`(活跃 UI 日志的长度),城市只把它
+> 当"这个市民最近有多热闹"的活跃度信号,compact 归档后会变小是可以接受的;
+> admin 会话列表用的是 sqlite 镜像列 `exchange_count`(整个生命期的主用户
+> 轮次数,归档后不缩)。城市这边继续走文件头是有意的:它必须能在**没有活跃
+> SessionManager**的情况下降级出图,不依赖 db 镜像何时写入。
+
 > **`observer` token 的权限面**:除了 `/show/state` 的聚合计数外,`observer`
 > 还能调 `/show/session` 读取**任意 workspace** 任意会话的明细——最近 40 条
 > 消息(每条截断到 600 字,tool input 截到 200 字)。它是"看板/监控"用的

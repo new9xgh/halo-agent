@@ -109,11 +109,21 @@ Path: `.halo/sessions/{agentId}/{sessionId}.json`
   "contextTokens": 5975,
   "totalOutputTokens": 6058,
   "parentSessionId": "parent_id",    // sub-sessions only
+  "archiveCount": 2,                 // committed UI-log archive segments; absent = never archived
+  "archivedUserCount": 30,           // main user turns that moved into segments
   "messages": [SessionMessage],       // UI event-log format (written by WS handler / UIState reducer)
   "rawMessages": [AnthropicMessage],  // raw Bedrock API shape (written by SessionManager saveAgentState)
   "output": "..."                     // accumulated assistant text from the latest turn
 }
 ```
+
+Written as **compact JSON** (no indent) by all five writers of this path — nothing reads it by eye. `messageCount` is `messages.length` and has a single writer (`saveSessionToFile`); it *shrinks* when a compact archives history, so the lifetime count for listings is `exchangeCount` (mirrored to sqlite, see [agent_sessions](#agent_sessions)). See [session.md](session.md#session-file-format).
+
+### Archive segment file (UI-log archiving)
+
+Path: `.halo/sessions/{agentId}/{sessionId}.arch.{N}.json.gz`
+
+gzipped `JSON.stringify(SessionMessage[])` — the plain array, no wrapper object, oldest-first, in the same order the messages had in the active file. `N` counts up from 1. A segment is **immutable once committed** and the active file's `archiveCount` is the commit marker: `N > archiveCount` means the segment was written but the commit never landed, and no reader may reference it. Deleting a session deletes segments by **globbing `{sessionId}.arch.*.json.gz`** — not by iterating `archiveCount` — so crash-orphaned uncommitted segments are cleaned up too. Design + read path in [session.md](session.md#ui-log-archiving).
 
 ### SessionMessage
 
@@ -138,7 +148,7 @@ interface SessionMessage {
   taskId?: string                // Sub-agent task ID
 
   // assistant-only
-  toolCalls?: ToolCallEntry[]
+  toolCalls?: ToolCallEntry[]    // READ-ONLY legacy — no longer written (see below)
   contentBlocks?: ContentBlockEntry[]
 
   // tool_call-only
@@ -201,11 +211,18 @@ Assistant rendering priority:
 2. No contentBlocks, has `toolCalls` → tools first, then content (legacy)
 3. Neither → render only `content`
 
+### `toolCalls` is write-deprecated (read-only)
+
+Assistant turns are persisted with `contentBlocks` only. `toolCalls` held a second copy of every tool's input **and** output, byte-for-byte identical to the blocks copy: across 195 sessions it was 66 MiB of a 340 MiB corpus (19.4%), and dropping it shrank the corpus to 257 MiB (-24.4%). The three UI-log writers (`flushAssistantMessage`, `flushCompletedAssistantMessage`, `createSaveSnapshot` in `sessions/ui-log-builder.ts`) no longer attach it.
+
+Every reader goes through `messageToolCalls(msg)` (`sessions/session-types.ts`): blocks-first, `toolCalls` only when `contentBlocks` is absent — a **fallback, never a supplement**. This matters because the legacy copy was not merely redundant, it was sometimes wrong: of 433 entries where the two copies disagreed, 242 were provably a *different* call's output landing in the legacy array (the write-side merge keyed on tool name, so parallel or repeated calls to the same tool cross-wired). Blocks was right in the spot-checks where they diverged; legacy was 0-for-11. So old files still render, but where they disagree the blocks copy wins by design.
+
 ### Backwards compatibility
 
 1. Missing `type`: infer from `role` + existing fields
-2. Missing `contentBlocks`: fall back to the `toolCalls` + `content` split layout
+2. Missing `contentBlocks`: fall back to the `toolCalls` + `content` split layout — the only reason `toolCalls` is still read
 3. Missing `version`: treat as v0, apply inference rules
+4. Missing `archiveCount`: session never archived (0 segments)
 
 ### Change rules
 
@@ -545,6 +562,13 @@ The databases hold session metadata indexes and workspace-scoped preferences (e.
 | created_at / updated_at | INTEGER | Unix ms |
 | stopped_at | INTEGER | Stopped timestamp (null = active) |
 | archived_at | INTEGER | Archived timestamp (null = not archived) |
+| goal / goal_session_id | TEXT | Goal mode — binding JSON on the goal session's row, back-pointer on the worker's |
+| title | TEXT | Mirror of the session file's `title` |
+| exchange_count | INTEGER | Mirror: main user turns over the session's lifetime (kept + archived) |
+| context_tokens | INTEGER | Mirror of the file's `contextTokens` |
+| total_output_tokens | INTEGER | Mirror of the file's `totalOutputTokens` |
+
+The last four are a **read cache for the session list** — `GET /api/sessions/logs` renders rows from these columns instead of opening and parsing every session file. Written only by `mirrorSessionMeta()` off the single persist seam (`SessionManager.persistSessionFile`) and by the PATCH-rename path; the write is skipped when all four already match, and it never touches `updated_at` (that column means "last activity", and a metadata mirror is not activity). `null` = row predates the columns → the list route backfills from the file once. Details in [session.md](session.md#sqlite-metadata).
 
 **`disabled_items`** — per-workspace disable state for agents and skills (allows the same global item to be independently toggled in each workspace)
 
@@ -600,3 +624,4 @@ All channel types (telegram, web, wechat, slack, feishu) share one table. Common
 | v1+ | 2026-05-12 | Restructured `~/.halo/`: sensitive files (settings.yaml, config.yaml, channels/) moved to `secrets/`; non-sensitive config remains in `global/`. `migrateSecrets()` auto-migrates on first startup. Access level expanded to three tiers: `full` / `workspace` / `readonly` (agent_sessions + channel_accounts). Tool execution routed through bwrap sandbox for non-full access levels. `agent_sessions.working_dir` now stored as workspace-relative path. |
 | v1+ | 2026-05-13 | Settings i18n + UI polish: compact keys renamed camelCase → snake_case (`keep_messages`, `max_summary_input`, `max_message_slice`, `summarize_timeout_sec`). Added `description_zh` on all leaf nodes and `description`/`description_zh` on branch nodes (replaces `_hint`/`_hint_zh`). Added `secret: true` attribute for masked input. Added Tavily to default params. Admin UI fully i18n'd (agents, skills, settings, nav). |
 | v1+ | 2026-05-13 | Added `packages/cli` — standalone CLI/TUI client with embedded agent loop (no server required). Imports server agent-core via subpath exports. Session prefix: `cli_`. Added `exports` + `typesVersions` to server `package.json`. |
+| v1+ | 2026-08-08 | Session file slimming (no version bump — additive + reader-compatible): assistant `toolCalls` no longer written (`contentBlocks` is the single copy, `toolCalls` stays read-only legacy); files written as compact JSON; UI-log archiving adds header fields `archiveCount` / `archivedUserCount` plus `{sessionId}.arch.{N}.json.gz` segment files; `agent_sessions` gains mirrored `title` / `exchange_count` / `context_tokens` / `total_output_tokens` columns so listing doesn't parse every file. |

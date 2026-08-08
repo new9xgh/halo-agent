@@ -64,7 +64,7 @@ Source: [handler.ts](../../../packages/server/src/ws/handler.ts) — top-level `
 | `chat:interrupt` | Interrupt the in-flight turn now (aborts a command mid-run); the server then folds any queued messages into one follow-up turn → `interruptSession`. Admin chat esc maps to this. A compacting session cancels the compact instead (same as `chat:stop`). |
 | `session:clear` | Non-destructive /session new: save the current, release its listener, create fresh (handled inline) — see [Command dispatch](#command-dispatch) |
 | `session:delete` | Delete session files + cascade-delete descendants in SQLite (handled inline) |
-| `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting. See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
+| `exchange:delete` | Delete one exchange (a user turn + its responses): **soft-delete** in the UI log (`deleted: true` markers, kept visible/greyed) + **physical-delete** the whole turn from `rawMessages` (LLM context) → `deleteExchange`. Fields: `userOrdinal` (0-based index among *main-conversation* user turns, i.e. excluding `taskId` sub-agent messages — matches the admin's `isMainConversationMessage` count), optional `sessionId` / `projectId`. Rejected (→ `error`) while the session is running or compacting, and permanently once the session has archived UI-log segments — that refusal carries `code: 'archived'` (an ordinal is only meaningful while both sides agree where the log starts; archiving moves the start). See [session.md](session.md#exchange-deletion-soft-ui--hard-raw). |
 | `command:<name>` | Route through shared `dispatchCommand` (see [command.md](command.md)); `/session compact` handled inline for UI callbacks |
 | `terminal:start` | Spawn a new PTY |
 | `terminal:input` | Send keystrokes. `terminalId` is **required** — an id-less frame is logged and dropped (it used to fall back to the first entry of the process-global terminal map, which with several admin connections open could write into another browser's PTY) |
@@ -105,7 +105,7 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 
 | Type | Source | Purpose |
 |---|---|---|
-| `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId) |
+| `state:snapshot` | handler.ts on connect | Initial state (agents, messages, sessionId). On **subscribe / reattach only** it also carries `archiveCount` — the number of committed UI-log archive segments, which the admin's scroll-up loader counts down from (see [Archive anchor](#archive-anchor-in-statesnapshot)) |
 | `chat:ack` | `handleChat` | Chat with `clientMsgId` is persisted in the session log — releases the client's pending-ack entry (see [Chat delivery](#chat-delivery-ack--resend--dedup)) |
 | `__pong__` | `__ping__` handler | Reply to the client's application-level liveness probe |
 | `listener:released` | `reclaimIfAbandoned` (this client only) | This connection's event listener was reclaimed (silent >3 min / CLOSED) — `{sessionId}`. Client must re-`subscribe` to reattach. See [Abandoned-listener reclaim](#abandoned-listener-reclaim-and-the-__ping__-contract). |
@@ -122,6 +122,14 @@ Source: [event-processor.ts:48-97](../../../packages/server/src/ws/event-process
 | `compact:started` / `compact:summarizing` / `compact:done` | compact handler | Compaction progress |
 | `cron:job_changed` / `cron:run_changed` | `cron/runner.ts` + `routes/cron.ts` (broadcast) | Cron job/run state changed — the Cron tab re-fetches instead of polling. See [cron.md](cron.md). |
 | `evolution:run_changed` / `evolution:apply_changed` | `evolution/ticker.ts` + `routes/evolution.ts` (broadcast) | Evolution run/apply state changed — drives the Evolution tab. See [evolution.md](evolution.md). |
+
+### `error` frames: optional `code`
+
+`{ type: 'error', error }` normally means "something failed"; the admin prefixes it with `Error:` when rendering. An **expected refusal** the server already phrased for the user adds a `code` (currently only `'archived'`, from `exchange:delete`), and the admin renders such a frame verbatim without the prefix. So: add `code` when the message is a complete user-facing sentence, omit it when the client should present it as a fault.
+
+### Archive anchor in `state:snapshot`
+
+`archiveCount` rides only the snapshots sent on **subscribe** and **reattach** — one header read per session open. The per-turn snapshots and the snapshot pushed after `exchange:delete` deliberately omit it: the client's "load older" cursor is an anchor pinned at the moment the session was opened, and a segment written mid-session (a compact while the tab is open) must not move it. The client then requests segments over HTTP (`GET /api/sessions/logs/:id/archive/:n`), not WS — one whole segment per call, cached client-side because segments are immutable. See [session.md](session.md#ui-log-archiving).
 
 ## WS Handler as a thin session client
 
@@ -193,7 +201,7 @@ Teardown lives in one function (`cleanupConnection`) shared by the socket's `clo
 Client reconnects and sends `subscribe`:
 1. Server detects the detached session
 2. Loads UIState from SessionManager (via `getUIState`) and builds a save snapshot
-3. Sends `state:snapshot` — messages from `createSaveSnapshot(state)`, or the settled `messageLog` only when the session is still running (see step 6)
+3. Sends `state:snapshot` — messages from `createSaveSnapshot(state)`, or the settled `messageLog` only when the session is still running (see step 6) — plus `archiveCount`, re-pinning the scroll-up anchor for the reopened log
 4. Replays buffered `pendingEvents`
 5. Re-attach the event listener — live streaming continues seamlessly
 6. If the session is still running, synthesizes the in-progress turn as an **authoritative replay**: every synthesized message carries `replay: true` — a `chat:followup`, then the turn's `turnContentBlocks` in order (`chat:thinking` / `chat:stream` / `agent:tool_call` + `agent:tool_result` if completed), each with the session's real `agentName` and the block's real `turnId` so usage badges / turn grouping survive the reconnect. The running-session snapshot in step 3 sends the settled `messageLog` only (no `createSaveSnapshot` temp in-flight message — the replay carries that turn instead).

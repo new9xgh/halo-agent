@@ -83,12 +83,13 @@ Unified session log API — list + read session files across all agents.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/sessions/logs?projectId=` | List session metadata, keyset-paginated. Default returns each top-level row + all descendants (sidebar tree); `rootOnly=1` returns roots only (chat-header dropdown) |
-| GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) |
-| DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log |
-| PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
+| GET | `/api/sessions/logs/:id?projectId=` | Full session log (scans across agent dirs) — the **active** file only; archived history is a separate call |
+| GET | `/api/sessions/logs/:id/archive/:n?projectId=` | One archived UI-log segment — see [detail](#get-apisessionslogsidarchivenprojectidabs) |
+| DELETE | `/api/sessions/logs/:id?projectId=` | Delete the session log (and all of its archive segments) |
+| PATCH | `/api/sessions/logs/:id?projectId=` | Rename a session (admin-only) — updates the log file's title and the mirrored `agent_sessions.title`. Accepts any session id (root or sub-agent); the sidebar exposes the rename affordance on every row |
 | GET | `/api/sessions/goal?projectId=` | Latest goal binding for the workspace (goal-mode banner / input-lock seed) — see [detail](#get-apisessionsgoalprojectidabs) |
 
-The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / messageCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId). The frontend builds the tree from `parentSessionId`; `goalSessionId` (non-null on a goal-bound worker row) drives the 🎯 badge.
+The list endpoint returns flat metadata (id / agentId / agentName / title / timestamps / exchangeCount / parentSessionId / stoppedAt / contextTokens / totalOutputTokens / goalSessionId), served from the mirrored `agent_sessions` columns rather than by parsing each session file (rows predating the columns are backfilled from the file on first read). The frontend builds the tree from `parentSessionId`; `goalSessionId` (non-null on a goal-bound worker row) drives the 🎯 badge.
 
 The get endpoint returns the full session file. If only `rawMessages` is present (no event-log `messages`), `convertRawMessages()` transforms it into display format on the fly.
 
@@ -288,7 +289,7 @@ runtime so the frontend can render rooms (workspaces) + characters (sessions).
 
 `observer` is more than an aggregate-counts role: past `/show/state`, it can also call `/show/session` to read **any workspace's** session transcript (last 40 messages, content truncated to 600 chars, tool input to 200 chars). Mint it knowing it grants cross-workspace transcript read access, not just dashboard counters.
 
-Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, messageCount, updatedAt }`. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
+Each `workspace` = `{ path, key, label, counts{running,idle,stopped}, totalSessions, skills[], sessions[] }`; each `session` = `{ id, parentId, depth, agentName, description, status, lastTool, activeSkill, contextTokens, outputTokens, messageCount, updatedAt }`. `messageCount` here is the session file's raw UI-log length (an activity signal for the citizen animation) — deliberately **not** the admin list's lifetime `exchangeCount`; it shrinks when a compact archives history. `lastTool` / `activeSkill` come from the live in-memory UI log (empty when the session isn't loaded). Sessions per room are capped (`totalSessions` reports the true total). Frontend: `halo-city/` at repo root.
 
 **Read-only by construction — degraded snapshots.** Both endpoints resolve a workspace's runtime via `registry.peek()` — in-memory lookup only, **never** `getOrCreate`: constructing a SessionManager has write side effects (boot orphan-reconciliation batch-stops live sub-session rows; `.halo/` scaffolding), so a pure visualization poll must not trigger it. When no live SessionManager exists in this process, the handler opens that workspace's `.halo/halo.db` **read-only** (cached connection; missing db/tables silently degrade to an empty room) and projects rows / the persisted session file into the same wire shape. Sessions not in memory therefore return a **persisted snapshot**: `status` / token counts / `messageCount` may lag behind the last persistence point, and the live-only signals (`lastTool` / `activeSkill`) are empty by definition. The degraded `/api/show/session` path reports `maxContextTokens: 0` (the real cap needs a live agent config; the city inspector hides the meter when the cap is unknown).
 
@@ -573,7 +574,7 @@ Two shapes, selected by `rootOnly`:
       "source": "explorer",
       "createdAt": "2026-04-30T08:00:00Z",
       "updatedAt": "2026-04-30T08:05:00Z",
-      "messageCount": 12,
+      "exchangeCount": 12,
       "parentSessionId": null,
       "contextTokens": 5975,
       "totalOutputTokens": 6058,
@@ -587,9 +588,11 @@ Two shapes, selected by `rootOnly`:
 
 Archived sessions are excluded by default; pass `?includeArchived=1` to include them.
 
+Rows are served from the mirrored `agent_sessions` metadata columns (`title` / `exchange_count` / `context_tokens` / `total_output_tokens`) — no session file is opened. A row whose `exchangeCount` is `null` predates those columns: the route reads that one file once, mirrors the values back, and never pays the cost again. `exchangeCount` counts **main user turns over the session's lifetime** (kept + archived), so unlike the file's `messageCount` it doesn't shrink when a compact archives history.
+
 ### GET `/api/sessions/logs/:id?projectId=<abs>`
 
-Returns the full session file. If only `rawMessages` is present (sub-agent sessions from SessionManager), `convertRawMessages()` transforms them into the display `messages` array on the fly.
+Returns the full session file — the **active** log only. Older exchanges that archiving moved out are fetched per-segment via [the archive endpoint](#get-apisessionslogsidarchivenprojectidabs). If only `rawMessages` is present (sub-agent sessions from SessionManager), `convertRawMessages()` transforms them into the display `messages` array on the fly.
 
 ```json
 // 200 — same shape as the on-disk JSON
@@ -604,10 +607,37 @@ Returns the full session file. If only `rawMessages` is present (sub-agent sessi
   "messageCount": 12,
   "contextTokens": 5975,
   "totalOutputTokens": 6058,
+  "archiveCount": 2,
   "messages": [ /* SessionMessage[] — see design/storage.md */ ],
   "rawMessages": [ /* optional */ ]
 }
 ```
+
+`messageCount` here is the **file's own** field (`messages.length`, shrinks on archive) — not the list endpoint's lifetime `exchangeCount`.
+
+### GET `/api/sessions/logs/:id/archive/:n?projectId=<abs>`
+
+Source: `packages/server/src/routes/session-archive.ts`
+
+One archived UI-log segment, gunzipped server-side. `n` counts up from 1; the client gets its anchor from `archiveCount` on the `state:snapshot` of subscribe/reattach ([ws.md](../design/ws.md)) and walks **down** from it. Segments are immutable once committed, so a client caches what it pulled and never re-requests. Admin-cookie gated (not in `PUBLIC_PATHS`).
+
+```json
+// 200
+{ "messages": [ /* SessionMessage[] — oldest-first within the segment */ ] }
+```
+
+Failure modes, in the order checked:
+
+| Status | Body | When |
+|---|---|---|
+| 500 | `session manager not initialized` | server not fully booted |
+| 400 | `projectId required` | missing query param |
+| 400 | `Invalid session id` | `id` fails `isSafeIdSegment` (path-traversal guard) |
+| 400 | `Invalid segment number` | `n` not a positive integer |
+| 404 | `Session not found` | no such session in this workspace |
+| 404 | `Segment not found` | `n > archiveCount` (uncommitted / nonexistent), or the segment file can't be read |
+
+The `n > archiveCount` check is the point, not a formality: `archiveCount` in the active file is the archive write's commit marker, so a segment file beyond it exists only because a crash interrupted the two-step write and must never be served. See [design/session.md](../design/session.md#ui-log-archiving).
 
 ### GET `/api/sessions/goal?projectId=<abs>`
 
