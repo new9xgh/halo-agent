@@ -6,10 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-08
+
 ### Added
 
 - Canvas can preview Parquet and SQLite (.db/.sqlite/.sqlite3) files — a paginated table (SQLite adds a table-selector sidebar with per-table row counts), parsed server-side so large files open instantly.
 - CSV/TSV previews now page server-side instead of loading the whole file into the browser (delimiter auto-detected, including semicolon-separated files); XLSX/XLS previews page client-side too, so rows past 500 are reachable instead of being silently cut off.
+- Session file archiving: once a session's active log passes 3MB it archives everything but the newest exchange into a gzipped segment, keeping the active file small; the admin loads archived history on scroll-up (segment-by-segment, cached client-side).
+- Session-list metadata (title, exchange count, tokens) now served from sqlite columns instead of parsing every session file, cutting a 50-row page from ~1.6s to single-digit ms.
+
+### Fixed
+
+- 30+ findings from the audit-20260806 pass: path traversal in id params, settings prototype-pollution guard, cron shutdown timer leak, WS session-routing key collisions, git-panel ancestor-repo leakage, various cache/timer/listener leaks, and periphery hardening across cli/desktop/web-demo/halo-city.
+- CLI TUI: Esc now consistently closes whatever surface is open (log viewer/navigator/completion popup) before reaching the running-turn interrupt handler; corrected display-width math for CJK/emoji/ANSI-escaped text; keybinding docs rewritten to match the implemented semantics.
+- CI: TUI tests forced interactive ink so GitHub Actions renders real frames instead of silently passing against empty output.
 
 ## [1.0.3] - 2026-08-05
 
@@ -342,7 +352,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/turmind/halo-agent/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/turmind/halo-agent/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/turmind/halo-agent/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/turmind/halo-agent/compare/v1.0.0...v1.0.1
