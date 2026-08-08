@@ -424,6 +424,14 @@ export function AgentSessionsSidebar() {
 
   // Select any session → unified load
   const handleSelectSession = useCallback(async (session: SessionItem) => {
+    // Idempotent re-select: a double-click fires click twice before dblclick
+    // (each click re-fetched the full transcript), and the restore effect
+    // re-runs on every tab remount for a selection whose data is already in
+    // the global store. Both are no-ops when the session is already selected
+    // and loaded (or its fetch is in flight). Freshness is push-driven — the
+    // file:changed refetch in session-chat-panel covers updates.
+    const cur = useSessionViewStore.getState()
+    if (cur.selectedSessionId === session.id && (cur.loadedMessages !== null || cur.loading)) return
     setSelectedSession(session)
     setLoading(true)
     if (activeProject?.id && typeof window !== 'undefined') {
