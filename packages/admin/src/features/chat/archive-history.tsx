@@ -6,7 +6,7 @@ import { useArchiveStore } from './archive-store'
 import { useChatStore } from './chat-store'
 import { isMainConversationMessage } from '@/shared/types'
 import { useT } from '@/shared/i18n'
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { ChevronRight, ChevronUp, Loader2 } from 'lucide-react'
 
 /**
  * Archived history above the live conversation: a "load earlier" row that walks
@@ -89,7 +89,9 @@ export function ArchiveHistory({
             onClick={handleToggle}
             className="flex w-full items-center gap-2 border-t border-[var(--border)]/50 px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
           >
-            {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            {/* Expanded content sits ABOVE the bar, so the open-state chevron
+                points up at it (not down, which reads as "content below"). */}
+            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             <span>
               {t('chat.archive.header', { segments: anchor - cursor, messages: mainMessages.length })}
             </span>
