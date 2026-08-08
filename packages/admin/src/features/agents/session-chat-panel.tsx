@@ -21,11 +21,49 @@ import { isMainConversationMessage, isDebugMessage, inferMessageType } from '@/s
  * including rewrites that change no messages (e.g. a title PATCH) — and a
  * wholesale array replace hands every row a brand-new object, re-running
  * ReactMarkdown across the whole conversation: the detail-panel flash.
- * Session logs are append-only, so a positional compare suffices; when
- * nothing changed at all, return `prev` so the store set is a no-op.
+ *
+ * Session logs are append-only: settled rows never change bytes, the only
+ * in-place mutation is the LAST row absorbing updates (tool results landing,
+ * streaming text growing) — plus rare wholesale rewrites (compact, exchange
+ * soft-delete). So deep-comparing every row on every write (previously two
+ * JSON.stringify passes over a multi-MB transcript per file:changed event)
+ * buys nothing: reuse the prefix by reference outright, deep-compare only
+ * the boundary row where appends land, and fall back to the positional
+ * deep-compare walk only when the tail probe says the prefix shifted.
+ * When nothing changed at all, return `prev` so the store set is a no-op.
  */
 function reconcileMessages(prev: ChatMessage[] | null, next: ChatMessage[]): ChatMessage[] {
   if (!prev || prev.length === 0) return next
+
+  // Append fast path. Settled rows never change bytes EXCEPT the `deleted`
+  // flag, which exchange soft-delete flips on mid-array rows in place
+  // (server deleteExchange keeps array length). So the prefix check is a
+  // cheap scalar probe — id + deleted, no serialization — and only the last
+  // 2 overlap rows (where streaming text / tool results / usage still land)
+  // get the deep compare. Anything off-shape falls to the full walk.
+  const overlap = Math.min(prev.length, next.length)
+  const deepFrom = Math.max(0, prev.length - 2)
+  let appendShape = next.length >= prev.length
+  for (let i = 0; appendShape && i < deepFrom; i++) {
+    if (prev[i].id !== next[i].id || prev[i].deleted !== next[i].deleted) appendShape = false
+  }
+  if (appendShape) {
+    let reusedAll = prev.length === next.length
+    const out = next.slice()
+    for (let i = 0; i < deepFrom; i++) out[i] = prev[i]
+    for (let i = deepFrom; i < overlap; i++) {
+      if (JSON.stringify(prev[i]) === JSON.stringify(next[i])) {
+        out[i] = prev[i]
+      } else {
+        reusedAll = false
+      }
+    }
+    return reusedAll ? prev : out
+  }
+
+  // Non-append rewrite (compact, soft-delete, repair): positional
+  // deep-compare, reusing whatever still matches so unchanged rows keep
+  // identity for the memo comparator.
   let reusedAll = prev.length === next.length
   const out = next.map((m, i) => {
     const old = prev[i]

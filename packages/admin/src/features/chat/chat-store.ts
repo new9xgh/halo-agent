@@ -105,6 +105,95 @@ function hasAdjacentDuplicateNotification(messages: ChatMessage[], key: string):
 }
 
 /**
+ * Incremental hot-path indexes (perf audit P0-2). Every streaming event used
+ * to rescan the whole messages array — and toolUseId dedup nested-scanned
+ * every tool call of every message — O(session length) per chunk, O(n²)
+ * accumulated over a long conversation. These two structures make slot
+ * resolution and toolUseId dedup O(1):
+ *
+ *  - `streamingIdx`: task scope (taskId ?? '') → index of that scope's live
+ *    streaming assistant message. A hint, not an oracle: every read
+ *    revalidates against the live array and falls back to the original
+ *    backwards scan (repairing the entry) on any mismatch.
+ *  - `toolUseIdIdx`: toolUseId → index of the message holding that tool
+ *    call. Exact by construction — updated on every append, rebuilt on every
+ *    wholesale replace — because replay dedup drops events on a bare hit.
+ *
+ * Module-level like lastLinkDropAt (nothing renders from them). They MUST be
+ * reset in lockstep with the array they describe — a stale index is worse
+ * than a scan. The three log reset points all funnel through two actions:
+ * setMessages (snapshot full replace AND reattach-replay rebuild, which is
+ * `setMessages(takeReplaySnapshot(...))` in chat-handlers) rebuilds, and
+ * clear() (session switch) empties. Positions never shift otherwise:
+ * messages are only appended or element-replaced in place, never spliced.
+ */
+const streamingIdx = new Map<string, number>()
+const toolUseIdIdx = new Map<string, number>()
+
+function taskKey(taskId?: string): string {
+  return taskId ?? ''
+}
+
+/** Record one message's index entries (append + rebuild paths). */
+function indexMessage(m: ChatMessage, i: number): void {
+  if (m.role === 'assistant' && m.streaming) streamingIdx.set(taskKey(m.taskId), i)
+  if (m.toolCalls) {
+    for (const tc of m.toolCalls) {
+      if (tc.toolUseId) toolUseIdIdx.set(tc.toolUseId, i)
+    }
+  }
+  if (m.contentBlocks) {
+    for (const b of m.contentBlocks) {
+      if (b.type === 'tool_call' && b.toolCall.toolUseId) toolUseIdIdx.set(b.toolCall.toolUseId, i)
+    }
+  }
+}
+
+/** Rebuild both indexes from a full log — the wholesale-replace reset path. */
+function rebuildMessageIndexes(messages: ChatMessage[]): void {
+  streamingIdx.clear()
+  toolUseIdIdx.clear()
+  for (let i = 0; i < messages.length; i++) {
+    indexMessage(messages[i], i)
+  }
+}
+
+/** Drop streaming-index entries whose message no longer streams — hygiene
+ *  after the flag sweeps (complete / converge / send-failed) so the next
+ *  event's fast path doesn't start from a dead hint. O(#live scopes). */
+function pruneStreamingIdx(messages: ChatMessage[]): void {
+  for (const [key, i] of streamingIdx) {
+    const m = messages[i]
+    if (!m || m.role !== 'assistant' || !m.streaming || taskKey(m.taskId) !== key) {
+      streamingIdx.delete(key)
+    }
+  }
+}
+
+/**
+ * Index of the task scope's last streaming assistant message — the target
+ * every streaming event mutates. O(1) on a valid hint; original backwards
+ * scan (repairing the hint) when the hint is missing or stale.
+ */
+function findStreamingIdx(messages: ChatMessage[], taskId?: string): number {
+  const key = taskKey(taskId)
+  const hint = streamingIdx.get(key)
+  if (hint !== undefined) {
+    const m = messages[hint]
+    if (m && m.role === 'assistant' && m.streaming && m.taskId === taskId) return hint
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant' && m.streaming && m.taskId === taskId) {
+      streamingIdx.set(key, i)
+      return i
+    }
+  }
+  streamingIdx.delete(key)
+  return -1
+}
+
+/**
  * When a streaming event arrives with a turnId that doesn't match the current
  * streaming assistant's last block, it means a new server turn has begun
  * (e.g. user sent a 2nd message during a narrow window where the server's
@@ -112,30 +201,36 @@ function hasAdjacentDuplicateNotification(messages: ChatMessage[], key: string):
  * streaming assistant and append a fresh one so the new turn's content lands
  * after any user messages added in between — instead of back-appending into
  * the previous bubble and visually displacing the user's question.
+ *
+ * Returns the slot index alongside the (possibly replaced) array so callers
+ * mutate it directly instead of re-scanning; `copied` says whether `messages`
+ * is already a fresh array (split/append happened) or still the caller's.
  */
 function ensureStreamingSlot(
   messages: ChatMessage[],
   agentName?: string,
   taskId?: string,
   turnId?: string,
-): ChatMessage[] {
-  if (!turnId) return messages
+): { messages: ChatMessage[]; slotIdx: number; copied: boolean } {
+  if (!turnId) return { messages, slotIdx: findStreamingIdx(messages, taskId), copied: false }
 
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    // Match by taskId scope so root and sub-agents are split independently:
-    // root events (taskId=undefined) don't fall into sub-agent bubbles, and
-    // sub-agent events split per-turn within their OWN bubble. Earlier this
-    // function early-returned when `taskId` was truthy, which made every
-    // sub-agent turn glomp into one giant bubble (no splits ever happened
-    // for sub-agents).
-    if (msg.taskId !== taskId) continue
-    if (msg.role !== 'assistant' || !msg.streaming) continue
-    if (agentName && msg.agentName && msg.agentName.toLowerCase() !== agentName.toLowerCase()) continue
-
+  // Match by taskId scope so root and sub-agents are split independently:
+  // root events (taskId=undefined) don't fall into sub-agent bubbles, and
+  // sub-agent events split per-turn within their OWN bubble. Earlier this
+  // function early-returned when `taskId` was truthy, which made every
+  // sub-agent turn glomp into one giant bubble (no splits ever happened
+  // for sub-agents).
+  const i = findStreamingIdx(messages, taskId)
+  const msg = i === -1 ? undefined : messages[i]
+  // agentName compatibility check from the original scan. The original
+  // `continue`d past an incompatible slot looking for an older one, but a
+  // scope only ever has one live slot (every creation path converges the
+  // previous one first), so the deeper scan could only end at "not found" —
+  // appending a fresh slot either way.
+  if (msg && !(agentName && msg.agentName && msg.agentName.toLowerCase() !== agentName.toLowerCase())) {
     const blocks = msg.contentBlocks ?? []
     const lastBlockTurnId = blocks.length > 0 ? blocks[blocks.length - 1].turnId : undefined
-    if (!lastBlockTurnId || lastBlockTurnId === turnId) return messages
+    if (!lastBlockTurnId || lastBlockTurnId === turnId) return { messages, slotIdx: i, copied: false }
 
     const next = [...messages]
     next[i] = { ...msg, streaming: false }
@@ -148,10 +243,11 @@ function ensureStreamingSlot(
       agentName,
       taskId,
     })
-    return next
+    streamingIdx.set(taskKey(taskId), next.length - 1)
+    return { messages: next, slotIdx: next.length - 1, copied: true }
   }
   // No streaming slot found — create one (e.g. message from another channel)
-  return [...messages, {
+  const next = [...messages, {
     id: generateId(),
     role: 'assistant' as const,
     content: '',
@@ -160,6 +256,8 @@ function ensureStreamingSlot(
     agentName,
     taskId,
   }]
+  streamingIdx.set(taskKey(taskId), next.length - 1)
+  return { messages: next, slotIdx: next.length - 1, copied: true }
 }
 
 interface ChatStore {
@@ -265,8 +363,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (key !== null && hasAdjacentDuplicateNotification(state.messages, key)) {
         return state
       }
-      const mainBefore = state.messages.filter(isMainConversationMessage).length
-      console.debug(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${mainBefore}+${isMainConversationMessage(message) ? 1 : 0}`)
+      // Filter inlined into the call so prod builds (compiler.removeConsole)
+      // drop the whole O(n) evaluation along with the console.debug.
+      console.debug(`[ChatStore:addMessage] role=${message.role} type=${message.type ?? '-'} streaming=${!!message.streaming} taskId=${message.taskId ?? '-'} main=${state.messages.filter(isMainConversationMessage).length}+${isMainConversationMessage(message) ? 1 : 0}`)
+      indexMessage(message, state.messages.length)
       return {
         messages: [...state.messages, message],
         isStreaming: (msg.streaming && !msg.taskId) ? true : state.isStreaming,
@@ -276,54 +376,46 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   appendThinking(text: string, agentName?: string, taskId?: string, turnId?: string) {
     set((state) => {
-      const messages = [...ensureStreamingSlot(state.messages, agentName, taskId, turnId)]
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        if (msg.role === 'assistant' && msg.streaming) {
-          if (msg.taskId !== taskId) continue
-          const blocks = [...(msg.contentBlocks ?? [])]
-          const lastBlock = blocks[blocks.length - 1]
-          if (lastBlock && lastBlock.type === 'thinking' && (!turnId || lastBlock.turnId === turnId)) {
-            blocks[blocks.length - 1] = { type: 'thinking', text: lastBlock.text + text, turnId: turnId ?? lastBlock.turnId }
-          } else {
-            blocks.push({ type: 'thinking', text, turnId })
-          }
-          messages[i] = { ...msg, contentBlocks: blocks }
-          break
-        }
+      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      if (slot.slotIdx === -1) return state
+      // Only the slot element is replaced — prefix references are reused, so
+      // memoized rows upstream keep reference equality.
+      const messages = slot.copied ? slot.messages : [...slot.messages]
+      const msg = messages[slot.slotIdx]
+      const blocks = [...(msg.contentBlocks ?? [])]
+      const lastBlock = blocks[blocks.length - 1]
+      if (lastBlock && lastBlock.type === 'thinking' && (!turnId || lastBlock.turnId === turnId)) {
+        blocks[blocks.length - 1] = { type: 'thinking', text: lastBlock.text + text, turnId: turnId ?? lastBlock.turnId }
+      } else {
+        blocks.push({ type: 'thinking', text, turnId })
       }
+      messages[slot.slotIdx] = { ...msg, contentBlocks: blocks }
       return { messages }
     })
   },
 
   updateLastAssistant(text: string, agentName?: string, taskId?: string, turnId?: string) {
     set((state) => {
-      const messages = [...ensureStreamingSlot(state.messages, agentName, taskId, turnId)]
-      let found = false
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        if (msg.role === 'assistant' && msg.streaming) {
-          if (msg.taskId !== taskId) continue
+      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      if (slot.slotIdx === -1) return state
+      const messages = slot.copied ? slot.messages : [...slot.messages]
+      const msg = messages[slot.slotIdx]
 
-          // Update contentBlocks: append to last text block (same turnId), or create new one
-          const blocks = [...(msg.contentBlocks ?? [])]
-          const lastBlock = blocks[blocks.length - 1]
-          if (lastBlock && lastBlock.type === 'text' && (!turnId || lastBlock.turnId === turnId)) {
-            blocks[blocks.length - 1] = { type: 'text', text: lastBlock.text + text, turnId: turnId ?? lastBlock.turnId }
-          } else {
-            blocks.push({ type: 'text', text, turnId })
-          }
-
-          messages[i] = {
-            ...msg,
-            content: msg.content + text,
-            contentBlocks: blocks,
-          }
-          found = true
-          break
-        }
+      // Update contentBlocks: append to last text block (same turnId), or create new one
+      const blocks = [...(msg.contentBlocks ?? [])]
+      const lastBlock = blocks[blocks.length - 1]
+      if (lastBlock && lastBlock.type === 'text' && (!turnId || lastBlock.turnId === turnId)) {
+        blocks[blocks.length - 1] = { type: 'text', text: lastBlock.text + text, turnId: turnId ?? lastBlock.turnId }
+      } else {
+        blocks.push({ type: 'text', text, turnId })
       }
-      return found && !taskId ? { messages, isStreaming: true } : { messages }
+
+      messages[slot.slotIdx] = {
+        ...msg,
+        content: msg.content + text,
+        contentBlocks: blocks,
+      }
+      return !taskId ? { messages, isStreaming: true } : { messages }
     })
   },
 
@@ -332,49 +424,42 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Reattach replay dedup: after a mid-turn WS reconnect the server
       // re-sends the in-flight turn's tool_calls (ws/handler.ts synthesis).
       // If a row with the same toolUseId is already rendered — from the
-      // snapshot or the pre-drop stream — drop the duplicate.
-      if (toolCall.toolUseId && state.messages.some((m) =>
-        m.toolCalls?.some((tc) => tc.toolUseId === toolCall.toolUseId)
-        || m.contentBlocks?.some((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolCall.toolUseId),
-      )) {
+      // snapshot or the pre-drop stream — drop the duplicate. O(1) via the
+      // toolUseId index (rebuilt on every wholesale replace, so a hit is
+      // always a live row, never a ghost of a dropped log).
+      if (toolCall.toolUseId && toolUseIdIdx.has(toolCall.toolUseId)) {
         return state
       }
-      const messages = [...ensureStreamingSlot(state.messages, agentName, taskId, turnId)]
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        if (msg.role === 'assistant' && msg.streaming) {
-          if (msg.taskId !== taskId) continue
+      const slot = ensureStreamingSlot(state.messages, agentName, taskId, turnId)
+      if (slot.slotIdx === -1) return state
+      const messages = slot.copied ? slot.messages : [...slot.messages]
+      const msg = messages[slot.slotIdx]
 
-          const blocks = [...(msg.contentBlocks ?? [])]
-          blocks.push({ type: 'tool_call', toolCall, turnId })
+      const blocks = [...(msg.contentBlocks ?? [])]
+      blocks.push({ type: 'tool_call', toolCall, turnId })
 
-          messages[i] = {
-            ...msg,
-            toolCalls: [...(msg.toolCalls ?? []), toolCall],
-            contentBlocks: blocks,
-          }
-          break
-        }
+      messages[slot.slotIdx] = {
+        ...msg,
+        toolCalls: [...(msg.toolCalls ?? []), toolCall],
+        contentBlocks: blocks,
       }
+      if (toolCall.toolUseId) toolUseIdIdx.set(toolCall.toolUseId, slot.slotIdx)
       return { messages }
     })
   },
 
   updateLastToolCallResult(result: string, agentName?: string, taskId?: string, toolUseId?: string) {
     set((state) => {
-      const messages = [...state.messages]
-
       // Identity path: pair by toolUseId when the server sent one. The id is
-      // provider-unique, so scan every message — after a reattach the owning
-      // row may live in a non-streaming snapshot message. Never overwrite a
-      // completed entry: replayed results stay idempotent.
+      // provider-unique and the index points straight at the owning message —
+      // after a reattach that may be a non-streaming snapshot message. Never
+      // overwrite a completed entry: replayed results stay idempotent.
       if (toolUseId) {
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const msg = messages[i]
-          const callIdx = msg.toolCalls?.findIndex((tc) => tc.toolUseId === toolUseId) ?? -1
-          const blockIdx = msg.contentBlocks?.findIndex((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolUseId) ?? -1
-          if (callIdx === -1 && blockIdx === -1) continue
-
+        const i = toolUseIdIdx.get(toolUseId) ?? -1
+        const msg = i === -1 ? undefined : state.messages[i]
+        const callIdx = msg?.toolCalls?.findIndex((tc) => tc.toolUseId === toolUseId) ?? -1
+        const blockIdx = msg?.contentBlocks?.findIndex((b) => b.type === 'tool_call' && b.toolCall.toolUseId === toolUseId) ?? -1
+        if (msg && (callIdx !== -1 || blockIdx !== -1)) {
           const alreadyDone = (callIdx !== -1 && msg.toolCalls![callIdx].output !== undefined)
             || (blockIdx !== -1 && (msg.contentBlocks![blockIdx] as { toolCall: ToolCallInfo }).toolCall.output !== undefined)
           if (alreadyDone) return state
@@ -388,6 +473,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             const block = blocks[blockIdx] as { type: 'tool_call'; toolCall: ToolCallInfo; turnId?: string }
             blocks[blockIdx] = { type: 'tool_call', toolCall: { ...block.toolCall, output: result }, turnId: block.turnId }
           }
+          const messages = [...state.messages]
           messages[i] = { ...msg, toolCalls, contentBlocks: blocks }
           return { messages }
         }
@@ -402,36 +488,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // overwrite cross-matched outputs on parallel-tool-call turns (same bug
       // the server fixed in ui-log-builder setToolResult). Never overwrite a
       // completed entry.
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i]
-        if (msg.role === 'assistant' && msg.streaming && msg.toolCalls?.length) {
-          if (msg.taskId !== taskId) continue
+      const i = findStreamingIdx(state.messages, taskId)
+      const msg = i === -1 ? undefined : state.messages[i]
+      if (!msg || !msg.toolCalls?.length) return state
 
-          // Update first pending in toolCalls array
-          const toolCalls = [...msg.toolCalls]
-          const pendingIdx = toolCalls.findIndex((tc) => tc.output === undefined)
-          if (pendingIdx !== -1) {
-            toolCalls[pendingIdx] = { ...toolCalls[pendingIdx], output: result }
-          }
+      // Update first pending in toolCalls array
+      const toolCalls = [...msg.toolCalls]
+      const pendingIdx = toolCalls.findIndex((tc) => tc.output === undefined)
+      if (pendingIdx !== -1) {
+        toolCalls[pendingIdx] = { ...toolCalls[pendingIdx], output: result }
+      }
 
-          // Also update in contentBlocks. Preserve `turnId` on the block —
-          // dropping it caused ensureStreamingSlot to see a stale "lastBlock
-          // turnId=undef" later and reuse this assistant message for blocks
-          // belonging to subsequent turns, collapsing 12 separate turns into
-          // one giant message bubble in the live UI.
-          const blocks = [...(msg.contentBlocks ?? [])]
-          for (let j = 0; j < blocks.length; j++) {
-            const block = blocks[j]
-            if (block.type === 'tool_call' && block.toolCall.output === undefined) {
-              blocks[j] = { type: 'tool_call', toolCall: { ...block.toolCall, output: result }, turnId: block.turnId }
-              break
-            }
-          }
-
-          messages[i] = { ...msg, toolCalls, contentBlocks: blocks }
+      // Also update in contentBlocks. Preserve `turnId` on the block —
+      // dropping it caused ensureStreamingSlot to see a stale "lastBlock
+      // turnId=undef" later and reuse this assistant message for blocks
+      // belonging to subsequent turns, collapsing 12 separate turns into
+      // one giant message bubble in the live UI.
+      const blocks = [...(msg.contentBlocks ?? [])]
+      for (let j = 0; j < blocks.length; j++) {
+        const block = blocks[j]
+        if (block.type === 'tool_call' && block.toolCall.output === undefined) {
+          blocks[j] = { type: 'tool_call', toolCall: { ...block.toolCall, output: result }, turnId: block.turnId }
           break
         }
       }
+
+      const messages = [...state.messages]
+      messages[i] = { ...msg, toolCalls, contentBlocks: blocks }
       return { messages }
     })
   },
@@ -441,6 +524,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const messages = state.messages.map((msg) =>
         msg.streaming ? { ...msg, streaming: false } : msg,
       )
+      pruneStreamingIdx(messages)
       return { messages, isStreaming: false }
     })
   },
@@ -459,6 +543,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (before !== after) {
         console.warn(`[ChatStore:completeAgentStreaming] main msgs changed ${before} -> ${after}, agentName=${agentName}, taskId=${taskId}`)
       }
+      pruneStreamingIdx(messages)
       return { messages, isStreaming: stillStreaming }
     })
   },
@@ -470,6 +555,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setMessages(messages: ChatMessage[]) {
     const prev = get().messages
     console.debug(`[ChatStore:setMessages] ${prev.length} -> ${messages.length}`, new Error().stack?.split('\n').slice(1, 4).join(' <- '))
+    // Wholesale replace — every position may have changed, so the hot-path
+    // indexes must be rebuilt in lockstep (snapshot restore, reattach-replay
+    // rebuild, and the []-reset on session switch all land here).
+    rebuildMessageIndexes(messages)
     set({ messages })
   },
 
@@ -527,6 +616,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         return m
       })
+      pruneStreamingIdx(messages)
       return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
     })
   },
@@ -547,6 +637,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const messages = state.messages.map((m) =>
         lost(m) ? { ...m, streaming: false, interrupted: true } : m,
       )
+      pruneStreamingIdx(messages)
       return { messages, isStreaming: messages.some((m) => m.streaming && !m.taskId) }
     })
   },
@@ -565,6 +656,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // refilled it. Keeping the last-known limit lets the ring light up as soon
     // as the first usage event lands — the "ring only shows after I switch
     // sessions" bug.
+    rebuildMessageIndexes([])
     set({ messages: [], isStreaming: false, pendingMessages: [], sessionId: null, contextTokens: 0, outputTokens: 0 })
   },
 }))
