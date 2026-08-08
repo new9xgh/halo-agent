@@ -198,6 +198,10 @@ export const zh: Record<string, string> = {
   'chat.sendFailed': '发送失败——服务器未确认收到这条消息,请重新发送。',
   'chat.sendFailedBadge': '发送失败',
   'chat.interrupted': '未收到响应——连接可能已断开,如有需要请重发。',
+  'chat.archive.loadOlder': '加载更早的消息',
+  'chat.archive.loading': '正在加载更早的消息……',
+  'chat.archive.noEarlier': '没有更早的消息',
+  'chat.archive.header': '已归档 · {segments} 段 · {messages} 条消息',
 
   // ── Goal mode ──
   'goal.banner.intake': '🎯 目标模式 · 契约制定中——正在和你确认目标',

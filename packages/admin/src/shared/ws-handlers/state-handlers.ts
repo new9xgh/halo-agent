@@ -1,5 +1,6 @@
 import type { WsClient } from '../ws-client-types'
 import { useChatStore, isStaleStreamingPlaceholder, noteSnapshot } from '@/features/chat/chat-store'
+import { noteArchiveAnchor } from '@/features/chat/archive-store'
 import { refreshGoal } from '@/features/chat/goal-store'
 import { useTaskStore } from '@/shared/stores/task-store'
 import { useProjectStore } from '@/shared/stores/project-store'
@@ -17,6 +18,11 @@ export function registerStateHandlers(wsClient: WsClient): () => void {
 
       if (snapshot.sessionId) {
         useChatStore.getState().setSessionId(snapshot.sessionId)
+        // Anchor the scroll-up history walk. Only subscribe/reattach snapshots
+        // carry `archiveCount`; the per-turn ones omit it, which is read as
+        // "no archive" — safe because noteArchiveAnchor is a no-op once the
+        // session is already bound.
+        noteArchiveAnchor(snapshot.sessionId, snapshot.archiveCount ?? 0)
       }
       if (snapshot.agentId) {
         useChatStore.getState().setSelectedAgentId(snapshot.agentId)

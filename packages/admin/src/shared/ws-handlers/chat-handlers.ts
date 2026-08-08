@@ -218,9 +218,14 @@ export function registerChatHandlers(wsClient: WsClient): () => void {
     // handler the message is dropped on the floor and the UI sits in
     // "thinking…" forever — the user has to refresh to see anything.
     wsClient.on('error', (data) => {
-      const msg = data as { error?: string; agentName?: string; taskId?: string }
+      const msg = data as { error?: string; code?: string; agentName?: string; taskId?: string }
       const store = useChatStore.getState()
-      const text = msg.error ? `Error: ${msg.error}` : 'An unknown error occurred.'
+      // A `code`-carrying frame is an expected refusal the server phrased for the
+      // user (e.g. `archived` from exchange:delete) — show it as-is; an `Error:`
+      // prefix would make a normal limit look like a crash.
+      const text = msg.code
+        ? (msg.error ?? '')
+        : msg.error ? `Error: ${msg.error}` : 'An unknown error occurred.'
       store.addMessage({
         id: generateId(),
         role: 'system',

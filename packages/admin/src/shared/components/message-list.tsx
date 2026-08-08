@@ -45,14 +45,19 @@ function resolveTargetSession(messageId: string): { sessionId: string; projectId
 interface MessageListProps {
   messages: ChatMessage[]
   debugMode?: boolean
+  /** Suppress the per-exchange Delete button. Used by the archived-history
+   *  block: those turns are no longer in any session's active log, so
+   *  `resolveTargetSession` would mis-resolve them onto the live session and
+   *  the server refuses `exchange:delete` on archived sessions anyway. */
+  readOnly?: boolean
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Entry point
 // ═══════════════════════════════════════════════════════════════════════
 
-export function MessageList({ messages, debugMode }: MessageListProps) {
-  return <ExchangeView messages={messages} debugMode={debugMode} />
+export function MessageList({ messages, debugMode, readOnly }: MessageListProps) {
+  return <ExchangeView messages={messages} debugMode={debugMode} readOnly={readOnly} />
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -82,16 +87,17 @@ function buildExchanges(messages: ChatMessage[]): Exchange[] {
   return exchanges
 }
 
-function ExchangeView({ messages, debugMode }: { messages: ChatMessage[]; debugMode?: boolean }) {
+function ExchangeView({ messages, debugMode, readOnly }: { messages: ChatMessage[]; debugMode?: boolean; readOnly?: boolean }) {
   const exchanges = useMemo(() => buildExchanges(messages), [messages])
 
   // Every message in one MessageList belongs to one session, so resolve
   // deletability once (probe with any user message id) instead of per row.
   // False for sub-sessions / unresolvable sessions → no Delete button anywhere.
   const deletable = useMemo(() => {
+    if (readOnly) return false
     const probe = messages.find((m) => m.role === 'user')
     return probe ? resolveTargetSession(probe.id) !== null : false
-  }, [messages])
+  }, [messages, readOnly])
 
   // Assign each user-role exchange its 0-based ordinal among user turns — the
   // same count the server derives over the root UI log, so a Delete click maps

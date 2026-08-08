@@ -17,6 +17,8 @@ import { config } from '../config.js'
 import { WorkspaceWatcher } from './file-watcher.js'
 import { GitDirWatcher } from './git-dir-watcher.js'
 import { saveInboundMedia } from '../channels/shared/media-store.js'
+import { readArchiveCount } from '../sessions/session-archive.js'
+import { getSessionDir, fileSegment } from '../sessions/session-store.js'
 import { sendJson, sendWsNotification, bufferDetachedNotification } from './event-processor.js'
 import { setClientWorkspaceResolver } from './broadcast.js'
 import { TerminalManager } from './terminal-manager.js'
@@ -154,6 +156,23 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     return client.sessionManager.getCachedUIState(client.sessionId)
   }
 
+  /**
+   * Committed UI-log archive segments for a session — the anchor the admin's
+   * scroll-up loader counts DOWN from (`archiveCount` → 1, then "no earlier
+   * messages"). 0 when the session never archived, which is also what a client
+   * that can't resolve the workspace sees: no "load older" affordance.
+   *
+   * Sent on subscribe / reattach only (one header read per session open), NOT
+   * on the per-turn snapshots — a segment written mid-session doesn't move the
+   * client's anchor by design (see design/session.md).
+   */
+  function archiveCountFor(client: ConnectedClient, sessionId: string, agentId: string | undefined): number {
+    if (!agentId || !client.projectId) return 0
+    const projectPath = resolveProjectPath(client.projectId)
+    if (!projectPath) return 0
+    return readArchiveCount(getSessionDir(agentId, projectPath), fileSegment(sessionId))
+  }
+
   function saveSession(client: ConnectedClient): void {
     if (!client.sessionId || !client.projectId || !client.sessionManager) return
     const state = getState(client)
@@ -250,7 +269,9 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
     const result = await sm.deleteExchange(targetSessionId, msg.userOrdinal)
     if (result === 'running') { sendJson(ws, { type: 'error', error: 'Cannot delete while the agent is running' }); return }
     if (result === 'compacting') { sendJson(ws, { type: 'error', error: 'Cannot delete while compacting' }); return }
-    if (result === 'archived') { sendJson(ws, { type: 'error', error: 'Cannot delete turns in a session with archived history' }); return }
+    // `code` marks this as an expected refusal, not a failure: the admin renders
+    // it as a plain notice instead of an `Error:` bubble (see chat-handlers).
+    if (result === 'archived') { sendJson(ws, { type: 'error', code: 'archived', error: 'This session has archived history — individual turns can no longer be deleted.' }); return }
     if (result === 'not_found' || result === 'no_exchange') { sendJson(ws, { type: 'error', error: 'Exchange not found' }); return }
 
     // Push the refreshed log to the subscribed client (this connection) when it's
@@ -855,7 +876,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
         // snapshot, or a client that applies it renders the turn twice.
         const messages = state ? (running ? [...state.messageLog] : [...createSaveSnapshot(state)]) : []
         const detachedSession = client.sessionManager.getSessionById(client.sessionId)
-        sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId } })
+        sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens: ctxConfig.maxTokens, agentId: detachedSession?.agentId, archiveCount: archiveCountFor(client, client.sessionId, detachedSession?.agentId) } })
         if (state && state.contextTokens > 0) {
           sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
         }
@@ -926,7 +947,7 @@ export function setupWebSocketHandler(deps: WsHandlerDeps): void {
 
       const state = getState(client)
       const messages = state ? [...createSaveSnapshot(state)] : []
-      sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId } })
+      sendJson(ws, { type: 'state:snapshot', snapshot: { activePlan: null, agents: [], recentMessages: messages, sessionId: msg.sessionId, maxContextTokens, agentId, archiveCount: msg.sessionId ? archiveCountFor(client, msg.sessionId, agentId) : 0 } })
       if (state && state.contextTokens > 0) {
         sendJson(ws, { type: 'chat:usage', contextTokens: state.contextTokens, outputTokens: state.outputTokens })
       }

@@ -16,7 +16,7 @@
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import type { SessionMessage } from './session-types.js'
 
 /**
@@ -81,6 +81,19 @@ export function readArchiveCount(dir: string, seg: string): number {
 export function writeArchiveSegment(dir: string, seg: string, n: number, messages: SessionMessage[]): void {
   fsSync.mkdirSync(dir, { recursive: true })
   fsSync.writeFileSync(segmentPath(dir, seg, n), gzipSync(JSON.stringify(messages)))
+}
+
+/**
+ * Read segment `n` back. Null when the file is missing or unreadable — callers
+ * must additionally check `n <= readArchiveCount(...)`, since an uncommitted
+ * segment left by a crash is present on disk but not part of the log.
+ */
+export function readArchiveSegment(dir: string, seg: string, n: number): SessionMessage[] | null {
+  try {
+    return JSON.parse(gunzipSync(fsSync.readFileSync(segmentPath(dir, seg, n))).toString('utf-8')) as SessionMessage[]
+  } catch {
+    return null
+  }
 }
 
 /**

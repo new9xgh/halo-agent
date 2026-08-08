@@ -1,3 +1,5 @@
+import type { ChatMessage } from '@/shared/types'
+
 const API_BASE = '/api'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -552,6 +554,14 @@ export const api = {
       if (projectId) params.set('projectId', projectId)
       const qs = params.toString() ? `?${params}` : ''
       return request<{ ok: boolean }>(`/sessions/logs/${sessionId}${qs}`, { method: 'DELETE' })
+    },
+    /** One archived UI-log segment (oldest-first within the segment). `n` counts
+     *  up from 1; callers walk DOWN from the snapshot's `archiveCount`. Segments
+     *  are immutable once committed, so the caller caches what it pulled. */
+    archiveSegment(sessionId: string, n: number, projectId: string) {
+      return request<{ messages: ChatMessage[] }>(
+        `/sessions/logs/${sessionId}/archive/${n}?projectId=${encodeURIComponent(projectId)}`,
+      )
     },
     /** Rename a session (admin-only — updates the log file's title) */
     rename(sessionId: string, title: string, projectId?: string) {

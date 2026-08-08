@@ -4,6 +4,8 @@ import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { MessageList } from '@/shared/components/message-list'
 import { MessageInput } from './message-input'
 import { GoalBanner } from './goal-banner'
+import { ArchiveHistory } from './archive-history'
+import { useArchiveStore, loadOlderArchive } from './archive-store'
 import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
@@ -219,16 +221,50 @@ export function ChatPanel() {
 
   const userScrolledUp = useRef(false)
 
+  // Distance from the bottom captured just before an archive segment is
+  // prepended. Prepending grows the content ABOVE the viewport while the
+  // browser keeps `scrollTop`, which yanks the reader downward; restoring this
+  // distance afterwards keeps the same messages under the cursor.
+  const archiveScrollAnchor = useRef<number | null>(null)
+  // One segment per scroll-to-top GESTURE. A pulled segment renders collapsed
+  // (a single header row), so the container stays near the top and a bare
+  // `scrollTop < TOP` test would cascade through the whole archive on one
+  // flick. Re-arm only after the user has scrolled back down.
+  const topTriggerArmed = useRef(true)
+
+  const handleLoadOlderArchive = useCallback(() => {
+    const el = scrollRef.current
+    archiveScrollAnchor.current = el ? el.scrollHeight - el.scrollTop : null
+    void loadOlderArchive()
+  }, [])
+
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
       userScrolledUp.current = !atBottom
+      if (el.scrollTop > 200) topTriggerArmed.current = true
+      else if (el.scrollTop < 80 && topTriggerArmed.current) {
+        topTriggerArmed.current = false
+        handleLoadOlderArchive()
+      }
     }
     el.addEventListener('scroll', handleScroll)
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [])
+  }, [handleLoadOlderArchive])
+
+  // Restore the reading position after a prepend. Keyed on the archive store's
+  // message array so it runs exactly when new history lands (the bottom-anchor
+  // effect below can't fire for it — `mainMessages` is unchanged).
+  const archiveMessages = useArchiveStore((s) => s.messages)
+  useEffect(() => {
+    const el = scrollRef.current
+    const anchor = archiveScrollAnchor.current
+    if (!el || anchor === null) return
+    el.scrollTop = el.scrollHeight - anchor
+    archiveScrollAnchor.current = null
+  }, [archiveMessages])
 
   useEffect(() => {
     if (scrollRef.current && !userScrolledUp.current) {
@@ -290,7 +326,10 @@ export function ChatPanel() {
               <SessionHistoryLink count={sessions.length} onClick={() => setSidebar(true)} />
             </div>
           ) : (
-            <MessageList messages={mainMessages} />
+            <>
+              <ArchiveHistory onLoadOlder={handleLoadOlderArchive} />
+              <MessageList messages={mainMessages} />
+            </>
           )}
         </div>
 

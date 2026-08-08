@@ -20,6 +20,7 @@ import { createSkillRoutes } from './routes/skills.js'
 import { createSettingsRoutes, onSettingsChange } from './routes/settings.js'
 import { createEvolutionRoutes } from './routes/evolution.js'
 import { createSessionRoutes } from './routes/sessions.js'
+import { createSessionArchiveRoutes } from './routes/session-archive.js'
 import { createShowRoutes } from './routes/halo-city.js'
 import { createMetricsRoutes } from './routes/metrics.js'
 import { createCommandRoutes } from './routes/commands.js'
@@ -408,6 +409,11 @@ const registry = new SessionManagerRegistry({ reconcileOrphansOnBoot: true })
 
 const sessionRoutes = createSessionRoutes(registry)
 app.route('/api', sessionRoutes)
+
+// Archived UI-log segments (scroll-up history). Separate router from
+// sessions.ts so the read side of archiving sits next to nothing else.
+const sessionArchiveRoutes = createSessionArchiveRoutes(registry)
+app.route('/api', sessionArchiveRoutes)
 
 // halo-city world snapshot — token-authed public endpoint (added to
 // PUBLIC_PATHS in auth.ts so it bypasses the admin cookie like /api/web/*).

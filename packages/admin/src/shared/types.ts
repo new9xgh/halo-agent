@@ -251,6 +251,10 @@ export interface WsSnapshotMsg {
     messages?: ChatMessage[]
     sessionId?: string
     maxContextTokens?: number
+    /** Committed UI-log archive segments for this session (0 = none). Sent on
+     *  subscribe / reattach only; the cursor the chat panel counts down from
+     *  when the user scrolls to the top. */
+    archiveCount?: number
   }
 }
 
