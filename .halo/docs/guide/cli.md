@@ -155,9 +155,10 @@ Bare `/<obj>` (or `/<obj> help`) lists the verbs you may run. Verbs gated above 
 
 | Key | Action |
 |---|---|
-| `Esc` (while running) | Interrupt the current turn immediately — aborts a command mid-execution, then any messages typed while it was running are folded into one follow-up turn. Same as `/session interrupt`. **Modals own Esc first**: while the log viewer, the sub-agent navigator, or a completion popup is open, Esc just closes that (the popup keeps your typed text) and the turn keeps running — press Esc again, with nothing open, to interrupt. So watching a live log via `Ctrl+O` and pressing Esc to leave never kills the turn. |
-| `Ctrl+C` | Graceful exit; press twice to force |
-| `Ctrl+O` | Toggle the sub-agent navigator — lists every sub-agent spawned this session, each showing its agent name, task title (same as the session list), and status (`●` running green / `○` idle grey / `✕` stopped red, plus a `▢ archived` marker when the session is archived); `↑↓` to move, `Enter` to view that sub-agent's log, `Esc`/`q` to close. (Was `Shift+Tab`, but Windows terminals consume that as backtab.) The log viewer auto-refreshes while the viewed session is still running (a `● live` hint shows in the header) and follows the bottom as new output lands — unless you've scrolled up to read, in which case it stays put (`G` jumps back to the bottom and resumes following). |
+| `Esc` | **With nothing else open, while a turn is running**: interrupt it immediately — the in-flight tool or command is aborted, then any messages typed while it ran fold into one follow-up turn (same as `/session interrupt`; repeat presses are idempotent, the "interrupting…" notice is throttled). **While the log viewer, the sub-agent navigator, or a completion popup is open**: Esc only closes that surface — a running turn is never touched, so leaving a live log you opened with `Ctrl+O` can't kill it. The popup keeps your typed text when dismissed. Once nothing is open, the next Esc interrupts again. |
+| `Ctrl+C` | Exit — first press arms a confirm (the input hint flips to "press Ctrl+C again to exit" for 1.5s), second press exits. Works even while a modal is open (unlike Esc, nothing swallows it). Exit is graceful: a running turn is stopped, the conversation repaired, and the session flushed to disk. |
+| `Ctrl+O` | Open the session-log navigator (no-op while a log surface is already open) — lists the session tree, the root session plus every sub-agent spawned under it, each showing its agent name, task title (same as the session list), and status (`●` running green / `○` idle grey / `✕` stopped red, plus a `▢ archived` marker when the session is archived); `↑↓` to move, `Enter` to view that session's log, `Esc`/`q` to close. (Was `Shift+Tab`, but Windows terminals consume that as backtab.) Inside the log viewer: `j`/`k` or `↑`/`↓` scroll by line, `d`/`u` (or `Ctrl+F`/`Ctrl+B`, PgDn/PgUp) by half a page, `g`/`G` jump to top/bottom, `q`/`Esc` close. The viewer auto-refreshes while the viewed session is still running (a `● live` hint shows in the header) and follows the bottom as new output lands — unless you've scrolled up to read, in which case it stays put (`G` jumps back to the bottom and resumes following). |
+| `Tab` / `Enter` (popup open) | Complete the highlighted suggestion — slash commands and their verbs while typing `/…`, paths after `@`/`@file`/`@image`/`@scope`. `↑`/`↓` move the highlight; `Esc` dismisses the popup without clearing what you typed (any edit brings it back). A picked directory completes with a trailing `/` and keeps the popup open so you can keep descending; a picked file closes it. With no popup open, Enter submits. |
 | `↑` / `↓` | Walk input history (when no popup is open). History persists across restarts in `~/.halo/global/tui-history.json` (last 100 entries, shared across workspaces) |
 | `←` / `→`, `Home` / `End` | Move the cursor within the input; text is inserted/deleted at the cursor (CJK and emoji safe) |
 | `Ctrl+A` / `Ctrl+E` | Jump to start / end of input |
@@ -182,11 +183,11 @@ Attach files or images to your message with `@file` and `@image`, or pull a dire
 
 - `@file path` — reads the file and inlines its content in the message as `<file>` block
 - `@image path` — reads the image as base64 and sends it via the model's vision input
-- `@file photo.png` — image extensions (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`) are auto-detected as images
+- `@file photo.png` — image extensions (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) are auto-detected as images
 - `@scope dir` — injects the directory-scoped `.halo/INSTRUCTIONS.md` along the path from the workspace root down to `dir` (root level excluded — it's already in the system prompt) into **this turn only**. Use it to bring a sub-directory's conventions into scope for one request. It does not change where tools run.
 - Paths are relative to the workspace; absolute paths also work
 - Quoted paths supported for filenames with spaces: `@file "my file.txt"`
-- **Tab completion** in TUI mode: type `@file ` (or `@scope `, which lists directories only) then press Tab to browse
+- **Path completion** in TUI mode: the suggestion popup opens by itself as you type after `@file ` / `@image ` (images and directories only) / `@scope ` (directories only) — `Tab` or `Enter` completes the highlighted entry, directories stay open for descending (see Keybindings)
 
 ### Limits
 
