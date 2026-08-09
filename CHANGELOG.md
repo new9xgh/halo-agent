@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-09
+
+### Added
+
+- HTTP responses now gzip-compressed (`hono/compress`) — multi-MB archive-segment JSON drops ~99.7%, static admin JS/CSS ~75%; SSE streaming and WS upgrades are unaffected.
+- Sessions tab detail panel now loads archived history on scroll-to-top, mirroring the Chat panel's existing archive-segment walk (previously stopped dead at the compact point).
+
+### Fixed
+
+- Chat panel: windowed the message list to the last 30 turns instead of mounting every exchange as DOM — the main cause of "the longer the chat, the laggier"; scrolling up widens the window before falling through to the archive-segment fetch.
+- Chat panel: streaming hot path is now O(1) per event (incremental indexes replace full-array rescans and nested toolUseId dedup scans) — the other half of the same lag; also drops `console.debug` from prod builds and fixes a reconcile bug that defeated row memoization on every refetch.
+- Editor: Monaco models are now disposed when the last tab referencing a path closes — previously every file ever opened leaked a full-text-plus-tokenization model until page reload.
+- Sessions sidebar: selecting an already-loaded session no longer re-fetches its transcript (double-click and tab-switch both produced duplicate fetches).
+- Admin: git status/graph/decoration refreshes no longer fire on sqlite WAL churn (session metadata writes, cron, evolution) — machine state git decorations never display anyway.
+- Server: idle session UI state is now evicted after 10 minutes instead of held in memory for the process lifetime — channel/cron-driven sessions no longer accumulate hundreds of MB of retained message logs over weeks.
+- Archive-history toggle (Chat and Sessions panels): expands upward, anchored to the newest end, instead of dropping the reader on the oldest archived message; the toggle bar now sits below the expanded content with a correctly-oriented chevron.
+
 ## [1.1.0] - 2026-08-08
 
 ### Added
@@ -352,7 +369,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/turmind/halo-agent/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/turmind/halo-agent/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/turmind/halo-agent/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/turmind/halo-agent/compare/v1.0.1...v1.0.2
