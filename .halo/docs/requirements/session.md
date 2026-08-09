@@ -17,6 +17,7 @@ Session history viewer: hierarchy tree, message playback, debug mode, system pro
 - All messages rendered by role
 - Assistant messages render Markdown
 - System messages summarise tool calls
+- For a session whose history was compacted, scrolling to the top shows a "load earlier messages" row; scrolling further or clicking it pulls one archived segment at a time. Pulled history renders expanded above the active log, with a divider marking where it ends, and is read-only (no delete)
 
 ### Debug mode
 Top Debug toggle (Bug icon). When on:
