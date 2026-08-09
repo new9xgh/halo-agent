@@ -124,7 +124,10 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
             onChange={(e) => { onPathInputChange(e.target.value); setTyped(true); setDropdownOpen(true) }}
             onFocus={() => { setTyped(false); setDropdownOpen(true) }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') { setDropdownOpen(false); onOpenFolder() }
+              // IME confirm (isComposing) and key auto-repeat both deliver
+              // extra Enter keydowns — each would start its own workspace
+              // jump, stacking one leave-site prompt per press.
+              if (e.key === 'Enter' && !e.repeat && !e.nativeEvent.isComposing) { setDropdownOpen(false); onOpenFolder() }
               else if (e.key === 'Escape') setDropdownOpen(false)
             }}
             placeholder="Enter folder path, press Enter"

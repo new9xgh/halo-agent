@@ -238,9 +238,14 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     }
   }, [])
 
-  // Warn before closing/refreshing the page
+  // Warn before closing/refreshing the page — but not for deliberate
+  // workspace jumps: openFolderPath confirms unsaved edits itself (and only
+  // when there are any), so the generic leave-site dialog on top of that
+  // would be a second, redundant prompt on every switch.
+  const suppressUnloadWarning = useRef(false)
   useEffect(() => {
     function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (suppressUnloadWarning.current) return
       e.preventDefault()
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -371,19 +376,40 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     }
   }
 
+  // One jump at a time: a second call (Enter auto-repeat / double-fire,
+  // double-click on a recent entry) while the first is validating or already
+  // navigating would run the whole confirm→reload sequence again, stacking
+  // dialogs. Never reset on the success path — the page is about to unload.
+  const workspaceJumpInFlight = useRef(false)
   async function openFolderPath(target: string) {
     const path = target.trim()
     if (!path) return
+    if (workspaceJumpInFlight.current) return
+    workspaceJumpInFlight.current = true
     try {
       const res = await api.fs.exists(path)
       if (!res.exists || !res.isDirectory) {
         window.alert(`Workspace not found: ${path}`)
+        workspaceJumpInFlight.current = false
         return
       }
     } catch (err) {
       window.alert(err instanceof Error ? err.message : 'Failed to validate path')
+      workspaceJumpInFlight.current = false
       return
     }
+    // Deliberate navigation: confirm unsaved edits explicitly (only when any
+    // exist), then suppress the generic leave-site warning — without this the
+    // browser's beforeunload dialog fires on every switch, unsaved or not.
+    const dirty = useEditorStore.getState().tabs.filter((t) => t.modified)
+    if (dirty.length > 0) {
+      const names = dirty.map((t) => t.path.split('/').pop()).join(', ')
+      if (!(await confirmAction(`Unsaved changes in ${names} will be lost. Switch workspace anyway?`))) {
+        workspaceJumpInFlight.current = false
+        return
+      }
+    }
+    suppressUnloadWarning.current = true
     // Remember this as the last folder BEFORE the reload, so a later launch
     // without ?folder (the desktop app's normal case) reopens here. Without
     // this, switching workspaces via this path never updated halo_last_folder
