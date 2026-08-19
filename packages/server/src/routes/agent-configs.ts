@@ -28,6 +28,20 @@ function getAvailableTools(): Array<{ name: string; description: string }> {
 
 const GLOBAL_AGENTS_DIR = path.join(homedir(), '.halo', 'global', 'agents')
 
+/** Atomic write (async twin of init.ts's writeFileAtomic): tmp + rename so a
+ *  concurrent loadAgentYaml never reads a truncated agent.yaml. Falls back to
+ *  a plain write on rename failure (Windows EPERM when the target is open). */
+async function writeFileAtomic(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp`
+  await fs.writeFile(tmpPath, content, 'utf-8')
+  try {
+    await fs.rename(tmpPath, filePath)
+  } catch {
+    await fs.writeFile(filePath, content, 'utf-8')
+    await fs.rm(tmpPath, { force: true }).catch(() => { /* best-effort cleanup */ })
+  }
+}
+
 /** Agent metadata returned to frontend */
 interface AgentMeta {
   id: string
@@ -380,7 +394,7 @@ export function createAgentConfigRoutes() {
       return c.json({ error: 'Agent not found' }, 404)
     }
 
-    await fs.writeFile(yamlPath, body.yaml, 'utf-8')
+    await writeFileAtomic(yamlPath, body.yaml)
 
     // Return updated metadata
     const { name, description, model } = parseAgentYaml(body.yaml)

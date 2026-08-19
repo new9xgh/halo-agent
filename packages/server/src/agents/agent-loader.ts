@@ -83,12 +83,26 @@ export function isAgentDisabled(agentId: string, workspaceRoot: string | undefin
 }
 
 /** Load agent.yaml from the agent's source dir (workspace dir wholly
- *  overrides global — see agentSourceDir). */
+ *  overrides global — see agentSourceDir).
+ *
+ *  Returns null in all failure cases (callers probe agent existence with
+ *  this), but only ENOENT is silent — a file that exists yet fails to read
+ *  or parse (empty/torn from a non-atomic write, malformed YAML) gets a
+ *  warn so the eventual "missing model config" error upstream isn't a
+ *  dead end. */
 export async function loadAgentYaml(agentId: string, workspaceRoot?: string): Promise<AgentYamlConfig | null> {
+  const yamlPath = path.join(agentSourceDir(agentId, workspaceRoot), 'agent.yaml')
   try {
-    const content = await fs.readFile(path.join(agentSourceDir(agentId, workspaceRoot), 'agent.yaml'), 'utf-8')
-    return YAML.parse(content) as AgentYamlConfig
-  } catch {
+    const content = await fs.readFile(yamlPath, 'utf-8')
+    const parsed = YAML.parse(content) as AgentYamlConfig | null
+    if (parsed === null || typeof parsed !== 'object') {
+      console.warn(`[AgentLoader] Failed to parse ${yamlPath}: empty or non-object YAML`)
+      return null
+    }
+    return parsed
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    console.warn(`[AgentLoader] Failed to parse ${yamlPath}: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }

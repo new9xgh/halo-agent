@@ -8,7 +8,7 @@ import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } fro
 import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
-  scanAvailableAgents, isTeamMember, canDelegate,
+  scanAvailableAgents, isTeamMember, canDelegate, agentSourceDir,
   type AgentYamlConfig, type ScannedAgent,
 } from './agent-loader.js'
 import { getDisabledSet, type HaloDb } from '../db/index.js'
@@ -115,17 +115,26 @@ export class SessionAgentBuilder {
     return { agent, yamlConfig, contextConfig, modelId, systemPrompt, thinkingEffort, meta, draftReset }
   }
 
-  /** Throw with a clear message if agent.yaml is missing the model triple. */
+  /** Throw with a clear message if agent.yaml is missing the model triple.
+   *  Includes the resolved yaml path and distinguishes "file unreadable"
+   *  (yamlConfig null — read/parse failed, see loadAgentYaml) from "config
+   *  genuinely incomplete", so the error is self-diagnosing. */
   private validateAgentModelConfig(
     agentId: string,
     yamlConfig: AgentYamlConfig | null,
   ): { modelId: string; endpoint: string; providerId: string } {
-    const modelId = yamlConfig?.model?.id
-    const endpoint = yamlConfig?.model?.endpoint
-    const providerId = yamlConfig?.model?.provider
+    const yamlPath = path.join(agentSourceDir(agentId, this.host.workspaceRoot), 'agent.yaml')
+    if (yamlConfig === null) {
+      throw new Error(
+        `[SessionManager] Agent "${agentId}": agent.yaml missing or unreadable at ${yamlPath}.`,
+      )
+    }
+    const modelId = yamlConfig.model?.id
+    const endpoint = yamlConfig.model?.endpoint
+    const providerId = yamlConfig.model?.provider
     if (!modelId || !endpoint || !providerId) {
       throw new Error(
-        `[SessionManager] Agent "${agentId}" is missing model config. `
+        `[SessionManager] Agent "${agentId}" is missing model config in ${yamlPath}. `
         + `agent.yaml must specify model.provider, model.id and model.endpoint.`,
       )
     }

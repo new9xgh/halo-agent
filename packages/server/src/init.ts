@@ -139,11 +139,37 @@ const BUNDLED_DOCS = [
   'requirements/command.md',
 ]
 
-/** Read template file then write to dst. mkdir -p the parent. */
+/** Atomic write: write a same-dir `<name>.tmp` then rename over the target.
+ *  Plain writeFileSync truncates first, so a concurrent reader (loadAgentYaml
+ *  re-reads agent.yaml on every session-cache miss) can observe an empty /
+ *  half-written file — the "Agent is missing model config" transient. rename
+ *  swaps content in one step, so readers see either old or new, never torn.
+ *  Exported for reuse by routes that rewrite hot-read files (agent-configs). */
+export function writeFileAtomic(filePath: string, content: string, mode?: number): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const tmpPath = `${filePath}.tmp`
+  fs.writeFileSync(tmpPath, content, mode === undefined ? { encoding: 'utf-8' } : { encoding: 'utf-8', mode })
+  try {
+    fs.renameSync(tmpPath, filePath)
+  } catch {
+    // Windows lock-file fallback: renaming over a file held open by another
+    // process throws EPERM there. A non-atomic in-place write beats failing
+    // the seed outright; the race window this reopens is Windows-only.
+    fs.writeFileSync(filePath, content, mode === undefined ? { encoding: 'utf-8' } : { encoding: 'utf-8', mode })
+    try { fs.rmSync(tmpPath, { force: true }) } catch { /* best-effort cleanup */ }
+  }
+}
+
+/** Read template file then write to dst. mkdir -p the parent.
+ *  Idempotent: skips the write when dst already has identical content, so
+ *  the every-launch desktop reseed doesn't churn mtimes or open write
+ *  windows for files that haven't changed. */
 function copyTemplate(srcAbs: string, dstAbs: string): void {
-  fs.mkdirSync(path.dirname(dstAbs), { recursive: true })
   const content = fs.readFileSync(srcAbs, 'utf-8')
-  fs.writeFileSync(dstAbs, content, 'utf-8')
+  try {
+    if (fs.readFileSync(dstAbs, 'utf-8') === content) return
+  } catch { /* missing/unreadable dst → write it */ }
+  writeFileAtomic(dstAbs, content)
 }
 
 /** writeIfMissing — create the file only when it doesn't exist. Pass `mode`
@@ -174,7 +200,8 @@ export function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
     return
   }
   try {
-    const userDoc = YAML.parseDocument(fs.readFileSync(dstAbs, 'utf-8'))
+    const userRaw = fs.readFileSync(dstAbs, 'utf-8')
+    const userDoc = YAML.parseDocument(userRaw)
     const templateDoc = YAML.parseDocument(fs.readFileSync(srcAbs, 'utf-8'))
     const userModel = userDoc.get('model')
     if (userModel != null) {
@@ -184,7 +211,11 @@ export function mergeAgentYaml(srcAbs: string, dstAbs: string): void {
     if (userContext != null) {
       templateDoc.set('context', userContext)
     }
-    fs.writeFileSync(dstAbs, templateDoc.toString(), 'utf-8')
+    const merged = templateDoc.toString()
+    // Idempotent: identical result (the common every-launch reseed case)
+    // skips the write entirely — no mtime churn, no write window.
+    if (merged === userRaw) return
+    writeFileAtomic(dstAbs, merged)
   } catch (err) {
     console.log(`[Init] mergeAgentYaml fallback (force-copy) for ${dstAbs}: ${err instanceof Error ? err.message : String(err)}`)
     copyTemplate(srcAbs, dstAbs)

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
-import { mergeAgentYaml } from '../src/init.js'
+import { mergeAgentYaml, writeFileAtomic } from '../src/init.js'
 
 /**
  * Contract: the built-in-agent reseed (mergeAgentYaml, called from
@@ -83,5 +83,45 @@ describe('mergeAgentYaml', () => {
     const parsed = YAML.parse(fs.readFileSync(dstPath, 'utf-8'))
     expect(parsed.context.maxTokens).toBe(200000)
     expect(parsed.model.id).toBe('template-model')
+  })
+
+  // Atomic-write + idempotent-skip contract: the every-launch desktop reseed
+  // must neither churn mtimes on unchanged files nor leave a window where a
+  // concurrent loadAgentYaml can read a truncated agent.yaml.
+  it('second merge with identical content skips the write (mtime unchanged)', () => {
+    mergeAgentYaml(srcPath, dstPath)
+    const before = fs.statSync(dstPath).mtimeMs
+    const content = fs.readFileSync(dstPath, 'utf-8')
+    // Backdate mtime so a rewrite is detectable even on coarse-mtime filesystems.
+    const past = new Date(Date.now() - 60_000)
+    fs.utimesSync(dstPath, past, past)
+    mergeAgentYaml(srcPath, dstPath)
+    expect(fs.statSync(dstPath).mtimeMs).toBeLessThan(before)
+    expect(fs.readFileSync(dstPath, 'utf-8')).toBe(content)
+  })
+
+  it('leaves no .tmp residue after writing', () => {
+    mergeAgentYaml(srcPath, dstPath)              // first install (copyTemplate)
+    fs.writeFileSync(dstPath, 'name: Default\nsystem_prompt: old\n', 'utf-8')
+    mergeAgentYaml(srcPath, dstPath)              // real merge write
+    expect(fs.existsSync(`${dstPath}.tmp`)).toBe(false)
+    expect(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('writeFileAtomic', () => {
+  it('writes content via tmp+rename with no residue', () => {
+    const target = path.join(tmpDir, 'atomic.yaml')
+    writeFileAtomic(target, 'hello: world\n')
+    expect(fs.readFileSync(target, 'utf-8')).toBe('hello: world\n')
+    expect(fs.existsSync(`${target}.tmp`)).toBe(false)
+  })
+
+  it('overwrites an existing file', () => {
+    const target = path.join(tmpDir, 'atomic.yaml')
+    writeFileAtomic(target, 'v1\n')
+    writeFileAtomic(target, 'v2\n')
+    expect(fs.readFileSync(target, 'utf-8')).toBe('v2\n')
+    expect(fs.existsSync(`${target}.tmp`)).toBe(false)
   })
 })
