@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-08-19
+
+### Added
+
+- Explorer file tree: VSCode-style keyboard navigation — Up/Down move selection, Right expands / steps in, Left collapses / jumps to parent, Enter opens (folders toggle), Home/End jump, Shift+Up/Down range-select, F2 inline rename.
+- Editor: files over the 10MB read limit now show a friendly placeholder with the file size and a download action instead of a modal alert.
+
+### Fixed
+
+- Server: built-in agent.yaml files are now written atomically (tmp + rename) during template reseed — closes the read/write race that intermittently produced "Agent \"default\" is missing model config" on desktop relaunch; unreadable/torn agent.yaml now warns with the resolved path instead of failing silently.
+- CLI: `halo upgrade` now smoke-tests the new install's native modules (better-sqlite3, node-pty) — npm 12's allowScripts policy can block install scripts while still exiting 0, leaving a broken binding that only crashed on next start; the upgrade passes `--allow-scripts` and fails loudly with fix commands instead.
+- Admin: jumping workspaces via the Explorer path input no longer fires the browser's leave-site prompt.
+
 ## [1.1.1] - 2026-08-09
 
 ### Added
@@ -369,7 +382,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/turmind/halo-agent/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/turmind/halo-agent/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/turmind/halo-agent/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/turmind/halo-agent/compare/v1.0.2...v1.0.3
