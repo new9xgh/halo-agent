@@ -27,6 +27,11 @@ export interface PreviewProps {
   downloadUrl: string
   /** When set, the plugin should pass this through to `<PreviewShell onOpenAsText>` */
   onOpenAsText?: () => void
+  /** File too large for the editor (server caps reads at 10MB). FilePreview
+   *  short-circuits to a placeholder instead of dispatching to a plugin. */
+  tooLarge?: boolean
+  /** On-disk size in bytes (from stat) — shown by the too-large placeholder. */
+  size?: number
 }
 
 export interface PreviewPlugin {

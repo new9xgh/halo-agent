@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath } from '@/shared/stores/editor-store'
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
-import { FileTree, setPathExpanded, type FileContextInfo } from '@/features/explorer/file-tree'
+import { FileTree, setPathExpanded, isPathExpanded, collectVisiblePaths, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
 import { CodeEditor } from './code-editor'
 import { MarkdownPreview } from './markdown-preview'
@@ -16,7 +16,7 @@ import { api } from '@/shared/api-client'
 import { wsClient } from '@/shared/ws-client'
 import { onWsReconnect } from '@/shared/ws-reconnect'
 import { useProjectStore } from '@/shared/stores/project-store'
-import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
+import { getLanguageFromPath, cn, confirmAction, formatFileSize } from '@/shared/utils'
 import {
   Code2,
   X,
@@ -40,12 +40,6 @@ function isPathDir(tree: import('@turmind/halo-core').FileTreeNode | null, relPa
     if (!cur) return false
   }
   return cur.type === 'directory'
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function formatDate(ms: number): string {
@@ -116,6 +110,11 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     originalName?: string
   } | null>(null)
   const [uploadProgress, setUploadProgress] = useState<{ count: number; progress: number } | null>(null)
+  // Scroll container around this instance's <FileTree> — scopes the keyboard
+  // handler (multiple EditorPanels can be mounted — main Explorer, Skills,
+  // Agents — a global DOM marker can't tell them apart) and is the query
+  // root for scroll-into-view.
+  const treeContainerRef = useRef<HTMLDivElement>(null)
 
   const { tree, loading } = useFileTree(projectId)
   const [tabsRestored, setTabsRestored] = useState(false)
@@ -414,8 +413,19 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
         console.error('[EditorPanel] Failed to read file:', err)
         const msg = err instanceof Error ? err.message : String(err)
         if (msg.includes('413') || msg.includes('too large')) {
-          const name = path.split('/').pop() ?? path
-          alert(`"${name}" is too large to open in the editor (max 10MB).`)
+          // VSCode-style: open a placeholder preview tab instead of an alert.
+          // stat still works (only content reads are capped at 10MB).
+          let meta: { size?: number; mtime?: number; createdAt?: number } | undefined
+          try {
+            const stat = await api.files.stat(path, projectId)
+            meta = { size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt }
+          } catch {}
+          useEditorStore.getState().openPreview(
+            path,
+            api.files.downloadUrl(path, projectId),
+            api.files.viewUrl(path, projectId),
+            { ...meta, tooLarge: true },
+          )
         }
       }
     },
@@ -746,28 +756,138 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     [projectId, pendingEdit, useEditorStore],
   )
 
-  // Enter on a single selected entry → start rename. We only want this to
-  // fire when the keyboard focus is *inside the file tree* — Monaco, chat
-  // input, dialogs etc. all want Enter for their own purposes. Detect by
-  // walking up from the event target looking for `data-file-tree-root` on
-  // the file-tree's wrapping div. (Simply checking INPUT/TEXTAREA isn't
-  // enough — Monaco renders a focusable div with no input element when the
-  // user is just navigating with arrow keys.)
+  // ── File-tree keyboard navigation (VSCode-style) ────────────────────
+  // Window-level listener gated to *this instance's* tree container via ref
+  // (scoped panels like the Skills editor render their own tree and must not
+  // cross-fire). We only fire when keyboard focus is inside the tree —
+  // Monaco, chat input, dialogs
+  // all want these keys for their own purposes. The inline-edit input stops
+  // propagation on every key, so an open create/rename row never reaches
+  // this handler (pendingEdit guard as belt-and-braces).
+  //
+  //   ArrowDown/Up        move selection through the flat visible list
+  //   Shift+ArrowDown/Up  extend range selection from the anchor
+  //   ArrowRight          collapsed dir: expand; expanded dir: first child
+  //   ArrowLeft           expanded dir: collapse; else: jump to parent
+  //   Enter               file: open (immediate); dir: toggle expand
+  //   Home / End          first / last visible node
+  //   F2                  rename (single selection; Enter is taken by "open")
   useEffect(() => {
+    function revealNode(path: string) {
+      const btn = treeContainerRef.current?.querySelector<HTMLButtonElement>(
+        `button[data-path="${CSS.escape(path)}"]`,
+      )
+      if (!btn) return
+      btn.focus({ preventScroll: true })
+      btn.scrollIntoView({ block: 'nearest' })
+    }
+
     function onKey(e: KeyboardEvent) {
-      if (e.key !== 'Enter') return
       if (pendingEdit) return
-      if (selectedPaths.size !== 1) return
+      const rootEl = treeContainerRef.current
+      if (!rootEl || !tree) return
       const target = e.target as HTMLElement | null
-      if (!target?.closest?.('[data-file-tree-root]')) return
-      const path = selectedPaths.values().next().value as string
-      const originalName = path.split('/').pop() ?? ''
-      const renameParent = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : ''
-      setPendingEdit({ mode: 'rename', parentDir: renameParent, originalPath: path, originalName })
+      if (!target || !rootEl.contains(target)) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+
+      const visible = collectVisiblePaths(tree)
+      if (visible.length === 0) return
+
+      // Current keyboard position ("focus" in VSCode terms) = the selection
+      // boundary farthest from the anchor. Reproduces the anchor/focus pair
+      // for ranges built by shift-click / shift+arrow without tracking a
+      // separate focus state.
+      const selIdxs = [...selectedPaths]
+        .map((p) => visible.indexOf(p))
+        .filter((i) => i >= 0)
+      const lo = selIdxs.length ? Math.min(...selIdxs) : -1
+      const hi = selIdxs.length ? Math.max(...selIdxs) : -1
+      const rawAnchorIdx = lastAnchor ? visible.indexOf(lastAnchor) : -1
+      const focusIdx = selIdxs.length === 0 ? -1 : rawAnchorIdx >= 0 && lo < rawAnchorIdx ? lo : hi
+      const anchorIdx = rawAnchorIdx >= 0 ? rawAnchorIdx : focusIdx
+
+      const selectSingle = (idx: number) => {
+        const p = visible[idx]
+        handleSelectionChange(new Set([p]), p)
+        revealNode(p)
+      }
+
+      switch (e.key) {
+        case 'ArrowDown':
+        case 'ArrowUp': {
+          e.preventDefault()
+          const delta = e.key === 'ArrowDown' ? 1 : -1
+          if (e.shiftKey && anchorIdx >= 0 && focusIdx >= 0) {
+            const nf = Math.max(0, Math.min(visible.length - 1, focusIdx + delta))
+            const start = Math.min(anchorIdx, nf)
+            const end = Math.max(anchorIdx, nf)
+            handleSelectionChange(new Set(visible.slice(start, end + 1)), visible[anchorIdx])
+            revealNode(visible[nf])
+            return
+          }
+          // No selection yet: ArrowDown enters the list at the top, ArrowUp at the bottom.
+          if (focusIdx < 0) {
+            selectSingle(delta === 1 ? 0 : visible.length - 1)
+            return
+          }
+          selectSingle(Math.max(0, Math.min(visible.length - 1, focusIdx + delta)))
+          return
+        }
+        case 'ArrowRight': {
+          if (e.shiftKey || focusIdx < 0) return
+          e.preventDefault()
+          const p = visible[focusIdx]
+          if (!isPathDir(tree, p)) return
+          if (!isPathExpanded(p)) {
+            setPathExpanded(p, true)
+            return
+          }
+          const next = visible[focusIdx + 1]
+          if (next && next.startsWith(`${p}/`)) selectSingle(focusIdx + 1)
+          return
+        }
+        case 'ArrowLeft': {
+          if (e.shiftKey || focusIdx < 0) return
+          e.preventDefault()
+          const p = visible[focusIdx]
+          if (isPathDir(tree, p) && isPathExpanded(p)) {
+            setPathExpanded(p, false)
+            return
+          }
+          if (!p.includes('/')) return
+          const parentIdx = visible.indexOf(p.slice(0, p.lastIndexOf('/')))
+          if (parentIdx >= 0) selectSingle(parentIdx)
+          return
+        }
+        case 'Enter': {
+          if (e.shiftKey || focusIdx < 0) return
+          e.preventDefault()
+          const p = visible[focusIdx]
+          if (isPathDir(tree, p)) setPathExpanded(p, !isPathExpanded(p))
+          else handleFileSelect(p) // keyboard open is immediate — no double-click delay
+          return
+        }
+        case 'Home':
+        case 'End': {
+          if (e.shiftKey) return
+          e.preventDefault()
+          selectSingle(e.key === 'Home' ? 0 : visible.length - 1)
+          return
+        }
+        case 'F2': {
+          if (selectedPaths.size !== 1) return
+          e.preventDefault()
+          const path = selectedPaths.values().next().value as string
+          const originalName = path.split('/').pop() ?? ''
+          const renameParent = path.includes('/') ? path.substring(0, path.lastIndexOf('/')) : ''
+          setPendingEdit({ mode: 'rename', parentDir: renameParent, originalPath: path, originalName })
+          return
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedPaths, pendingEdit])
+  }, [tree, selectedPaths, lastAnchor, pendingEdit, handleFileSelect, handleSelectionChange])
 
   const uploadBar = uploadProgress && (
     <div className="shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-3 py-1.5">
@@ -803,7 +923,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             </button>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto">
+        <div ref={treeContainerRef} tabIndex={0} className="flex-1 overflow-y-auto outline-none">
           {loading ? (
             <div className="p-3 text-xs text-[var(--muted-foreground)]">Loading...</div>
           ) : tree ? (
@@ -882,7 +1002,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           <Panel defaultSize={20} minSize={10} maxSize={40}>
             <div className="flex h-full flex-col bg-[var(--card)]">
               {uploadBar}
-              <div className="flex-1 overflow-y-auto">
+              <div ref={treeContainerRef} tabIndex={0} className="flex-1 overflow-y-auto outline-none">
               {!projectId ? (
                 <div className="p-3 text-xs text-[var(--muted-foreground)]">
                   Open a folder to view files
@@ -956,6 +1076,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                               projectId={projectId ?? undefined}
                               downloadUrl={t.preview!.downloadUrl}
                               viewUrl={t.preview!.viewUrl}
+                              tooLarge={t.preview!.tooLarge}
+                              size={t.size}
                               onOpenAsText={() => handleOpenAsText(t.path)}
                             />
                           </div>
@@ -968,6 +1090,8 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
                             projectId={projectId ?? undefined}
                             downloadUrl={paneFile.preview.downloadUrl}
                             viewUrl={paneFile.preview.viewUrl}
+                            tooLarge={paneFile.preview.tooLarge}
+                            size={paneFile.size}
                             onOpenAsText={() => handleOpenAsText(paneFile.path)}
                           />
                         </div>

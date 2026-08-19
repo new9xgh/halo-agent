@@ -78,6 +78,13 @@ export function formatRelativeTime(
   return new Date(ms).toLocaleDateString()
 }
 
+/** Human-readable byte size — B / KB / MB with one decimal. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export function getLanguageFromPath(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   const map: Record<string, string> = {

@@ -41,7 +41,7 @@ export interface EditorBuffer {
   mtime?: number
   createdAt?: number
   size?: number
-  preview?: { downloadUrl: string; viewUrl: string }
+  preview?: { downloadUrl: string; viewUrl: string; tooLarge?: boolean }
 }
 
 /** Legacy alias kept for selectors that read `s.tabs`. Same shape as
@@ -115,7 +115,7 @@ interface EditorStore {
 
   // ── File ops (default to active group) ────────────────────────────
   openFile(path: string, content: string, language: string, mtime?: number, meta?: { size?: number; createdAt?: number }): void
-  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number }): void
+  openPreview(path: string, downloadUrl: string, viewUrl: string, meta?: { size?: number; mtime?: number; createdAt?: number; tooLarge?: boolean }): void
   /** Close `path` in every group it appears in, then drop the buffer if no
    *  group still references it. Used by destructive flows (rename, delete)
    *  where the path is gone from disk and shouldn't linger anywhere. */
@@ -258,7 +258,7 @@ export function createEditorStore() {
         set((state) => {
           const buffers = state.buffers[path]
             ? state.buffers
-            : { ...state.buffers, [path]: { path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt } }
+            : { ...state.buffers, [path]: { path, content: '', originalContent: '', language: '', preview: { downloadUrl, viewUrl, tooLarge: meta?.tooLarge }, size: meta?.size, mtime: meta?.mtime, createdAt: meta?.createdAt } }
           const idx = state.activeGroupIdx
           const cur = state.groups[idx]
           const tabs = cur.tabs.includes(path) ? cur.tabs : [...cur.tabs, path]

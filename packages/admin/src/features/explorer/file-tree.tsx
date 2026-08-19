@@ -73,7 +73,7 @@ function subscribePathExpanded(path: string, fn: (expanded: boolean) => void): (
   }
 }
 
-function isPathExpanded(path: string): boolean {
+export function isPathExpanded(path: string): boolean {
   return getExpandedPaths().has(path)
 }
 
@@ -177,8 +177,8 @@ function EditInputRow({
             committedRef.current = true
             onCancel()
           }
-          // Stop propagation so the global Enter-to-rename handler doesn't
-          // re-fire on the same key.
+          // Stop propagation so the tree keyboard handler (arrows / Enter /
+          // F2 in editor-panel) doesn't act on keys typed into the input.
           e.stopPropagation()
         }}
         onBlur={() => {
@@ -246,8 +246,9 @@ async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> 
   return Array.from(dataTransfer.files)
 }
 
-/** Collect visible (expanded) paths in tree order */
-function collectVisiblePaths(node: FileTreeNode): string[] {
+/** Collect visible (expanded) paths in tree order. Exported so the host's
+ *  keyboard navigation walks the exact same flat order the tree renders. */
+export function collectVisiblePaths(node: FileTreeNode): string[] {
   const result: string[] = []
   if (node.path) result.push(node.path)
   if (node.type === 'directory' && node.children && (node.path ? isPathExpanded(node.path) : true)) {
@@ -358,7 +359,6 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
 
     return (
       <div
-        data-file-tree-root="true"
         onClick={handleRootClick}
         onContextMenu={handleRootContextMenu}
         onDragOver={handleRootDragOver}
@@ -591,6 +591,7 @@ export function FileTree({ node, projectId, onSelect, onContextMenu, onDropFiles
     <div>
       <button
         draggable
+        data-path={node.path}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onDragStart={handleDragStart}

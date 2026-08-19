@@ -13,12 +13,16 @@ import { File as FileIcon } from 'lucide-react'
 import './plugins' // side-effect: registers all built-in plugins
 import { getPlugin } from './registry'
 import type { PreviewProps } from './types'
+import { formatFileSize } from '@/shared/utils'
 
 function PreviewFallback() {
   return <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">Loading preview...</div>
 }
 
 export function FilePreview(props: PreviewProps) {
+  // Too-large placeholder wins over plugin dispatch: even for extensions with
+  // a plugin, the underlying reads are capped server-side at 10MB.
+  if (props.tooLarge) return <TooLargePreview {...props} />
   const ext = props.name.split('.').pop()?.toLowerCase() ?? ''
   const plugin = getPlugin(ext)
   if (!plugin) return <UnsupportedPreview {...props} />
@@ -27,6 +31,29 @@ export function FilePreview(props: PreviewProps) {
     <Suspense fallback={<PreviewFallback />}>
       <Component {...props} />
     </Suspense>
+  )
+}
+
+/** VSCode-style large-file placeholder — shown instead of a modal alert when
+ *  the server refuses to serve the content (413, >10MB). */
+function TooLargePreview({ name, size, downloadUrl }: PreviewProps) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--background)] p-8">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--secondary)]">
+        <FileIcon className="h-8 w-8 text-[var(--muted-foreground)]" />
+      </div>
+      <p className="text-sm font-medium text-[var(--foreground)]">{name}</p>
+      <p className="text-xs text-[var(--muted-foreground)]">
+        {size != null ? `${formatFileSize(size)} · ` : ''}File is too large to preview (max 10MB)
+      </p>
+      <a
+        href={downloadUrl}
+        download
+        className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90"
+      >
+        Download
+      </a>
+    </div>
   )
 }
 
