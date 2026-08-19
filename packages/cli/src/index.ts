@@ -703,6 +703,12 @@ async function cmdSetup(argv: string[] = []): Promise<void> {
  * isn't), don't auto-sudo — tell the user to retry with sudo. Auto-sudo would
  * have to handle TTY prompts, environment scrubbing, and works differently per
  * distro; "tell them" is one line and zero footguns.
+ *
+ * npm can also "succeed" while breaking the install: npm 12's allowScripts
+ * policy blocks better-sqlite3's install script (exit code stays 0), leaving
+ * no binding file and a crash on next start. Two defenses: pass
+ * --allow-scripts=… to the install (npm <12 ignores it), then smoke-test the
+ * native modules of the NEW install and fail loudly with fix commands.
  */
 async function cmdUpgrade(): Promise<void> {
   const PKG = '@turmind/halo'
@@ -740,10 +746,42 @@ async function cmdUpgrade(): Promise<void> {
   }
 
   // 4. Install the upgrade. Inherit stdio so npm's progress / errors flow
-  //    through to the user's terminal.
+  //    through to the user's terminal. --allow-scripts pre-approves
+  //    better-sqlite3's install script for npm 12+'s allowScripts policy
+  //    (which otherwise blocks it silently — exit 0, no binding); npm 10/11
+  //    ignore the unknown flag (verified), so it's passed unconditionally.
+  const { ALLOW_SCRIPTS, verifyNativeModules } = await import('./upgrade-verify.js')
   process.stderr.write(`Upgrading ${installed} → ${latest}…\n`)
-  const install = spawnSync('npm', ['install', '-g', `${PKG}@latest`], { stdio: 'inherit' })
+  const install = spawnSync(
+    'npm',
+    ['install', '-g', `--allow-scripts=${ALLOW_SCRIPTS}`, `${PKG}@latest`],
+    { stdio: 'inherit' },
+  )
   if (install.status === 0) {
+    // 4b. npm exit 0 is not proof the install works — smoke-test the new
+    //     install's native modules before declaring success. shell on win32:
+    //     npm is npm.cmd there, which spawnSync only resolves through cmd.exe.
+    const npmRoot = spawnSync('npm', ['root', '-g'], {
+      encoding: 'utf-8',
+      shell: process.platform === 'win32',
+    })
+    const rootDir = npmRoot.status === 0 ? npmRoot.stdout.trim() : ''
+    if (!rootDir) {
+      process.stderr.write(`halo: \`npm root -g\` failed — cannot verify the new install\n`)
+      process.exit(1)
+    }
+    const broken = verifyNativeModules(path.join(rootDir, PKG))
+    if (broken.length > 0) {
+      process.stderr.write(
+        `\nhalo: upgrade installed, but native module(s) failed to load: ${broken.join(', ')}\n` +
+          `This usually means npm blocked the module's install scripts (npm 12+ allowScripts policy — check \`npm -v\`).\n` +
+          `\nFix — reinstall with the scripts allowed:\n` +
+          `  sudo npm install -g --allow-scripts=${ALLOW_SCRIPTS} ${PKG}@latest\n` +
+          `Or persist the allowance first, then reinstall:\n` +
+          `  npm config set allow-scripts=${ALLOW_SCRIPTS} --location=user\n`,
+      )
+      process.exit(1)
+    }
     process.stderr.write(
       `\nUpgraded to ${latest}. Run \`halo server restart\` (or your service manager's restart) to pick up the new templates.\n`,
     )
