@@ -10,7 +10,12 @@
  *   GET  /ping         → {"status":"healthy"}          (health check)
  *   POST /invocations  → {"input":{"prompt"}} in, full assistant message out
  *   WS   /ws           → bidirectional streaming (the primary path):
- *     client → server: {"inputText":"..."} | {"type":"stop"}
+ *     client → server: {"inputText":"...", "imageRefs"?: ["<uploadId>", ...]}
+ *                       | {"inputText":"", "type":"image_chunk", ...}
+ *                       | {"type":"stop"}
+ *     (images arrive as chunked uploads — see the chunk-protocol block
+ *      below; every frame carries inputText because the AgentCore WS proxy
+ *      only forwards inputText frames)
  *     server → client: {"type":"history"|"stream"|"thinking"|"tool_call"
  *                        |"tool_result"|"queued"|"complete"|"error", ...}
  *     (`history` replays the session's persisted conversation right after
@@ -32,13 +37,19 @@ import type { AgentSessionEvent } from '../agents/agent-events.js'
 import { resolveDefaultAgentId, dispatchCommand, type CommandContext } from '../channels/shared/commands.js'
 import { createSaveSnapshot } from '../sessions/ui-log-builder.js'
 import { inferMessageType } from '../sessions/session-types.js'
+import { saveInboundMedia } from '../channels/shared/media-store.js'
 
 const SESSION_HEADER = 'x-amzn-bedrock-agentcore-runtime-session-id'
+
+/** Charset-sanitize a runtime session id for use in file / session names. */
+function sanitizeRuntimeId(runtimeSessionId: string): string {
+  return runtimeSessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)
+}
 
 /** Map an AgentCore runtime session id onto a halo session id. Sanitized to
  *  the charset halo uses in session file names; capped so filenames stay sane. */
 function haloSessionId(runtimeSessionId: string): string {
-  return `agentcore_${runtimeSessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80)}`
+  return `agentcore_${sanitizeRuntimeId(runtimeSessionId)}`
 }
 
 /** Per-user workspace: `<base>/users/<sanitized runtime session id>/`.
@@ -46,9 +57,96 @@ function haloSessionId(runtimeSessionId: string): string {
  *  `.halo/` (sqlite db + session files) lives inside, so user data is fully
  *  isolated and persists on the EFS mount backing the base path. */
 function userWorkspace(base: string, runtimeSessionId: string): string {
-  const dir = path.join(base, 'users', runtimeSessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80))
+  const dir = path.join(base, 'users', sanitizeRuntimeId(runtimeSessionId))
   fs.mkdirSync(dir, { recursive: true })
   return dir
+}
+
+/** Chunked image upload protocol.
+ *
+ *  The AgentCore WS proxy hard-caps a frame at 64KB — an oversized frame gets
+ *  the connection cut with close 1009 "Policy violated: message size limit of
+ *  64 KB for a message frame is exceeded" (verified against the Tokyo prod
+ *  runtime), so images cannot ride inline in the message frame. Instead the
+ *  client slices each image's base64 into ≤48KB chunk frames:
+ *
+ *    {"inputText":"", "type":"image_chunk", "uploadId":"u1",
+ *     "seq":0, "total":8, "mimeType":"image/jpeg", "data":"<base64 slice>"}
+ *
+ *  (inputText rides along empty because the proxy only forwards frames that
+ *  carry it), then references the assembled upload(s) from the message frame:
+ *
+ *    {"inputText":"...", "imageRefs":["u1"]}
+ *
+ *  Chunk assembly is per-connection, in-memory only — a dropped connection
+ *  discards partial uploads and the client re-sends (no persistence by
+ *  design). The socket is an external input boundary, hence the limits. */
+const MAX_IMAGES_PER_MESSAGE = 4
+const MAX_IMAGE_BASE64_LENGTH = 8 * 1024 * 1024 // 8MB of base64 ≈ 6MB binary
+const MAX_PENDING_UPLOADS = 4 // concurrent uploads buffered per connection
+const MAX_CHUNKS_PER_UPLOAD = 256 // 256 × 48KB ≈ 12MB ceiling before the 8MB check trips
+
+type InboundImage = { data: string; mimeType: string }
+
+interface PendingUpload {
+  chunks: Array<string | undefined>
+  received: number
+  mimeType: string
+  /** Total base64 length so far — checked against MAX_IMAGE_BASE64_LENGTH
+   *  while chunks arrive, so an attacker can't buffer 256×48KB × 4 uploads. */
+  size: number
+}
+
+/** Handle one `image_chunk` frame. Returns an error string for the client,
+ *  or null when the chunk was accepted (no reply — replying per chunk would
+ *  add N round-trips and the proxy forwards our frames fine mid-stream). */
+function acceptChunk(uploads: Map<string, PendingUpload>, msg: Record<string, unknown>): string | null {
+  const uploadId = msg.uploadId
+  const seq = msg.seq
+  const total = msg.total
+  const mimeType = msg.mimeType
+  const data = msg.data
+  if (typeof uploadId !== 'string' || !uploadId || uploadId.length > 64) return 'image_chunk: uploadId must be a non-empty string (≤64 chars)'
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return 'image_chunk: seq must be a non-negative integer'
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 1 || total > MAX_CHUNKS_PER_UPLOAD) return `image_chunk: total must be 1..${MAX_CHUNKS_PER_UPLOAD}`
+  if (typeof mimeType !== 'string' || typeof data !== 'string' || !data) return 'image_chunk: string mimeType and non-empty string data required'
+  if (seq >= total) return 'image_chunk: seq out of range'
+
+  let up = uploads.get(uploadId)
+  if (!up) {
+    if (uploads.size >= MAX_PENDING_UPLOADS) return `too many pending uploads (max ${MAX_PENDING_UPLOADS} per connection)`
+    up = { chunks: new Array<string | undefined>(total), received: 0, mimeType, size: 0 }
+    uploads.set(uploadId, up)
+  }
+  if (up.chunks.length !== total) return 'image_chunk: total mismatch across chunks of one uploadId'
+  if (up.chunks[seq] !== undefined) return null // duplicate chunk (client retry) — ignore
+  if (up.size + data.length > MAX_IMAGE_BASE64_LENGTH) {
+    uploads.delete(uploadId) // poisoned — drop the whole upload
+    return 'image too large (max 8MB base64 per image)'
+  }
+  up.chunks[seq] = data
+  up.received++
+  up.size += data.length
+  return null
+}
+
+/** Resolve a message frame's `imageRefs` against completed uploads. Claims
+ *  (removes) the uploads on success; on any error nothing is consumed so the
+ *  client can fix and re-reference. */
+function claimImageRefs(uploads: Map<string, PendingUpload>, raw: unknown): InboundImage[] | { error: string } {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return { error: 'imageRefs must be an array' }
+  if (raw.length > MAX_IMAGES_PER_MESSAGE) return { error: `too many images (max ${MAX_IMAGES_PER_MESSAGE} per message)` }
+  const images: InboundImage[] = []
+  for (const ref of raw) {
+    if (typeof ref !== 'string') return { error: 'imageRefs entries must be strings' }
+    const up = uploads.get(ref)
+    if (!up) return { error: `unknown uploadId: ${ref}` }
+    if (up.received !== up.chunks.length) return { error: `upload ${ref} incomplete (${up.received}/${up.chunks.length} chunks)` }
+    images.push({ data: up.chunks.join(''), mimeType: up.mimeType })
+  }
+  for (const ref of raw as string[]) uploads.delete(ref)
+  return images
 }
 
 /** Create the halo session on first contact; no-op when it already exists.
@@ -231,10 +329,14 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
     // History replay is triggered by the client sending a {"type":"init"}
     // message after open (see ws.on('message') handler below).
 
+    // Per-connection chunked-image buffer (uploadId → partial upload). Freed
+    // on close; never persisted — see the chunk-protocol comment up top.
+    const uploads = new Map<string, PendingUpload>()
+
     ws.on('message', (raw) => {
-      let msg: { inputText?: string; type?: string }
+      let msg: Record<string, unknown>
       try {
-        msg = JSON.parse(String(raw)) as { inputText?: string; type?: string }
+        msg = JSON.parse(String(raw)) as Record<string, unknown>
       } catch {
         send({ type: 'error', error: 'invalid JSON' })
         return
@@ -261,10 +363,23 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
         return
       }
 
+      if (msg.type === 'image_chunk') {
+        const err = acceptChunk(uploads, msg)
+        if (err) send({ type: 'error', error: err })
+        return
+      }
+
       const text = typeof msg.inputText === 'string' ? msg.inputText.trim() : ''
-      if (!text) {
-        // Silently ignore frames without inputText — AgentCore proxy may send
-        // internal frames (heartbeats, metadata) that have no user content.
+      const claimed = claimImageRefs(uploads, msg.imageRefs)
+      if (!Array.isArray(claimed)) {
+        send({ type: 'error', error: claimed.error })
+        return
+      }
+      const images = claimed
+      if (!text && images.length === 0) {
+        // Silently ignore frames without inputText/imageRefs — AgentCore proxy
+        // may send internal frames (heartbeats, metadata) with no user content,
+        // and the demo frontend's 30s keepalive ping lands here too.
         return
       }
 
@@ -328,8 +443,25 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
       void (async () => {
         try {
           await ensureOnce()
-          sm.appendUserMessage(sessionId, text)
-          const result = await sm.sendUserMessage(sessionId, `[channel: agentcore]\n\n${text}`)
+          // Persist inbound images into the user's workspace (same pattern as
+          // telegram) so the agent can re-open them later via file tools; the
+          // note marker also makes the image visible in history replay.
+          const notes: string[] = []
+          for (const img of images) {
+            try {
+              const savedPath = await saveInboundMedia({
+                workspacePath: userWs, accountId: sanitizeRuntimeId(runtimeSessionId), channel: 'agentcore',
+                buffer: Buffer.from(img.data, 'base64'), kind: 'image', mimeType: img.mimeType,
+              })
+              notes.push(`[图片已保存: ${savedPath}]`)
+            } catch (err) {
+              console.log(`[AgentCore] image save failed: ${err instanceof Error ? err.message : String(err)}`)
+              notes.push('[图片]')
+            }
+          }
+          const fullText = notes.length > 0 ? (text ? `${text}\n${notes.join('\n')}` : notes.join('\n')) : text
+          sm.appendUserMessage(sessionId, fullText)
+          const result = await sm.sendUserMessage(sessionId, `[channel: agentcore]\n\n${fullText}`, images.length > 0 ? images : undefined)
           if (result === 'queued') send({ type: 'queued' })
         } catch (err) {
           send({ type: 'error', error: err instanceof Error ? err.message : String(err) })
@@ -340,6 +472,9 @@ export function setupAgentCoreWebSocket(deps: { wss: WebSocketServer; registry: 
     ws.on('close', () => {
       unsubscribe?.()
       unsubscribe = null
+      // Chunk buffers are connection-scoped — free them so abandoned uploads
+      // (client crashed mid-upload) can't accumulate across reconnects.
+      uploads.clear()
       // The override only matters while this socket is open (it's the "current
       // session" for its slash commands), and a reconnect re-resolves from the
       // session id — so drop it here rather than letting the map grow one entry

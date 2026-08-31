@@ -76,6 +76,41 @@ whole lifetime (audit B-L3). Every command is `accessLevel: 'full'` by design:
 auth terminated upstream at AgentCore, so whoever reached this socket already
 owns the isolated per-user workspace behind it.
 
+## WS image upload protocol (chunking)
+
+The AgentCore WS proxy hard-caps a single frame at **64KB** — send more and
+the connection is cut with close code 1009 ("Policy violated: message size
+limit of 64 KB for a message frame is exceeded", verified against the Tokyo
+prod runtime). An inline base64 image blows past that instantly, so images
+ride as chunked `image_chunk` frames, assembled server-side, then referenced
+by id from the actual message frame:
+
+```jsonc
+// 1..N chunk frames per image (inputText empty string is required — the
+// proxy only forwards client frames that carry an inputText key at all)
+{"inputText":"", "type":"image_chunk", "uploadId":"u1", "seq":0, "total":8,
+ "mimeType":"image/jpeg", "data":"<base64 slice, ≤48KB>"}
+
+// message frame referencing the finished upload(s)
+{"inputText":"describe this", "imageRefs":["u1"]}
+```
+
+Limits (all enforced in `acceptChunk` / `claimImageRefs`): ≤4 images per
+message, ≤8MB of base64 per image, ≤4 concurrent pending uploads per
+connection, ≤256 chunks per upload. Assembly state (`Map<uploadId,
+PendingUpload>`) is **per-connection, in-memory only** — a dropped socket
+discards any partial uploads and the client just re-sends; there is no
+cross-reconnect persistence by design. The server doesn't ack individual
+chunks (that'd add N round-trips for no benefit since the proxy forwards
+mid-stream frames fine) — it only replies with an `error` frame when a chunk
+or `imageRefs` fails validation.
+
+On a completed reference, the image is decoded and persisted via
+`saveInboundMedia` into the user's workspace — the same storage path
+telegram uses — and the message text gets a `[图片已保存: <path>]` marker
+appended so history replay can show the image was there without re-sending
+the bytes.
+
 ## Session lifecycle (the part everyone gets wrong)
 
 - Idle timeout (`idleRuntimeSessionTimeout`) terminates a session whose
