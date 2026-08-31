@@ -467,25 +467,25 @@ export function ChatPanel() {
             onCompact={() => handleCommand({ name: '/session', description: '', type: 'server' }, 'compact')}
             renderLeftControls={() => (
               <div className="relative flex items-center gap-0.5">
-                {(sessions.length > 0 || mainMessages.length > 0) && (
-                  <>
-                    <button
-                      onClick={() => setSidebar(!sidebarOpen)}
-                      title={sidebarOpen ? 'Hide session list' : 'Show session list'}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
-                    >
-                      <History className="h-4 w-4" />
-                      <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[var(--muted-foreground)] px-0.5 text-[8px] font-medium text-[var(--background)]">{sessions.length}</span>
-                    </button>
-                    <button
-                      onClick={handleNew}
-                      title="New session"
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
-                    >
-                      <Plus className="h-4 w-4" />
-                    </button>
-                  </>
-                )}
+                {/* Always rendered: this toggle is the only way to reopen the
+                    sidebar, and its open/closed state persists in localStorage.
+                    Gating it on a non-empty list locked users out when the
+                    sidebar was closed and the workspace had no sessions yet. */}
+                <button
+                  onClick={() => setSidebar(!sidebarOpen)}
+                  title={sidebarOpen ? 'Hide session list' : 'Show session list'}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
+                >
+                  <History className="h-4 w-4" />
+                  <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[var(--muted-foreground)] px-0.5 text-[8px] font-medium text-[var(--background)]">{sessions.length}</span>
+                </button>
+                <button
+                  onClick={handleNew}
+                  title="New session"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
                 <AgentSelector />
               </div>
             )}
