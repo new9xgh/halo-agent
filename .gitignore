@@ -6,6 +6,9 @@ dist/
 out/
 .next/
 *.tsbuildinfo
+# Python bytecode — templates/skills ship .py helpers; running them (or
+# py_compile in CI/review) regenerates this next to the source.
+__pycache__/
 
 # Monaco staged into public/ by copy-monaco.mjs --dev (next dev serves it at /monaco/vs)
 packages/admin/public/monaco/

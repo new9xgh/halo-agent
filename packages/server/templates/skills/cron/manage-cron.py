@@ -106,6 +106,20 @@ def parse_targets(raw: str) -> list[dict]:
     return out
 
 
+def parse_timeout_sec(raw: str | None) -> int | None:
+    """Validate --timeout-sec: integer seconds, 60–21600 (same bounds as the
+    admin REST routes). None = leave unset (runner default 3600)."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        v = int(raw.strip())
+    except ValueError:
+        die(f'invalid --timeout-sec "{raw}": expected an integer (seconds)')
+    if v < 60 or v > 21600:
+        die('--timeout-sec must be between 60 and 21600')
+    return v
+
+
 def parse_run_at(raw: str | None) -> int | None:
     """Accepts ISO-8601 (`2026-05-24T09:00:00`) or a unix-ms integer; returns
     epoch ms or None. Local time without offset is parsed as host TZ —
@@ -190,6 +204,7 @@ def cmd_create(args):
         die('--schedule and --run-at are mutually exclusive')
     if run_at_ms is not None and run_at_ms <= now_ms():
         die('--run-at must be in the future')
+    timeout_sec = parse_timeout_sec(args.timeout_sec)
 
     job_id = args.id or gen_job_id()
     now = now_ms()
@@ -202,8 +217,8 @@ def cmd_create(args):
 
     conn.execute(
         'INSERT INTO cron_jobs(id, label, workspace_path, agent_id, user_prompt, schedule, '
-        'run_at, timezone, targets, enabled, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'run_at, timezone, timeout_sec, targets, enabled, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             job_id,
             args.label,
@@ -213,6 +228,7 @@ def cmd_create(args):
             args.schedule or '',
             run_at_ms,
             args.timezone,
+            timeout_sec,
             json.dumps(targets, ensure_ascii=False),
             0 if args.disabled else 1,
             now, now,
@@ -240,10 +256,14 @@ def cmd_update(args):
             die('--run-at must be in the future')
         sets.append(('run_at', run_at_ms))
     if args.timezone is not None: sets.append(('timezone', args.timezone))
+    if args.timeout_sec is not None:
+        # `--timeout-sec ""` clears back to the runner default (NULL),
+        # same convention as `--run-at ""`.
+        sets.append(('timeout_sec', parse_timeout_sec(args.timeout_sec)))
     if args.targets is not None:
         sets.append(('targets', json.dumps(parse_targets(args.targets), ensure_ascii=False)))
     if not sets:
-        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--targets')
+        die('nothing to update — pass at least one --label/--workspace/--agent/--prompt/--schedule/--run-at/--timezone/--timeout-sec/--targets')
     sets.append(('updated_at', now_ms()))
 
     placeholders = ', '.join(f'{k} = ?' for k, _ in sets)
@@ -388,6 +408,8 @@ def main():
     c.add_argument('--run-at', dest='run_at',
                    help='one-shot fire time, ISO-8601 (e.g. 2026-05-24T09:00) or unix ms — auto-disables after fire')
     c.add_argument('--timezone', help='IANA tz, e.g. Asia/Shanghai')
+    c.add_argument('--timeout-sec', dest='timeout_sec',
+                   help='max run time in seconds, 60–21600 (default: unset = 3600)')
     c.add_argument('--targets',
                    help='comma-separated channelType:accountId[:chatId] list, or JSON array. '
                         'chatId pins delivery to a specific chat (e.g. when scheduling from inside a chat).')
@@ -403,6 +425,8 @@ def main():
     u.add_argument('--schedule')
     u.add_argument('--run-at', dest='run_at')
     u.add_argument('--timezone')
+    u.add_argument('--timeout-sec', dest='timeout_sec',
+                   help='max run time in seconds, 60–21600; pass "" to clear back to default 3600')
     u.add_argument('--targets')
     u.set_defaults(func=cmd_update)
 

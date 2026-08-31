@@ -53,6 +53,7 @@ Sensible defaults if user didn't say:
 | timezone   | leave unset (host time)                                       |
 | targets    | none (log only — the run shows in admin Cron tab)             |
 | label      | summarize from prompt + schedule                              |
+| timeout    | leave unset (3600s) — see `--timeout-sec` below               |
 
 ### 2. Translate the schedule
 
@@ -77,6 +78,13 @@ today" or "send the report next Monday morning".
 | in 2 hours                        | `--run-at <iso-of-now+2h>`                |
 
 Ambiguous time ("morning")? Ask once for the exact hour.
+
+**Max run time (`--timeout-sec`, optional)** — each fire runs as a cli child
+that the server kills after `timeout_sec` seconds (integer, 60–21600). Unset
+= default 3600. Only set it when the user says so: a quick push job that
+should fail fast ("kill it after 5 minutes" → `--timeout-sec 300`), or a
+heavy analysis run that needs more than an hour (`--timeout-sec 7200`). On
+`update`, pass `--timeout-sec ""` to clear back to the default.
 
 ### 3. Channels (only when delivery is wanted)
 

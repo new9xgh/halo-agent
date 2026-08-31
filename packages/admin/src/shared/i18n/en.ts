@@ -423,6 +423,8 @@ export const en: Record<string, string> = {
   'cron.field.schedule': 'Schedule:',
   'cron.field.runAt': 'Run at:',
   'cron.field.agent': 'Agent:',
+  'cron.field.timeoutSec': 'Timeout:',
+  'cron.field.timeoutSecDefault': '3600s (default)',
   'cron.field.workspace': 'Workspace:',
   'cron.field.targets': 'Targets:',
   'cron.field.targetsLogOnly': '— (log only)',
@@ -455,6 +457,9 @@ export const en: Record<string, string> = {
   'cron.form.runAt.hint': 'Job fires once at this instant (interpreted in the chosen timezone), then auto-disables.',
   'cron.form.timezone': 'Timezone',
   'cron.form.timezone.hostDefault': 'Default — host TZ ({tz})',
+  'cron.form.timeoutSec': 'Max run time (seconds)',
+  'cron.form.timeoutSec.placeholder': '3600 (default)',
+  'cron.form.timeoutSec.hint': 'Kill the run if it exceeds this. Empty = default 3600s. Range 60–21600.',
   'cron.form.userPrompt': 'User prompt *',
   'cron.form.userPrompt.placeholder': "Generate today's status digest from .halo/memory/",
   'cron.form.targets': 'Channel targets (where to deliver the output)',
@@ -470,6 +475,7 @@ export const en: Record<string, string> = {
   'cron.form.err.runAt': 'Fire time required',
   'cron.form.err.runAtPast': 'Fire time must be in the future',
   'cron.form.err.prompt': 'Prompt required',
+  'cron.form.err.timeoutSec': 'Max run time must be an integer between 60 and 21600 seconds',
 
   // ── Evolution ──
   'evolution.title': 'Evolution',

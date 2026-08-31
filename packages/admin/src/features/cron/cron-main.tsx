@@ -212,6 +212,7 @@ function CronDetail({ job, onEdit, onDelete, onRunNow }: {
             ? <div><span className="text-[var(--foreground)]">{t('cron.field.runAt')}</span> <span className="font-mono">{new Date(job.runAt).toLocaleString()}{job.timezone ? ` (${job.timezone})` : ''}</span></div>
             : <div><span className="text-[var(--foreground)]">{t('cron.field.schedule')}</span> <span className="font-mono">{job.schedule}{job.timezone ? ` (${job.timezone})` : ''}</span></div>}
           <div><span className="text-[var(--foreground)]">{t('cron.field.agent')}</span> {job.agentId}</div>
+          <div><span className="text-[var(--foreground)]">{t('cron.field.timeoutSec')}</span> {job.timeoutSec != null ? `${job.timeoutSec}s` : t('cron.field.timeoutSecDefault')}</div>
           <div className="col-span-2 truncate"><span className="text-[var(--foreground)]">{t('cron.field.workspace')}</span> {job.workspacePath}</div>
           <div className="col-span-2"><span className="text-[var(--foreground)]">{t('cron.field.targets')}</span> {job.targets.length === 0
             ? t('cron.field.targetsLogOnly')
@@ -362,6 +363,9 @@ function CronForm({ initial, onClose, onSaved }: {
   // Empty string = "use host TZ" sentinel (server stores null). The UI
   // shows a labelled default option for clarity.
   const [timezone, setTimezone] = useState(initial?.timezone ?? '')
+  // Empty string = "use server default (3600s)" sentinel (server stores
+  // null). Kept as raw text so partial typing isn't clamped mid-edit.
+  const [timeoutSecInput, setTimeoutSecInput] = useState(initial?.timeoutSec != null ? String(initial.timeoutSec) : '')
   const [userPrompt, setUserPrompt] = useState(initial?.userPrompt ?? '')
   const [enabled, setEnabled] = useState(initial?.enabled !== 0)
   const [channelTargets, setChannelTargets] = useState<Awaited<ReturnType<typeof api.cron.listChannelTargets>>['targets']>([])
@@ -480,6 +484,15 @@ function CronForm({ initial, onClose, onSaved }: {
       setFormError(t('cron.form.err.runAtPast'))
       return
     }
+    // Optional per-job timeout. Empty = server default (3600s). Mirror the
+    // server's range check (60–21600) so the user gets inline feedback
+    // instead of a 400 round-trip.
+    const timeoutRaw = timeoutSecInput.trim()
+    const timeoutSec = timeoutRaw ? Number(timeoutRaw) : undefined
+    if (timeoutSec !== undefined && (!Number.isInteger(timeoutSec) || timeoutSec < 60 || timeoutSec > 21600)) {
+      setFormError(t('cron.form.err.timeoutSec'))
+      return
+    }
     // Build the targets payload. Each picked (channelType, accountId)
     // expands to one row per chatId entered by the user. WeChat ignores
     // the chatId field (its dispatcher falls back to the QR-bound
@@ -537,12 +550,15 @@ function CronForm({ initial, onClose, onSaved }: {
           ...common,
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : null,
+          // null explicitly clears a previously-set timeout back to default.
+          timeoutSec: timeoutSec ?? null,
         })
       } else {
         await api.cron.createJob({
           ...common,
           schedule: mode === 'recurring' ? schedule : '',
           runAt: mode === 'oneShot' ? runAtMs : undefined,
+          timeoutSec,
         })
       }
       onSaved()
@@ -551,7 +567,7 @@ function CronForm({ initial, onClose, onSaved }: {
     } finally {
       setSubmitting(false)
     }
-  }, [initial, label, workspacePath, agentId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, pickedTargets, chatIdInputs, enabled, onSaved, t])
+  }, [initial, label, workspacePath, agentId, userPrompt, mode, schedule, runAtLocal, timezone, hostTz, computeRunAtMs, timeoutSecInput, pickedTargets, chatIdInputs, enabled, onSaved, t])
 
   return (
     <div className="flex h-full flex-col">
@@ -628,6 +644,20 @@ function CronForm({ initial, onClose, onSaved }: {
             }}
             minWidth={280}
           />
+        </Field>
+
+        <Field label={t('cron.form.timeoutSec')}>
+          <input
+            type="number"
+            min={60}
+            max={21600}
+            step={1}
+            value={timeoutSecInput}
+            onChange={(e) => setTimeoutSecInput(e.target.value)}
+            className="input-base font-mono"
+            placeholder={t('cron.form.timeoutSec.placeholder')}
+          />
+          <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">{t('cron.form.timeoutSec.hint')}</div>
         </Field>
 
         <Field label={t('cron.form.userPrompt')}>

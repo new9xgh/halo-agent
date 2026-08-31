@@ -40,6 +40,10 @@ export const cronJobs = sqliteTable('cron_jobs', {
   runAt: integer('run_at'),
   /** IANA timezone name; null = host timezone. */
   timezone: text('timezone'),
+  /** Max seconds a single cron-fired cli may run before the runner kills
+   *  it. NULL = default 3600 (runner.ts CLI_TIMEOUT_SEC). Range 60–21600,
+   *  enforced at the write points (REST routes / skill helper). */
+  timeoutSec: integer('timeout_sec'),
   /** JSON array of `{channelType, accountId}` records. Cron output (final
    *  assistant text) is dispatched to each one. Empty array = log only. */
   targets: text('targets').notNull().default('[]'),
@@ -91,6 +95,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   schedule        TEXT NOT NULL,
   run_at          INTEGER,
   timezone        TEXT,
+  timeout_sec     INTEGER,
   targets         TEXT NOT NULL DEFAULT '[]',
   enabled         INTEGER NOT NULL DEFAULT 1,
   last_run_status TEXT,
@@ -132,6 +137,10 @@ export function createCronDb(globalDir: string) {
   const cols = sqlite.prepare(`PRAGMA table_info(cron_jobs)`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'run_at')) {
     sqlite.exec(`ALTER TABLE cron_jobs ADD COLUMN run_at INTEGER`)
+  }
+  // Same pattern for `timeout_sec` (added with per-job configurable timeout).
+  if (!cols.some((c) => c.name === 'timeout_sec')) {
+    sqlite.exec(`ALTER TABLE cron_jobs ADD COLUMN timeout_sec INTEGER`)
   }
   // Same pattern for `pid` on cron_runs (added with the orphan sweep).
   const runCols = sqlite.prepare(`PRAGMA table_info(cron_runs)`).all() as Array<{ name: string }>

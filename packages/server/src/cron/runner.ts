@@ -6,7 +6,7 @@
  * Same shape as the evo wrapper:
  *   - `spawn(halo cli, [-a <agent>, -n, -w <workspace>, <prompt>])`
  *   - stdout/stderr tee'd live to `~/.halo/global/logs/cron/<runId>.log`
- *   - default 10-minute timeout via the Linux `timeout(1)` binary
+ *   - per-job timeout (`timeout_sec`, default 3600s) via a Node timer
  *   - in-memory state is rebuilt from the db on every server boot
  *     (durable schedule survives restart)
  *
@@ -28,13 +28,15 @@ import { cleanChildEnv } from '../child-env.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** How long any single cron-fired cli is allowed to run, in seconds.
- *  Long enough for a deep multi-step run, short enough that a truly stuck
- *  child still gets reaped within the hour. Concurrency overlap of the same
- *  job is now blocked up-front by `_inflight` (see runJob), so this no
- *  longer needs to be tight. Enforced by a Node timer that kills the child
- *  and reports exit code 124 (cross-platform; no dependency on the
- *  Linux-only `timeout(1)` binary). */
+/** Default cap on how long a single cron-fired cli may run, in seconds.
+ *  Used when the job doesn't set its own `timeout_sec` (nullable column;
+ *  jobs can pick 60–21600s via the routes / admin form). Long enough for a
+ *  deep multi-step run, short enough that a truly stuck child still gets
+ *  reaped within the hour. Concurrency overlap of the same job is blocked
+ *  up-front by `_inflight` (see runJob), so this no longer needs to be
+ *  tight. Enforced by a Node timer that kills the child and reports exit
+ *  code 124 (cross-platform; no dependency on the Linux-only `timeout(1)`
+ *  binary). */
 const CLI_TIMEOUT_SEC = 3600
 
 /** Grace window between the timeout's SIGTERM (which the cli handles by
@@ -577,9 +579,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     return runId
   }
 
-  // Spawn cli wrapped in `timeout(1)` so a runaway model can't burn
-  // forever. tee stdout AND stderr into the per-run log; stdout is also
-  // captured to memory because we feed it into the channel dispatcher.
+  // Spawn the cli under a Node-timer timeout (job's timeout_sec, default
+  // 3600s) so a runaway model can't burn forever. tee stdout AND stderr
+  // into the per-run log; stdout is also captured to memory because we
+  // feed it into the channel dispatcher.
   //
   // Session strategy: every job gets a stable `cron-<jobId>` session id.
   // First fire creates the session (cli's `-s` does create-on-missing
@@ -597,6 +600,10 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   const [spawnBin, spawnArgs] = process.platform === 'win32' && cli.endsWith('.cmd')
     ? ['cmd.exe', ['/c', cli, ...args]]
     : [cli, args]
+
+  // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
+  // the write points); NULL falls back to the 3600s default.
+  const timeoutSec = job.timeoutSec ?? CLI_TIMEOUT_SEC
 
   // Append a header so a single tail of the log file shows job context
   // before the cli's own output starts.
@@ -642,13 +649,13 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
     let graceTimer: ReturnType<typeof setTimeout> | null = null
     const killTimer = setTimeout(() => {
       timedOut = true
-      teeStream.write(`\n[runner] timeout ${CLI_TIMEOUT_SEC}s — SIGTERM, grace ${KILL_GRACE_SEC}s\n`)
+      teeStream.write(`\n[runner] timeout ${timeoutSec}s — SIGTERM, grace ${KILL_GRACE_SEC}s\n`)
       try { child.kill('SIGTERM') } catch { /* already dead */ }
       graceTimer = setTimeout(() => {
         teeStream.write(`[runner] still alive ${KILL_GRACE_SEC}s after SIGTERM — SIGKILL tree\n`)
         if (child.pid) killTreeHard(child.pid)
       }, KILL_GRACE_SEC * 1000)
-    }, CLI_TIMEOUT_SEC * 1000)
+    }, timeoutSec * 1000)
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
       teeStream.write(chunk)
@@ -682,7 +689,7 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   let failureReason: string | null = null
   if (result.exitCode === 124) {
     status = 'timeout'
-    failureReason = `cli exceeded ${CLI_TIMEOUT_SEC}s timeout`
+    failureReason = `cli exceeded ${timeoutSec}s timeout`
   } else if (result.exitCode !== 0) {
     status = 'failed'
     failureReason = stderr.slice(-500).trim() || `cli exited ${result.exitCode}`

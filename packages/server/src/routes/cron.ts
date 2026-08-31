@@ -32,6 +32,9 @@ interface CreateBody {
    *  the job is auto-disabled. */
   runAt?: number
   timezone?: string
+  /** Max seconds one cron-fired cli may run (60–21600). Unset/null = the
+   *  runner's default 3600. */
+  timeoutSec?: number
   /** Per-target `chatId` is optional. When set, dispatch only sends to that
    *  chat (pinning the schedule to where it was created). When unset,
    *  telegram fans out to every numeric id in `allowedUsers`. */
@@ -41,8 +44,8 @@ interface CreateBody {
 
 /** PUT body — same fields as create, all optional. `runAt: null` explicitly
  *  clears the one-shot fire time (the admin form sends it when switching a
- *  job back to recurring). */
-type UpdateBody = Partial<Omit<CreateBody, 'runAt'>> & { runAt?: number | null }
+ *  job back to recurring); `timeoutSec: null` clears back to the default. */
+type UpdateBody = Partial<Omit<CreateBody, 'runAt' | 'timeoutSec'>> & { runAt?: number | null; timeoutSec?: number | null }
 
 function newJobId(): string {
   return `cron-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -57,6 +60,24 @@ function validateSchedule(expr: string): string | null {
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
+}
+
+/** Per-job cli timeout bounds (seconds). Lower bound keeps a fat-fingered
+ *  "1" from killing every run instantly; upper bound (6h) keeps a stuck
+ *  child from squatting `_inflight` for days. */
+const TIMEOUT_SEC_MIN = 60
+const TIMEOUT_SEC_MAX = 21600
+
+/** Validate a `timeoutSec` body value: integer within [60, 21600].
+ *  Returns an error message or null when valid. */
+function validateTimeoutSec(v: unknown): string | null {
+  if (typeof v !== 'number' || !Number.isInteger(v)) {
+    return 'timeoutSec must be an integer (seconds)'
+  }
+  if (v < TIMEOUT_SEC_MIN || v > TIMEOUT_SEC_MAX) {
+    return `timeoutSec must be between ${TIMEOUT_SEC_MIN} and ${TIMEOUT_SEC_MAX}`
+  }
+  return null
 }
 
 export function createCronRoutes(): Hono {
@@ -113,6 +134,11 @@ export function createCronRoutes(): Hono {
     if (hasRunAt && body.runAt! <= Date.now()) {
       return c.json({ error: 'runAt must be in the future' }, 400)
     }
+    // null = unset (same convention as runAt on create).
+    if (body.timeoutSec !== undefined && body.timeoutSec !== null) {
+      const err = validateTimeoutSec(body.timeoutSec)
+      if (err) return c.json({ error: err }, 400)
+    }
 
     const id = newJobId()
     const now = Date.now()
@@ -125,6 +151,7 @@ export function createCronRoutes(): Hono {
       schedule: hasSchedule ? body.schedule : '',
       runAt: hasRunAt ? body.runAt! : null,
       timezone: body.timezone ?? null,
+      timeoutSec: body.timeoutSec ?? null,
       targets: JSON.stringify(body.targets ?? []),
       enabled: body.enabled === false ? 0 : 1,
       lastRunStatus: null,
@@ -165,6 +192,14 @@ export function createCronRoutes(): Hono {
       }
       if (body.runAt <= Date.now()) return c.json({ error: 'runAt must be in the future' }, 400)
     }
+    // timeoutSec: integer in range, or null (= clear back to the default
+    // 3600). Same partial-body contract as runAt: undefined leaves the
+    // stored value untouched. No cross-field dependency, so validating the
+    // supplied value alone covers the merged row.
+    if (body.timeoutSec !== undefined && body.timeoutSec !== null) {
+      const err = validateTimeoutSec(body.timeoutSec)
+      if (err) return c.json({ error: err }, 400)
+    }
 
     // Recurring vs at-mode exclusivity on the MERGED row (db contract:
     // exactly one of schedule/runAt is set per job — see cron-db.ts).
@@ -198,6 +233,7 @@ export function createCronRoutes(): Hono {
     if (body.schedule !== undefined || clearSchedule) patch.schedule = nextSchedule
     if (body.runAt !== undefined || clearRunAt) patch.runAt = nextRunAt
     if (body.timezone !== undefined) patch.timezone = body.timezone || null
+    if (body.timeoutSec !== undefined) patch.timeoutSec = body.timeoutSec
     if (body.targets !== undefined) patch.targets = JSON.stringify(body.targets)
     if (body.enabled !== undefined) patch.enabled = body.enabled ? 1 : 0
 

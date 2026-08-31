@@ -423,6 +423,8 @@ export const zh: Record<string, string> = {
   'cron.field.schedule': '调度：',
   'cron.field.runAt': '触发时刻：',
   'cron.field.agent': 'Agent：',
+  'cron.field.timeoutSec': '超时：',
+  'cron.field.timeoutSecDefault': '3600 秒（默认）',
   'cron.field.workspace': '工作区：',
   'cron.field.targets': '通知目标：',
   'cron.field.targetsLogOnly': '— （仅记录日志）',
@@ -455,6 +457,9 @@ export const zh: Record<string, string> = {
   'cron.form.runAt.hint': '任务会在选中的时区下，按这个时刻触发一次，触发后自动禁用。',
   'cron.form.timezone': '时区',
   'cron.form.timezone.hostDefault': '默认 — 主机时区（{tz}）',
+  'cron.form.timeoutSec': '最长运行时间（秒）',
+  'cron.form.timeoutSec.placeholder': '3600（默认）',
+  'cron.form.timeoutSec.hint': '运行超过该时长会被强制终止。留空 = 默认 3600 秒。范围 60–21600。',
   'cron.form.userPrompt': '用户提示词 *',
   'cron.form.userPrompt.placeholder': '从 .halo/memory/ 整理今天的状态摘要',
   'cron.form.targets': '通知目标（最终输出发到哪里）',
@@ -470,6 +475,7 @@ export const zh: Record<string, string> = {
   'cron.form.err.runAt': '需要触发时刻',
   'cron.form.err.runAtPast': '触发时刻必须在未来',
   'cron.form.err.prompt': '需要填写提示词',
+  'cron.form.err.timeoutSec': '最长运行时间必须是 60–21600 之间的整数（秒）',
 
   // ── Evolution ──
   'evolution.title': '自我进化',
