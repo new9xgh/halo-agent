@@ -46,7 +46,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="w-[560px] max-h-[70vh] flex flex-col rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"
+        className="w-[560px] max-h-[70vh] flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-[0_8px_40px_rgba(30,50,90,0.12)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
@@ -80,7 +80,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
             onKeyDown={(e) => {
               if (e.key === 'Enter') loadDir(currentPath)
             }}
-            className="flex-1 rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+            className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
           />
         </div>
 
@@ -111,14 +111,14 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
         <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-3 py-2.5">
           <button
             onClick={onClose}
-            className="rounded px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+            className="rounded-lg px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
           >
             {t('workspace.cancel')}
           </button>
           <button
             onClick={() => onSelect(currentPath)}
             disabled={!currentPath}
-            className="rounded bg-[var(--primary)] px-3 py-1 text-xs font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-30"
+            className="rounded-lg bg-[var(--primary)] px-3 py-1 text-xs font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-30"
           >
             {t('workspace.open')}
           </button>

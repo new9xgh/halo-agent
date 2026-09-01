@@ -177,6 +177,7 @@ interface ExchangeActionProps { userOrdinal: number; deleted: boolean; messageId
  * and the server's deleteExchange loop on the same subset.
  */
 function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable }: ExchangeActionProps & { copyText: string }) {
+  const tr = useT()
   const [copied, setCopied] = useState(false)
   const canDelete = deletable && !deleted && userOrdinal >= 0
 
@@ -187,17 +188,17 @@ function ExchangeActions({ copyText, userOrdinal, deleted, messageId, deletable 
   const handleDelete = async () => {
     const target = resolveTargetSession(messageId)
     if (!target) return
-    if (!(await confirmAction('Delete this message and its responses from the conversation? The agent will no longer see this exchange.'))) return
+    if (!(await confirmAction(tr('msg.deleteExchangeConfirm')))) return
     wsClient.send({ type: 'exchange:delete', sessionId: target.sessionId, projectId: target.projectId, userOrdinal })
   }
 
   return (
     <>
-      <button onClick={handleCopy} title="Copy message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
+      <button onClick={handleCopy} title={tr('msg.copy')} className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-[var(--background)]/40 transition-opacity">
         {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
       </button>
       {canDelete && (
-        <button onClick={handleDelete} title="Delete message" className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
+        <button onClick={handleDelete} title={tr('msg.delete')} className="rounded p-1 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-opacity">
           <Trash2 className="h-3 w-3" />
         </button>
       )}
@@ -221,6 +222,7 @@ function parseSubAgentReport(content: string): { sessionId: string; body: string
 }
 
 function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { content: string }) {
+  const tr = useT()
   const parsed = parseSubAgentReport(content)!
   const shortId = parsed.sessionId.split('>').pop() ?? parsed.sessionId
   return (
@@ -229,9 +231,9 @@ function SubAgentReport({ content, ...actionProps }: ExchangeActionProps & { con
         <ExchangeActions copyText={parsed.body} {...actionProps} />
       </div>
       <div className="mb-1 flex items-center gap-2 pr-14 text-[10px] font-medium text-emerald-400">
-        <span>Report from sub-session</span>
+        <span>{tr('msg.subAgentReport')}</span>
         <span className="rounded bg-emerald-900/40 px-1 py-0.5 font-mono text-emerald-300/80">{shortId}</span>
-        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
+        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>{tr('msg.deleted')}</span>}
       </div>
       <CollapsibleContent maxLines={4}>
         <div className="text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed">
@@ -257,6 +259,7 @@ function parseCompactSummary(content: string): { olderCount: number; body: strin
 }
 
 function CompactSummary({ content, ...actionProps }: ExchangeActionProps & { content: string }) {
+  const tr = useT()
   const parsed = parseCompactSummary(content)!
   const [open, setOpen] = useState(false)
   // Default collapsed: only the small purple header is visible. The summary
@@ -278,9 +281,9 @@ function CompactSummary({ content, ...actionProps }: ExchangeActionProps & { con
         className="flex w-full items-center gap-2 px-3 py-2 pr-14 text-[10px] font-medium text-purple-400 hover:bg-purple-900/30 transition-colors"
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <span>Conversation summary sent to LLM</span>
-        <span className="rounded bg-purple-900/40 px-1 py-0.5 font-mono text-purple-300/80">{parsed.olderCount} messages compacted</span>
-        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>deleted</span>}
+        <span>{tr('msg.compactSummary')}</span>
+        <span className="rounded bg-purple-900/40 px-1 py-0.5 font-mono text-purple-300/80">{parsed.olderCount} {tr('msg.messagesCompacted')}</span>
+        {actionProps.deleted && <span className={DELETED_BADGE_CLS}>{tr('msg.deleted')}</span>}
       </button>
       {open && (
         <div className="px-3 pb-2 text-xs text-[var(--foreground)] whitespace-pre-wrap leading-relaxed max-h-[40vh] overflow-y-auto">
@@ -422,7 +425,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     return (
       <div className="my-0.5 px-1">
         <span className={cn('inline-block rounded px-1.5 py-0.5 text-[9px]', t === 'agent_start' ? 'bg-blue-900/40 text-blue-400' : 'bg-emerald-900/40 text-emerald-400')}>
-          {message.agentName ?? 'Agent'}: {message.content || (t === 'agent_start' ? 'started' : 'done')}
+          {message.agentName ?? tr('msg.agent')}: {message.content || (t === 'agent_start' ? tr('msg.agentStarted') : tr('msg.agentDone'))}
         </span>
       </div>
     )
@@ -455,7 +458,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     return (
       <div className="flex items-center gap-1.5 py-1">
         <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
-        <span className="text-xs text-[var(--muted-foreground)]">Thinking...</span>
+        <span className="text-xs text-[var(--muted-foreground)]">{tr('msg.thinking')}</span>
       </div>
     )
   }
@@ -607,6 +610,7 @@ function ProcessCollapse({ durationMs, children }: { durationMs?: number; childr
 }
 
 function ThinkingBlock({ text }: { text: string }) {
+  const tr = useT()
   const [expanded, setExpanded] = useState(false)
   return (
     <div className="my-1 rounded border border-purple-900/50 bg-purple-950/20">
@@ -615,8 +619,8 @@ function ThinkingBlock({ text }: { text: string }) {
         className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] text-purple-400 hover:bg-purple-900/20 transition-colors"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <span className="font-medium">Thinking</span>
-        <span className="text-[10px] text-purple-400/60">{text.length.toLocaleString()} chars</span>
+        <span className="font-medium">{tr('msg.thinkingLabel')}</span>
+        <span className="text-[10px] text-purple-400/60">{text.length.toLocaleString()} {tr('msg.chars')}</span>
       </button>
       {expanded && (
         <pre className="px-2 pb-2 text-[11px] text-[var(--foreground)] whitespace-pre-wrap break-words leading-relaxed max-h-[50vh] overflow-y-auto">{text}</pre>
@@ -637,7 +641,7 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
     <>
       <div className="group relative flex justify-end px-4 pt-3">
         <div className="absolute -top-1 right-4 z-20 flex items-center gap-0.5">
-          {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
+          {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>{tr('msg.deleted')}</span>}
           {/* Ack/resend gave up — the server never confirmed this message
               (zombie-socket loss). Make the failure visible on the bubble
               instead of losing it silently. */}
@@ -651,7 +655,7 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
         <div className={cn('max-w-[85%] rounded-2xl rounded-tr-sm bg-[var(--secondary)] px-3.5 py-2 shadow-sm', deleted || sendFailed ? 'ring-1 ring-red-500/40' : '')}>
           <CollapsibleContent maxLines={4} toggleClassName="top-auto bottom-0">
             <div className={cn('text-sm leading-relaxed whitespace-pre-wrap', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--foreground)]')}>
-              {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
+              {text || (media.length > 0 || localImages?.length ? tr('msg.attachment') : '')}
             </div>
           </CollapsibleContent>
         </div>
@@ -904,6 +908,7 @@ function DebugToolResult({ toolOutput, durationMs }: { toolOutput: unknown; dura
 // ─── Inline tool call (used in normal mode assistant messages) ───
 
 function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isStreaming?: boolean; isLast?: boolean }) {
+  const tr = useT()
   const [expanded, setExpanded] = useState(false)
   const status = getToolStatus(call, isStreaming, isLast)
   const hasOutput = call.output !== undefined && call.output !== ''
@@ -937,7 +942,7 @@ function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isS
           {status === 'running' && (
             <div className="px-2.5 py-1.5 flex items-center gap-1.5">
               <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
-              <span className="text-[11px] text-[var(--muted-foreground)]">Running...</span>
+              <span className="text-[11px] text-[var(--muted-foreground)]">{tr('msg.running')}</span>
             </div>
           )}
         </div>
@@ -952,6 +957,7 @@ function InlineToolCall({ call, isStreaming, isLast }: { call: ToolCallInfo; isS
 // ─── Utility components ───
 
 function CollapsibleContent({ children, maxLines = 2, className, toggleClassName }: { children: React.ReactNode; maxLines?: number; className?: string; toggleClassName?: string }) {
+  const tr = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [clamped, setClamped] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -990,7 +996,7 @@ function CollapsibleContent({ children, maxLines = 2, className, toggleClassName
     <div className={cn('relative', className)}>
       {clamped && (
         <button onClick={() => setExpanded(!expanded)} className={cn('absolute top-0 right-0 text-[11px] text-[var(--primary)] hover:underline z-10', toggleClassName)}>
-          {expanded ? 'Show less' : 'Show more'}
+          {expanded ? tr('msg.showLess') : tr('msg.showMore')}
         </button>
       )}
       <div ref={contentRef} style={!expanded && clamped ? { maxHeight: `${maxLines * 20}px`, overflow: 'hidden' } : undefined}>

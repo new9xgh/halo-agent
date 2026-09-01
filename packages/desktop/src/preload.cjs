@@ -28,8 +28,8 @@ function showOverlay(message, kind /* 'alert' | 'confirm' */, onConfirm) {
   // Light card to match the admin UI default theme (--card: #ffffff in globals.css).
   const card = document.createElement('div')
   card.style.cssText = `
-    min-width: 320px; max-width: 480px; background: #ffffff; color: #1c1c1a;
-    border: 1px solid #e8e8e6;
+    min-width: 320px; max-width: 480px; background: #ffffff; color: #1a2333;
+    border: 1px solid #e4e8f2;
     border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.15); padding: 16px 20px;
   `
   const header = document.createElement('div')
@@ -57,7 +57,7 @@ function showOverlay(message, kind /* 'alert' | 'confirm' */, onConfirm) {
   if (kind === 'confirm') {
     const cancelBtn = document.createElement('button')
     cancelBtn.textContent = 'Cancel'
-    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e8e8e6; background: #f0f0ee; color: #1c1c1a; cursor: pointer;'
+    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e4e8f2; background: #f0f3f9; color: #1a2333; cursor: pointer;'
     cancelBtn.onclick = () => { document.body.removeChild(overlay); onConfirm(false) }
     actions.appendChild(cancelBtn)
   }
@@ -86,8 +86,8 @@ window.haloPrompt = function (message, defaultValue) {
     `
     const card = document.createElement('div')
     card.style.cssText = `
-      min-width: 360px; max-width: 520px; background: #ffffff; color: #1c1c1a;
-      border: 1px solid #e8e8e6;
+      min-width: 360px; max-width: 520px; background: #ffffff; color: #1a2333;
+      border: 1px solid #e4e8f2;
       border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.15); padding: 16px 20px;
     `
     const header = document.createElement('div')
@@ -110,7 +110,7 @@ window.haloPrompt = function (message, defaultValue) {
     input.value = defaultValue == null ? '' : String(defaultValue)
     input.style.cssText = `
       width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 6px 10px;
-      background: #f7f7f5; color: #1c1c1a; border: 1px solid #e8e8e6; border-radius: 6px;
+      background: #ffffff; color: #1a2333; border: 1px solid #e4e8f2; border-radius: 6px;
       font: inherit; outline: none;
     `
 
@@ -121,7 +121,7 @@ window.haloPrompt = function (message, defaultValue) {
 
     const cancelBtn = document.createElement('button')
     cancelBtn.textContent = 'Cancel'
-    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e8e8e6; background: #f0f0ee; color: #1c1c1a; cursor: pointer;'
+    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e4e8f2; background: #f0f3f9; color: #1a2333; cursor: pointer;'
     cancelBtn.onclick = () => finish(null)
 
     const okBtn = document.createElement('button')

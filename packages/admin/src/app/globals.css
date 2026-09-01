@@ -1,11 +1,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-/* WorkBuddy-style type stack: Inter for latin, system CJK fonts for Chinese —
- * next/font's Inter carries no CJK glyphs, so without this Chinese text falls
- * back to whatever the browser picks (often an ugly default on Windows). */
+/* WorkBuddy-style type stack: plain system fonts for both latin and CJK —
+ * neutral, native feel (PingFang SC on macOS, Microsoft YaHei on Windows). */
 @theme {
-  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
 }
 
 /*
@@ -20,25 +19,25 @@
  */
 :root,
 [data-theme="light"] {
-  --background: #f7f7f5;
-  --foreground: #1c1c1a;
+  --background: #ffffff;
+  --foreground: #27272a;
   --card: #ffffff;
-  --card-foreground: #1c1c1a;
-  --border: #e8e8e6;
-  --input: #e8e8e6;
-  --primary: #2563eb;
+  --card-foreground: #27272a;
+  --border: #e4e8f2;
+  --input: #e4e8f2;
+  --primary: #2f6bff;
   --primary-foreground: #ffffff;
-  --secondary: #f0f0ee;
-  --secondary-foreground: #525250;
-  --muted: #f0f0ee;
-  --muted-foreground: #8a8a87;
-  --accent: #e9e9e6;
-  --accent-foreground: #1c1c1a;
+  --secondary: #f0f3f9;
+  --secondary-foreground: #52525b;
+  --muted: #f0f3f9;
+  --muted-foreground: #71717a;
+  --accent: #f0f3f9;
+  --accent-foreground: #27272a;
   --destructive: #dc2626;
-  --ring: #2563eb;
-  --radius: 0.75rem;
-  --scrollbar-thumb: #d6d6d3;
-  --scrollbar-thumb-hover: #b3b3af;
+  --ring: #2f6bff;
+  --radius: 1rem;
+  --scrollbar-thumb: #c7d0e2;
+  --scrollbar-thumb-hover: #a4b3cd;
 }
 
 [data-theme="dark"] {
@@ -174,6 +173,23 @@
  * --tw-prose-* through its --tw-prose-invert-* counterpart, and these
  * declarations out-specify the `.prose` defaults ([data-theme] .prose = 0,2,0).
  */
+
+/* Reading size: the message prose reads too small at prose-sm's 14px for a
+ * chat-first UI — 15px/1.75 matches the modern agent-app feel. Unlayered, so
+ * it beats Tailwind's layered .prose-sm font-size. */
+.prose {
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+
+/* Secondary pages （技能/专家/助理/进化/定时/设置): remap the small utility
+ * sizes up to WorkBuddy reading sizes — 10→11, 11→12, 12→13px. Scoped to the
+ * workspace-layout wrapper so the home (chat) is untouched. Unlayered rules
+ * beat Tailwind's layered utilities. */
+.secondary-page .text-\[9px\] { font-size: 0.625rem; }
+.secondary-page .text-\[10px\] { font-size: 0.6875rem; }
+.secondary-page .text-\[11px\] { font-size: 0.75rem; }
+.secondary-page .text-xs { font-size: 0.8125rem; }
 [data-theme="light"] .prose,
 [data-theme="warm"] .prose {
   --tw-prose-invert-body: var(--foreground);
@@ -203,6 +219,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  text-rendering: optimizeLegibility;
 }
 
 /* Scrollbar styling */

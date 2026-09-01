@@ -1,48 +1,94 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Circle, Loader2, XCircle, SkipForward, ChevronDown, ChevronRight, FileText, Download } from 'lucide-react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { api } from '@/shared/api-client'
-import type { TaskNodeStatus } from '@/shared/types'
+import { useSessionBus } from '@/shared/session-bus'
+import type { ChatMessage, TaskNodeStatus } from '@/shared/types'
 import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 
 /**
  * Canvas 概览 view (WorkBuddy-style): 任务进程 — the current session's latest
  * task plan as a checklist; 产物 — files the session produced, collected from
- * plan task results (filesChanged) and file_write/file_edit tool calls, each
- * with a download link.
+ * plan task results (filesChanged) and file_write/file_edit tool calls.
+ * Clicking an artifact opens it in the canvas preview view (onOpenArtifact);
+ * the download button stays as a secondary action.
  */
-export function CanvasOverview() {
+export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: string) => void }) {
   const t = useT()
   const messages = useChatStore((s) => s.messages)
+  const sessionId = useChatStore((s) => s.sessionId)
   const projectId = useProjectStore((s) => s.activeProject?.id)
+  const projectPath = useProjectStore((s) => s.activeProject?.path)
+  const busVersion = useSessionBus((s) => s.version)
+  const [logMessages, setLogMessages] = useState<ChatMessage[]>([])
+
+  // The in-memory chat log only holds the recent tail (older turns load on
+  // scroll / were never in the subscribe snapshot) — computed from it alone,
+  // plans and artifacts from earlier turns vanish after a session switch.
+  // The overview therefore pulls the FULL active log itself; refetch on
+  // session switch and whenever a turn settles (session bus bump).
+  useEffect(() => {
+    if (!sessionId || !projectPath) { setLogMessages([]); return }
+    let cancelled = false
+    api.sessionLogs.get(sessionId, projectPath)
+      .then((res) => {
+        if (!cancelled) setLogMessages((res as { messages?: ChatMessage[] }).messages ?? [])
+      })
+      .catch(() => { if (!cancelled) setLogMessages([]) })
+    return () => { cancelled = true }
+  }, [sessionId, projectPath, busVersion])
+
+  // Full log + live tail (live wins by id — it covers turns after the fetch).
+  const allMessages = useMemo(() => {
+    if (logMessages.length === 0) return messages
+    const liveIds = new Set(messages.map((m) => m.id))
+    return [...logMessages.filter((m) => !liveIds.has(m.id)), ...messages]
+  }, [logMessages, messages])
 
   // Latest plan wins — plans revise as the agent works.
   const plan = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].plan) return messages[i].plan
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      if (allMessages[i].plan) return allMessages[i].plan
     }
     return null
-  }, [messages])
+  }, [allMessages])
 
   const artifacts = useMemo(() => {
     const paths: string[] = []
     const seen = new Set<string>()
-    const add = (p: unknown) => {
-      const s = typeof p === 'string' ? p : ''
-      if (s && !seen.has(s)) { seen.add(s); paths.push(s) }
+    // 产物 = files the session WROTE. Tool names vary (file_write / file_edit /
+    // MCP tools / doc generators), so instead of an exact allowlist we match
+    // write-ish tool names and accept any input field that looks like a file
+    // path (has an extension). Read-only tools (file_read etc.) are excluded
+    // by the name filter.
+    const WRITEISH = /write|edit|create|patch|save|export|generate|render|build|make/i
+    const PATH_KEYS = new Set(['path', 'file', 'filePath', 'file_path', 'filename', 'output', 'outputPath', 'output_path', 'target'])
+    const add = (v: unknown) => {
+      if (typeof v !== 'string') return
+      const s = v.trim()
+      if (!s || s.length > 200 || !/\.[a-z0-9]{1,8}$/i.test(s)) return
+      if (seen.has(s)) return
+      seen.add(s)
+      paths.push(s)
+    }
+    const scanValue = (v: unknown) => {
+      if (typeof v === 'string') { add(v); return }
+      if (Array.isArray(v)) { v.forEach(scanValue); return }
+      if (v && typeof v === 'object') {
+        for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+          if (PATH_KEYS.has(k)) scanValue(val)
+        }
+      }
     }
     const addToolInput = (name: string, input: string) => {
-      if (name !== 'file_write' && name !== 'file_edit') return
-      try {
-        const o = JSON.parse(input) as Record<string, unknown>
-        add(o.path ?? o.file ?? o.filePath)
-      } catch { /* non-JSON input — skip */ }
+      if (!WRITEISH.test(name)) return
+      try { scanValue(JSON.parse(input)) } catch { /* non-JSON input — skip */ }
     }
-    for (const m of messages) {
+    for (const m of allMessages) {
       if (m.plan) {
         for (const task of m.plan.tasks) {
           for (const f of task.result?.filesChanged ?? []) add(f.path)
@@ -54,7 +100,7 @@ export function CanvasOverview() {
       for (const tc of m.toolCalls ?? []) addToolInput(tc.name, tc.input)
     }
     return paths
-  }, [messages])
+  }, [allMessages])
 
   if (!plan && artifacts.length === 0) {
     return (
@@ -95,7 +141,8 @@ export function CanvasOverview() {
             {artifacts.map((p) => (
               <div
                 key={p}
-                className="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--secondary)]"
+                onClick={() => onOpenArtifact?.(p)}
+                className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--secondary)]"
                 title={p}
               >
                 <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
@@ -106,7 +153,8 @@ export function CanvasOverview() {
                   <a
                     href={api.files.downloadUrl(p, projectId)}
                     download={p.split('/').pop()}
-                    title="Download"
+                    title={t('ui.download')}
+                    onClick={(e) => e.stopPropagation()}
                     className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:text-[var(--foreground)] group-hover:opacity-100"
                   >
                     <Download className="h-3.5 w-3.5" />

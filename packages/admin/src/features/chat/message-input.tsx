@@ -237,7 +237,7 @@ function CameraPicker({ cameras, activeId, onPick, onTurnOff, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3" onClick={onClose}>
-      <div className="flex w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="flex w-[640px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <span className="text-sm font-medium text-[var(--foreground)]">{t('capture.cameraPick')}</span>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
@@ -467,7 +467,7 @@ function CaptureControl() {
           onClick={() => setOpen(false)}
         >
           <div
-            className="flex h-[92vh] w-[96vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl"
+            className="flex h-[92vh] w-[96vw] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
@@ -543,6 +543,7 @@ interface PendingFile {
 
 /** Small ring showing context window usage — click to compact when usage is high */
 function TokenRing({ onCompact }: { onCompact?: () => void }) {
+  const tr = useT()
   const messages = useChatStore((s) => s.messages)
   const serverContextTokens = useChatStore((s) => s.contextTokens)
   const maxTokens = useChatStore((s) => s.maxContextTokens)
@@ -575,7 +576,7 @@ function TokenRing({ onCompact }: { onCompact?: () => void }) {
   return (
     <div
       className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', canCompact && 'cursor-pointer hover:bg-[var(--secondary)]')}
-      title={isCompacting ? 'Compacting...' : `~${kTokens}K / ${maxTokens / 1000}K tokens (${Math.round(pct)}%)${canCompact ? '\nClick to compact context' : ''}`}
+      title={isCompacting ? tr('chat.compacting') : `~${kTokens}K / ${maxTokens / 1000}K tokens (${Math.round(pct)}%)${canCompact ? `\n${tr('chat.clickToCompact')}` : ''}`}
       onClick={canCompact ? onCompact : undefined}
     >
       <svg width="22" height="22" viewBox="0 0 22 22" className={cn('transform -rotate-90', isCompacting && 'animate-pulse')}>
@@ -963,7 +964,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
 
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-[var(--accent)]/80 border-2 border-dashed border-[var(--primary)]">
-          <p className="text-sm text-[var(--primary)]">Drop images here</p>
+          <p className="text-sm text-[var(--primary)]">{t('chat.dropImages')}</p>
         </div>
       )}
 
@@ -980,14 +981,14 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
         <textarea
           ref={textareaRef} value={text} onChange={handleInput} onKeyDown={handleKeyDown} onPaste={handlePaste}
           onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart)}
-          placeholder={noUsableAgent ? 'All agents are disabled — enable one in the Agents tab to chat' : goalLocked ? t('goal.inputLocked') : isStreaming ? 'Send to interrupt current response...' : 'Type @ to reference files...'}
+          placeholder={noUsableAgent ? t('chat.noUsableAgent') : goalLocked ? t('goal.inputLocked') : isStreaming ? t('chat.placeholderInterrupt') : t('chat.placeholder')}
           rows={1}
           className="w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none max-h-[200px]"
         />
 
         {/* Bottom toolbar + chips in one row */}
         <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
-          <button onClick={() => fileInputRef.current?.click()} disabled={disabled} title="Attach images"
+          <button onClick={() => fileInputRef.current?.click()} disabled={disabled} title={t('chat.attachImages')}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]">
             <Paperclip className="h-4 w-4" />
           </button>
@@ -1008,7 +1009,7 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
           {contextLabel && (
             <button
               onClick={() => setContextEnabled(!contextEnabled)}
-              title={contextEnabled ? 'Click to exclude context' : 'Click to include context'}
+              title={contextEnabled ? t('chat.excludeContext') : t('chat.includeContext')}
               className={cn(
                 'flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors',
                 contextEnabled

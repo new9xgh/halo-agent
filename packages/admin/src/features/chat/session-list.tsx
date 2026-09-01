@@ -123,8 +123,8 @@ export function SessionSidebar({
               key={s.id}
               onClick={() => onSelect(s.id)}
               className={cn(
-                'group mx-1.5 my-0.5 flex cursor-pointer select-none items-center gap-1.5 rounded-lg px-2 py-1.5 transition-colors',
-                currentSessionId === s.id ? 'bg-[var(--secondary)]' : 'hover:bg-[var(--secondary)]/60',
+                'group relative mx-1.5 my-0.5 flex cursor-pointer select-none items-center rounded-xl px-2.5 py-2 transition-colors',
+                currentSessionId === s.id ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--secondary)]',
               )}
             >
               <div className="min-w-0 flex-1">
@@ -142,38 +142,39 @@ export function SessionSidebar({
                     className="w-full rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-xs text-[var(--foreground)] outline-none focus:border-blue-500"
                   />
                 ) : (
-                  /* WorkBuddy-style row: title on the left, relative time on
-                     the right — no message-count / model meta line. */
+                  /* WorkBuddy-style row: title on the left, relative time
+                     flush right (hover actions overlay instead of taking
+                     layout space, so the time really hugs the edge). */
                   <div className="flex items-center gap-2">
-                    <p className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)]">
-                      {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                    <p className="min-w-0 flex-1 truncate text-[13px] text-[var(--foreground)]">
+                      {s.goalSessionId && <span title={t('ui.goalWorker')} className="mr-1">🎯</span>}
                       {s.title}
                     </p>
-                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
+                    <span className="shrink-0 text-[11px] text-[var(--muted-foreground)]">
                       {formatRelativeTime(s.updatedAt, t)}
                     </span>
                   </div>
                 )}
               </div>
               {loadingSessionId === s.id ? (
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--muted-foreground)]" />
+                <Loader2 className="absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-[var(--muted-foreground)]" />
               ) : editingId !== s.id && (
-                <>
+                <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-md bg-[var(--card)] px-0.5 py-0.5 shadow-sm group-hover:flex">
                   <button
                     onClick={(e) => startRename(e, s)}
-                    title="Rename"
-                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:text-blue-400 transition-opacity"
+                    title={t('ui.rename')}
+                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-blue-400"
                   >
                     <Pencil className="h-3 w-3" />
                   </button>
                   <button
                     onClick={(e) => onDelete(s.id, e)}
-                    title="Delete"
-                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+                    title={t('ui.delete')}
+                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:text-red-400"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
-                </>
+                </div>
               )}
             </div>
           ))
@@ -181,9 +182,9 @@ export function SessionSidebar({
         {hasMore && (
           <div ref={sentinelRef} className="flex items-center justify-center py-2 text-[10px] text-[var(--muted-foreground)]">
             {loadingMore ? (
-              <><Loader2 className="h-2.5 w-2.5 animate-spin mr-1" /> Loading…</>
+              <><Loader2 className="h-2.5 w-2.5 animate-spin mr-1" /> {t('ui.loading')}</>
             ) : (
-              <span className="opacity-50">scroll for more</span>
+              <span className="opacity-50">{t('ui.scrollMore')}</span>
             )}
           </div>
         )}

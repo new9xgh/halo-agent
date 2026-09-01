@@ -6,6 +6,8 @@ import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle }
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
 import { CanvasOverview } from '@/features/workspace/canvas-overview'
+import { EditorPanel } from '@/features/editor/editor-panel'
+import { registeredExtensions } from '@/features/editor/previews/FilePreview'
 import { FolderPicker } from '@/features/explorer/folder-picker'
 import { AgentManagementMain } from '@/features/agents/agent-management-main'
 import { SkillsSidebar } from '@/features/skills/skills-sidebar'
@@ -19,7 +21,7 @@ import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
 import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
-import { cn, confirmAction } from '@/shared/utils'
+import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
 import { SettingsMain } from '@/features/settings/settings-main'
 import { ChannelsSidebar } from '@/features/channels/channels-sidebar'
 import { ChannelsMain } from '@/features/channels/channels-main'
@@ -83,7 +85,7 @@ function ActivityBarButton({ active, onClick, title, children }: {
       className={cn(
         'flex h-9 w-9 items-center justify-center rounded-xl transition-colors',
         active
-          ? 'bg-[var(--secondary)] text-[var(--primary)]'
+          ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
           : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
       )}
     >
@@ -104,10 +106,10 @@ function NavMenuItem({ icon: Icon, label, active, onClick }: {
       onClick={onClick}
       title={label}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors',
+        'flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] transition-colors',
         active
-          ? 'bg-[var(--secondary)] font-medium text-[var(--foreground)]'
-          : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+          ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
+          : 'text-[var(--secondary-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
       )}
     >
       <Icon className="h-4 w-4 shrink-0" />
@@ -156,15 +158,17 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     setCanvasOpen(open)
     try { localStorage.setItem('halo_canvas_open', String(open)) } catch { /* ignore */ }
   }, [])
-  // Canvas view — overview (task progress + artifacts) / browser.
-  const [canvasView, setCanvasView] = useState<'overview' | 'browser'>(() => {
+  // Canvas view — overview (task progress + artifacts) / browser / preview
+  // (artifact file opened in the editor preview). 'preview' is transient:
+  // never persisted as the startup view.
+  const [canvasView, setCanvasView] = useState<'overview' | 'browser' | 'preview'>(() => {
     if (typeof window === 'undefined') return 'overview'
     const v = localStorage.getItem('halo_canvas_view')
     return v === 'browser' ? 'browser' : 'overview'
   })
-  const changeCanvasView = useCallback((v: 'overview' | 'browser') => {
+  const changeCanvasView = useCallback((v: 'overview' | 'browser' | 'preview') => {
     setCanvasView(v)
-    try { localStorage.setItem('halo_canvas_view', v) } catch { /* ignore */ }
+    try { localStorage.setItem('halo_canvas_view', v === 'preview' ? 'overview' : v) } catch { /* ignore */ }
   }, [])
   // 切换空间 — same folder-picker flow the old Explorer sidebar offered.
   const [showSpacePicker, setShowSpacePicker] = useState(false)
@@ -473,6 +477,32 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   ]
 
   const projectId = activeProject?.id ?? null
+  // Open an artifact file in the canvas preview view (WorkBuddy: click a
+  // produced file → it renders on the right). Binary/preview-registered
+  // extensions open as previews (xlsx/pdf/images/office…), text opens in the
+  // code viewer. Keeps the canvas mounted so tabs persist across view flips.
+  const handleOpenArtifact = useCallback(async (path: string) => {
+    if (!projectId) return
+    toggleCanvas(true)
+    const store = useEditorStore.getState()
+    if (isBinaryPath(path)) {
+      let meta: { size?: number; mtime?: number; createdAt?: number } | undefined
+      try {
+        const stat = await api.files.stat(path, projectId)
+        meta = { size: stat.size, mtime: stat.modifiedAt, createdAt: stat.createdAt }
+      } catch { /* meta is optional */ }
+      store.openPreview(path, api.files.downloadUrl(path, projectId), api.files.viewUrl(path, projectId), meta)
+    } else {
+      try {
+        const data = await api.files.read(path, projectId)
+        store.openFile(path, data.content, getLanguageFromPath(path), data.modifiedAt, { size: data.size, createdAt: data.createdAt })
+      } catch (err) {
+        console.error('[Canvas] Failed to open artifact:', err)
+        return
+      }
+    }
+    changeCanvasView('preview')
+  }, [projectId, toggleCanvas, changeCanvasView])
   // Keep the Explorer's git status decorations in sync for the active workspace.
   useGitDecorationsSync(projectId)
   // Hide the Source Control entry for non-git workspaces (spares non-developer
@@ -487,6 +517,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     .filter((t) => t.id !== 'source-control' || isRepo !== false)
   const bottomTabs = tabs.filter((t) => t.position === 'bottom')
   const maximized = useEditorStore((s) => s.maximized)
+  const activeFileTab = useEditorStore((s) => s.activeTab)
   const bottomFloating = useEditorStore((s) => s.bottomFloating)
   const bottomMaximized = useEditorStore((s) => s.bottomMaximized)
   // Non-Explorer tabs use sidebarOpen + their own tab-has-sidebar flag
@@ -533,7 +564,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           style. Collapses to an icon rail. Hidden when the editor is maximized. */}
       {leftNavOpen ? (
         <div className={cn('flex w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--card)]', maximized && 'hidden')}>
-          <nav className="shrink-0 space-y-0.5 p-2">
+          <nav className="shrink-0 space-y-1 p-3">
             <NavMenuItem
               icon={ArrowLeftRight}
               label={t('nav.switchWorkspace')}
@@ -682,14 +713,20 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           showCanvas={canvasOpen}
           center={<div ref={setDockedBottomSlot} className="h-full" />}
           canvas={
-            <div className="flex h-full flex-col bg-[var(--background)]">
+            <div className="flex h-full flex-col bg-[var(--card)]">
               <CanvasHeader
                 view={canvasView}
+                title={canvasView === 'preview' ? (activeFileTab?.split('/').pop() ?? undefined) : undefined}
                 onViewChange={changeCanvasView}
                 onCollapse={() => toggleCanvas(false)}
               />
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                {canvasView === 'overview' && <CanvasOverview />}
+              <div className={cn('min-h-0 flex-1', canvasView === 'preview' ? 'overflow-hidden' : 'overflow-y-auto')}>
+                {/* Preview view stays mounted (CSS-hidden) so opened artifact
+                    tabs survive flips back to 概览/浏览器. */}
+                <div className={cn('h-full', canvasView !== 'preview' && 'hidden')}>
+                  <EditorPanel projectId={projectId} mode="editor-only" hideHeader />
+                </div>
+                {canvasView === 'overview' && <CanvasOverview onOpenArtifact={handleOpenArtifact} />}
                 {canvasView === 'browser' && <CanvasBrowserView />}
               </div>
             </div>
@@ -705,12 +742,18 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         )}
       </div>
 
-      {/* Other tabs — keep the original conditional-render behavior (they get destroyed/rebuilt on switch) */}
+      {/* Other tabs — keep the original conditional-render behavior (they get destroyed/rebuilt on switch).
+          Secondary pages render as a clean white page: --background is locally
+          overridden to white so every panel inside (sidebars, editors, settings)
+          stops painting the home's blue-gray canvas color. The `secondary-page`
+          class scopes the font-size remap in globals.css (11/12px → 12/13px,
+          WorkBuddy reading sizes). */}
       {!isExplorer && !maximized && (
-        nonExplorerHasSidebar ? (
+        <div className="secondary-page flex min-w-0 flex-1 [--background:#ffffff]">
+        {nonExplorerHasSidebar ? (
           <PanelGroup direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
             <Panel defaultSize={22} minSize={15} maxSize={40}>
-              <div className="h-full overflow-hidden">
+              <div className="h-full overflow-hidden border-r border-[var(--border)]">
                 {activeTab === 'source-control' && <SourceControlSidebar />}
                 {activeTab === 'skills' && <SkillsSidebar />}
                 {activeTab === 'channels' && <ChannelsSidebar />}
@@ -727,7 +770,8 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
           <div className="flex-1 min-w-0 overflow-hidden">
             <NonExplorerMainArea activeTab={activeTab} />
           </div>
-        )
+        )}
+        </div>
       )}
 
       {/* 切换空间 — folder picker (same dialog the old Explorer sidebar used) */}
@@ -825,12 +869,28 @@ function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
   return null
 }
 
-type CanvasView = 'overview' | 'browser'
+type CanvasView = 'overview' | 'browser' | 'preview'
+
+/** Binary/preview-registered extensions open in the artifact preview (same
+ *  routing the old workspace editor used); everything else is read as text. */
+const NON_TEXT_FALLBACKS = new Set([
+  'tiff', 'tif',
+  'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'exe', 'dll', 'so', 'dylib', 'o', 'a', 'class', 'pyc', 'wasm',
+])
+const PREVIEW_EXTS = new Set(registeredExtensions())
+function isBinaryPath(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  return PREVIEW_EXTS.has(ext) || NON_TEXT_FALLBACKS.has(ext)
+}
 
 /** Canvas column header — WorkBuddy-style ☰ view switcher （概览 / 浏览器)
- *  plus the panel collapse control. */
-function CanvasHeader({ view, onViewChange, onCollapse }: {
+ *  plus the panel collapse control. `title` overrides the view label (the
+ *  artifact preview shows the open file's name). */
+function CanvasHeader({ view, title, onViewChange, onCollapse }: {
   view: CanvasView
+  title?: string
   onViewChange: (v: CanvasView) => void
   onCollapse: () => void
 }) {
@@ -881,7 +941,7 @@ function CanvasHeader({ view, onViewChange, onCollapse }: {
           </div>
         )}
       </div>
-      <span className="text-sm font-medium text-[var(--foreground)]">{current?.label}</span>
+      <span className="truncate text-sm font-medium text-[var(--foreground)]">{title ?? current?.label}</span>
       <div className="flex-1" />
       <button
         onClick={onCollapse}
@@ -920,7 +980,7 @@ function CanvasBrowserView() {
       <div className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] p-2">
         <button
           onClick={() => { if (iframeRef.current && url) iframeRef.current.src = url }}
-          title="Reload"
+          title={t('ui.reload')}
           className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
         >
           <RefreshCw className="h-3.5 w-3.5" />

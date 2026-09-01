@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { SessionSidebar, useExplorerSessions } from './session-list'
 import { useSessionController } from './session-controller'
 import { useChatStore } from '@/features/chat/chat-store'
@@ -28,28 +30,35 @@ export function SessionNavSection({ onOpenSession }: { onOpenSession?: () => voi
 
   const handleDelete = async (sid: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!(await confirmAction('Delete this session? Its history cannot be recovered.'))) return
+    if (!(await confirmAction(t('sessions.deleteConfirm')))) return
     deleteSession(sid)
     await removeSession(sid)
   }
 
+  const [listOpen, setListOpen] = useState(true)
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center px-3 pt-2 pb-1">
-        <span className="text-xs font-medium text-[var(--muted-foreground)]">
-          {t('sessions.tasks')} ({sessions.length})
-        </span>
-      </div>
-      <SessionSidebar
-        sessions={sessions}
-        currentSessionId={sessionId}
-        loadingSessionId={loadingSessionId}
-        onSelect={handleSelect}
-        onDelete={handleDelete}
-        onLoadMore={loadMore}
-        hasMore={hasMore}
-        loadingMore={loadingMore}
-      />
+      {/* WorkBuddy-style collapsible section header: 任务 (N) ⌄ */}
+      <button
+        onClick={() => setListOpen(!listOpen)}
+        className="flex w-full shrink-0 items-center gap-1 px-3 pt-2 pb-1 text-xs font-normal text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+      >
+        {t('sessions.tasks')} ({sessions.length})
+        {listOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+      </button>
+      {listOpen && (
+        <SessionSidebar
+          sessions={sessions}
+          currentSessionId={sessionId}
+          loadingSessionId={loadingSessionId}
+          onSelect={handleSelect}
+          onDelete={handleDelete}
+          onLoadMore={loadMore}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+        />
+      )}
     </div>
   )
 }

@@ -580,7 +580,7 @@ export function AgentForm({
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.systemPrompt')}</h3>
-          <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.systemPromptHint')}</span>
+          <span className="text-[11px] text-[var(--muted-foreground)]">{t('agent.systemPromptHint')}</span>
         </div>
         <textarea
           value={String(data.system_prompt ?? '')}
@@ -600,7 +600,7 @@ export function AgentForm({
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{t('agent.team')}</h3>
-          <span className="text-[9px] text-[var(--muted-foreground)] opacity-60">{t('agent.teamHint')}</span>
+          <span className="text-[11px] text-[var(--muted-foreground)]">{t('agent.teamHint')}</span>
         </div>
         <div className="flex flex-wrap gap-2">
             {allAgents.map((a) => {

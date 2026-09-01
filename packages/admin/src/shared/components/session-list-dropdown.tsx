@@ -81,7 +81,7 @@ export function SessionListDropdown({
     <>
       <button
         onClick={onToggle}
-        title="Session history"
+        title={t('sessions.history')}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
       >
         <History className="h-4 w-4" />
@@ -92,27 +92,27 @@ export function SessionListDropdown({
         <>
           <div className="fixed inset-0 z-20" onClick={close} />
           <div className={cn(
-            'absolute z-30 max-h-64 overflow-y-auto border border-[var(--border)] bg-[var(--background)] shadow-lg',
+            'absolute z-30 max-h-64 overflow-y-auto border border-[var(--border)] bg-[var(--card)] shadow-lg',
             direction === 'up'
               ? 'bottom-full left-0 mb-0.5 min-w-[280px] rounded-t-lg border-b-0'
               : 'top-full left-0 right-0 mt-0.5 rounded-b-lg border-t-0',
           )}>
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--border)]">
               <span className="text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                Recent Sessions
+                {t('sessions.recent')}
               </span>
               {onNew && (
                 <button
                   onClick={() => { onNew(); close() }}
                   className="text-[10px] text-[var(--primary)] hover:underline"
                 >
-                  + New
+                  {t('sessions.newShort')}
                 </button>
               )}
             </div>
             {sessions.length === 0 ? (
               <div className="px-3 py-4 text-center text-[10px] text-[var(--muted-foreground)]">
-                No sessions yet
+                {t('sessions.empty')}
               </div>
             ) : (
               sessions.map((s) => (
@@ -126,11 +126,11 @@ export function SessionListDropdown({
                 >
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] text-[var(--foreground)] truncate">
-                      {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                      {s.goalSessionId && <span title={t('ui.goalWorker')} className="mr-1">🎯</span>}
                       {s.title}
                     </p>
                     <p className="text-[9px] text-[var(--muted-foreground)]">
-                      {s.exchangeCount} msgs · {formatRelativeTime(s.updatedAt, t)}
+                      {s.exchangeCount} {t('ui.msgs')} · {formatRelativeTime(s.updatedAt, t)}
                       {typeof s.agentSnapshot?.model === 'string' && (
                         <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
                       )}
@@ -148,9 +148,9 @@ export function SessionListDropdown({
             {hasMore && (
               <div ref={sentinelRef} className="flex items-center justify-center py-2 text-[9px] text-[var(--muted-foreground)]">
                 {loadingMore ? (
-                  <><Loader2 className="h-2.5 w-2.5 animate-spin mr-1" /> Loading…</>
+                  <><Loader2 className="h-2.5 w-2.5 animate-spin mr-1" /> {t('ui.loading')}</>
                 ) : (
-                  <span className="opacity-50">scroll for more</span>
+                  <span className="opacity-50">{t('ui.scrollMore')}</span>
                 )}
               </div>
             )}
@@ -163,6 +163,7 @@ export function SessionListDropdown({
 
 /** Inline link shown in empty chat state */
 export function SessionHistoryLink({ count, onClick }: { count: number; onClick: () => void }) {
+  const t = useT()
   if (count === 0) return null
   return (
     <button
@@ -170,7 +171,7 @@ export function SessionHistoryLink({ count, onClick }: { count: number; onClick:
       className="flex items-center gap-1 text-[10px] text-[var(--primary)] hover:underline"
     >
       <History className="h-3 w-3" />
-      {count} previous session{count > 1 ? 's' : ''}
+      {t('sessions.previousCount', { n: count })}
     </button>
   )
 }

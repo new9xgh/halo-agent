@@ -361,11 +361,11 @@ function createWindow() {
     height: 840,
     title: '元轴',
     ...(fs.existsSync(windowIcon) ? { icon: windowIcon } : {}),
-    // Admin UI defaults to the light theme (--background: #f7f7f5). Pre-paint
+    // Admin UI defaults to the light theme (--background: #ffffff). Pre-paint
     // the same tone so the first frame doesn't flash dark; users who switch
     // to a dark theme see a brief light flash instead (theme is applied by
     // the inline script before first paint, so this only covers boot).
-    backgroundColor: '#f7f7f5',
+    backgroundColor: '#ffffff',
     webPreferences: {
       // contextIsolation:false so preload can patch window.alert/confirm
       // directly. Safe here because we only ever load our own server origin

@@ -26,7 +26,7 @@ export function FileMentionPicker({ matches, selectedIndex, onSelect, dirs = fal
   return (
     <div
       ref={listRef}
-      className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-20"
+      className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-lg z-20"
     >
       {matches.map((path, i) => {
         const fileIcon = getFileIcon(path)

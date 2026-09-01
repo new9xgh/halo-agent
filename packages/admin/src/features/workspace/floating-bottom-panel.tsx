@@ -140,7 +140,7 @@ export function FloatingBottomPanel({ slotRef, dragHandleRef }: FloatingBottomPa
 
   return (
     <div
-      className="fixed z-50 flex flex-col rounded-md border border-[var(--border)] bg-[var(--background)] shadow-2xl"
+      className="fixed z-50 flex flex-col rounded-md border border-[var(--border)] bg-[var(--card)] shadow-2xl"
       style={style}
     >
       <div ref={slotRef} className="min-h-0 flex-1 overflow-hidden rounded-md" />

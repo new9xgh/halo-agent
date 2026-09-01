@@ -51,6 +51,7 @@ import {
 } from '../paths.js'
 import { config } from '../config.js'
 import { cleanChildEnv } from '../child-env.js'
+import { resolveHaloCli, type HaloCli } from '../halo-cli.js'
 
 type Mode = 'run' | 'apply'
 
@@ -146,18 +147,6 @@ function loadRunRow(id: string): {
   return row
 }
 
-/** Resolve the `halo` cli executable. Override via $HALO_CLI for dev.
- *  On Windows we return the explicit `halo.cmd`, not the bare `halo`:
- *  the desktop NSIS installer drops `halo.cmd` (cli launcher) and
- *  `Halo.exe` (the GUI) into the same $INSTDIR, both on PATH. PATHEXT
- *  ranks `.EXE` above `.CMD`, so a bare `halo` resolves to the GUI —
- *  which relaunches the app and grabs the global server.lock instead of
- *  running the cli. The `.cmd` suffix forces PATH to the launcher. */
-function resolveHaloCli(): string {
-  if (process.env.HALO_CLI) return process.env.HALO_CLI
-  return process.platform === 'win32' ? 'halo.cmd' : 'halo'
-}
-
 interface CliResult {
   exitCode: number
   stdout: string
@@ -184,17 +173,21 @@ interface CliResult {
  * if it doesn't exit within the grace window.
  */
 function spawnProc(
-  bin: string,
+  cli: HaloCli,
   args: string[],
   logFd: number,
   teePath?: string,
   stdinInput?: string,
   timeoutSec?: number,
 ): Promise<CliResult> {
+  // prefixArgs carries the repo-local cli script path when resolveHaloCli
+  // fell back to `node <repo>/packages/cli/dist/index.js` (dev checkout with
+  // no `halo` on PATH) — transparent to every caller.
+  const fullArgs = [...cli.prefixArgs, ...args]
   // When the prompt is passed via stdin (long briefs — see callers), no arg is
   // omitted; otherwise the last arg is the prompt and we elide it from the log.
-  const loggedArgs = stdinInput === undefined ? args.slice(0, -1) : args
-  writeLog(logFd, `[wrapper] $ ${bin} ${loggedArgs.join(' ')}${stdinInput === undefined ? ' <last-arg-omitted>' : ' <prompt-on-stdin>'}${timeoutSec ? ` (timeout ${timeoutSec}s)` : ''}\n`)
+  const loggedArgs = stdinInput === undefined ? fullArgs.slice(0, -1) : fullArgs
+  writeLog(logFd, `[wrapper] $ ${cli.bin} ${loggedArgs.join(' ')}${stdinInput === undefined ? ' <last-arg-omitted>' : ' <prompt-on-stdin>'}${timeoutSec ? ` (timeout ${timeoutSec}s)` : ''}\n`)
   // tee both streams to a per-run sub-cli log when teePath is given. Caller
   // writes its own header into the file (phase markers etc.) before calling.
   // We don't shell-redirect (`>> file`) because we still need the in-memory
@@ -204,9 +197,9 @@ function spawnProc(
   // (CVE-2024-27980). Route through `cmd.exe /c`, which Node docs recommend for
   // batch files; it quotes space-containing argv itself, so `-w "C:\a b\ws"`
   // survives (a plain `shell:true` would word-split the path instead).
-  const [spawnBin, spawnArgs] = process.platform === 'win32' && bin.endsWith('.cmd')
-    ? ['cmd.exe', ['/c', bin, ...args]]
-    : [bin, args]
+  const [spawnBin, spawnArgs] = process.platform === 'win32' && cli.bin.endsWith('.cmd')
+    ? ['cmd.exe', ['/c', cli.bin, ...fullArgs]]
+    : [cli.bin, fullArgs]
   return new Promise((resolve) => {
     const child = spawn(spawnBin, spawnArgs, {
       // Pipe stdin only when we have input to write — the cli reads a prompt

@@ -21,7 +21,7 @@ export function CredentialsModal({ projectId, onClose, onSaved }: CredentialsMod
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        className="w-[460px] rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl"
+        className="w-[460px] rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">

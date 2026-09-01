@@ -28,6 +28,7 @@ interface AgentOption {
 }
 
 function AgentSelector() {
+  const t = useT()
   const selectedAgentId = useChatStore((s) => s.selectedAgentId)
   const sessionId = useChatStore((s) => s.sessionId)
   const isStreaming = useChatStore((s) => s.isStreaming)
@@ -96,7 +97,7 @@ function AgentSelector() {
       <button
         onClick={() => !locked && !isStreaming && setOpen(!open)}
         disabled={locked || isStreaming}
-        title={locked ? 'Agent is locked to current session. Start a new session to switch.' : 'Select agent'}
+        title={locked ? t('chat.agentLocked') : t('chat.selectAgent')}
         className={cn(
           'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors',
           locked ? 'text-[var(--muted-foreground)] opacity-50 cursor-default' : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
@@ -107,7 +108,7 @@ function AgentSelector() {
         {!locked && <ChevronDown className="h-2.5 w-2.5" />}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 mb-1 min-w-[160px] max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg z-30">
+        <div className="absolute bottom-full left-0 mb-1 min-w-[160px] max-h-60 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-lg z-30">
           {agents.map((a) => (
             <button
               key={`${a.id}:${a.scope}`}
@@ -347,23 +348,23 @@ export function ChatPanel() {
   }, [])
 
   return (
-    <div className="flex h-full min-h-0 bg-[var(--background)]">
+    <div className="flex h-full min-h-0 bg-[var(--card)]">
       {/* Chat column — messages + composer */}
       <div className="flex h-full min-w-0 flex-1 flex-col">
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
           {loadingSessionId ? (
             <div className="flex flex-col items-center justify-center gap-2 py-8 text-xs text-[var(--muted-foreground)]">
               <div className="flex items-center">
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Loading session...
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> {t('chat.loadingSession')}
               </div>
               {slowLoading && (
                 <div className="flex items-center gap-2">
-                  <span>Slow network — still loading…</span>
+                  <span>{t('chat.slowNetwork')}</span>
                   <button
                     onClick={() => loadSession(loadingSessionId)}
                     className="text-[var(--primary)] hover:underline"
                   >
-                    Retry
+                    {t('chat.retry')}
                   </button>
                 </div>
               )}
@@ -434,7 +435,7 @@ export function ChatPanel() {
                     sidebar was closed and the workspace had no sessions yet. */}
                 <button
                   onClick={() => setSidebar(!sidebarOpen)}
-                  title={sidebarOpen ? 'Hide session list' : 'Show session list'}
+                  title={sidebarOpen ? t('chat.hideSessionList') : t('chat.showSessionList')}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] relative"
                 >
                   <History className="h-4 w-4" />
@@ -442,7 +443,7 @@ export function ChatPanel() {
                 </button>
                 <button
                   onClick={handleNew}
-                  title="New session"
+                  title={t('sessions.new')}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                 >
                   <Plus className="h-4 w-4" />

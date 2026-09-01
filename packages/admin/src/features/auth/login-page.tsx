@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import { useT } from '@/shared/i18n'
 
 interface LoginPageProps {
   onSuccess: () => void
 }
 
 export function LoginPage({ onSuccess }: LoginPageProps) {
+  const t = useT()
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -30,16 +32,16 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
         if (res.ok) {
           onSuccess()
         } else {
-          setError('Incorrect password')
+          setError(t('login.incorrectPassword'))
           setPassword('')
         }
       } catch {
-        setError('Connection failed')
+        setError(t('login.connectionFailed'))
       } finally {
         setLoading(false)
       }
     },
-    [password, onSuccess],
+    [password, onSuccess, t],
   )
 
   return (
@@ -47,10 +49,10 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
       <div className="w-full max-w-sm px-6">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--secondary)]">
-            <img src="/icon.png" alt="元轴" className="h-9 w-9" />
+            <img src="/icon.png" alt={t('login.brand')} className="h-9 w-9" />
           </div>
-          <h1 className="text-xl font-semibold text-[var(--foreground)]">元轴</h1>
-          <p className="mt-1 text-sm text-[var(--muted-foreground)]">Enter password to access workspace</p>
+          <h1 className="text-xl font-semibold text-[var(--foreground)]">{t('login.brand')}</h1>
+          <p className="mt-1 text-sm text-[var(--muted-foreground)]">{t('login.subtitle')}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="mt-8">
@@ -58,7 +60,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            placeholder={t('login.password')}
             autoFocus
             className="w-full rounded-md border border-[var(--border)] bg-[var(--secondary)] px-3 py-2.5 text-sm text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)]"
           />
@@ -70,7 +72,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
             disabled={loading || !password.trim()}
             className="mt-4 w-full rounded-md bg-[var(--primary)] px-3 py-2.5 text-sm font-medium text-[var(--primary-foreground)] transition-colors hover:opacity-90 disabled:opacity-50"
           >
-            {loading ? 'Verifying...' : 'Login'}
+            {loading ? t('login.verifying') : t('login.submit')}
           </button>
         </form>
       </div>

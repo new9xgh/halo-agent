@@ -25,6 +25,7 @@ import { rawSqlite } from '../db/raw-sqlite.js'
 import { dispatchToTargets, type CronTarget, type DispatchResult } from './dispatcher.js'
 import { broadcast } from '../ws/broadcast.js'
 import { cleanChildEnv } from '../child-env.js'
+import { resolveHaloCli } from '../halo-cli.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -57,17 +58,8 @@ const RUNS_PER_JOB_KEEP = 100
  *  disk usage, the row is cheap. */
 const LOG_RETENTION_DAYS = 30
 
-/** Resolve the `halo` cli executable. Override via $HALO_CLI for dev.
- *  On Windows we return the explicit `halo.cmd`, not the bare `halo`:
- *  the desktop NSIS installer drops `halo.cmd` (cli launcher) and
- *  `Halo.exe` (the GUI) into the same $INSTDIR, both on PATH. PATHEXT
- *  ranks `.EXE` above `.CMD`, so a bare `halo` resolves to the GUI —
- *  which relaunches the app and grabs the global server.lock instead of
- *  running the cli. The `.cmd` suffix forces PATH to the launcher. */
-function resolveHaloCli(): string {
-  if (process.env.HALO_CLI) return process.env.HALO_CLI
-  return process.platform === 'win32' ? 'halo.cmd' : 'halo'
-}
+/** Resolve the `halo` cli executable — shared with the evo wrapper, see
+ *  ../halo-cli.ts. Override via $HALO_CLI for dev. */
 
 /** POSIX: list every live descendant of `rootPid` (children, grandchildren, …)
  *  from one `ps` snapshot. A ppid walk — NOT a process-group kill — because the
@@ -593,13 +585,13 @@ export async function runJob(jobId: string, triggerKind: 'scheduled' | 'manual')
   const sessionId = `cron-${job.id}`
   // Prompt goes on stdin (not argv) so a long cron prompt can't overflow the
   // Windows command-line limit; the cli reads stdin when it's not a TTY.
-  const args = ['cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath]
+  const args = [...cli.prefixArgs, 'cli', '-a', job.agentId, '-s', sessionId, '-w', job.workspacePath]
   // Windows can't spawn a `.cmd` directly (Node ≥21.7 → EINVAL). Route through
   // `cmd.exe /c`, which Node docs recommend for batch files and quotes
   // space-containing argv itself (a plain `shell:true` word-splits the path).
-  const [spawnBin, spawnArgs] = process.platform === 'win32' && cli.endsWith('.cmd')
-    ? ['cmd.exe', ['/c', cli, ...args]]
-    : [cli, args]
+  const [spawnBin, spawnArgs] = process.platform === 'win32' && cli.bin.endsWith('.cmd')
+    ? ['cmd.exe', ['/c', cli.bin, ...args]]
+    : [cli.bin, args]
 
   // Per-job timeout override (cron_jobs.timeout_sec, validated 60–21600 at
   // the write points); NULL falls back to the 3600s default.
