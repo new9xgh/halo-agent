@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Halo — First-time Setup</title>
+  <title>元轴 — First-time Setup</title>
   <style>
     /* Match admin UI dark theme — see packages/admin/src/app/globals.css. */
     * { box-sizing: border-box; }
@@ -15,7 +15,7 @@
       min-height: 100vh;
     }
     h1 { display: flex; align-items: center; gap: 12px; font-size: 20px; margin: 0 0 18px; }
-    h1 svg { flex: none; }
+    h1 img { flex: none; }
     p.lead { color: #a1a1aa; margin: 0 0 20px; line-height: 1.5; }
     label { display: block; font-weight: 500; margin: 14px 0 6px; color: #ededed; }
     input[type="password"] {
@@ -41,23 +41,10 @@
 </head>
 <body>
   <h1>
-    <svg width="32" height="32" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="core_su" cx="42%" cy="38%" r="68%"><stop offset="0" stop-color="#d8e6ff"/><stop offset="0.35" stop-color="#8aa6ff"/><stop offset="1" stop-color="#9b6bff"/></radialGradient>
-        <linearGradient id="ring_su" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6f9bff"/><stop offset="1" stop-color="#a06bff"/></linearGradient>
-        <linearGradient id="bg_su" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e1430"/><stop offset="1" stop-color="#070a16"/></linearGradient>
-        <clipPath id="sq_su"><rect x="104" y="104" width="816" height="816" rx="182"/></clipPath>
-      </defs>
-      <g clip-path="url(#sq_su)">
-        <rect x="104" y="104" width="816" height="816" fill="url(#bg_su)"/>
-        <circle cx="512" cy="512" r="118" fill="none" stroke="url(#ring_su)" stroke-width="15" opacity="0.34"/>
-        <circle cx="512" cy="512" r="176" fill="none" stroke="url(#ring_su)" stroke-width="12" opacity="0.20"/>
-        <circle cx="512" cy="512" r="62" fill="url(#core_su)"/>
-      </g>
-    </svg>
-    Welcome to Halo
+    <img src="../resources/icon.png" width="32" height="32" alt="" onerror="this.style.display='none'">
+    Welcome to 元轴
   </h1>
-  <p class="lead">Set an admin password to protect your workspace. You'll use it to sign in to the Halo UI.</p>
+  <p class="lead">Set an admin password to protect your workspace. You'll use it to sign in to the 元轴 UI.</p>
 
   <label for="pw1">Password</label>
   <input id="pw1" type="password" autocomplete="new-password" placeholder="At least 4 characters">

@@ -16,7 +16,7 @@ export function ChannelsSidebar() {
     <div className="flex h-full flex-col">
       <div className="flex h-10 items-center gap-2 border-b border-[var(--border)] px-3">
         <MessageCircle className="h-4 w-4 text-[var(--muted-foreground)]" />
-        <span className="text-sm font-medium text-[var(--foreground)]">Channels</span>
+        <span className="text-sm font-medium text-[var(--foreground)]">{t('nav.channels')}</span>
         <div className="flex-1" />
         <button
           onClick={() => bumpChannelBus()}

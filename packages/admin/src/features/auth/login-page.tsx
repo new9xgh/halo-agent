@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Lock } from 'lucide-react'
 
 interface LoginPageProps {
   onSuccess: () => void
@@ -48,9 +47,9 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
       <div className="w-full max-w-sm px-6">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--secondary)]">
-            <Lock className="h-7 w-7 text-[var(--foreground)]" />
+            <img src="/icon.png" alt="元轴" className="h-9 w-9" />
           </div>
-          <h1 className="text-xl font-semibold text-[var(--foreground)]">Halo</h1>
+          <h1 className="text-xl font-semibold text-[var(--foreground)]">元轴</h1>
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">Enter password to access workspace</p>
         </div>
 

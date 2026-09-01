@@ -9,15 +9,15 @@ import { useArchiveStore, loadOlderArchive } from './archive-store'
 import { refreshGoal } from './goal-store'
 import { useChat } from '@/features/chat/use-chat'
 import { refreshCommands } from './slash-commands'
-import { useExplorerSessions, SessionSidebar, SessionHistoryLink } from './session-list'
-import { Plus, Loader2, MessageSquare, Bot, ChevronDown, History } from 'lucide-react'
-import { wsClient } from '@/shared/ws-client'
+import { useExplorerSessions, SessionHistoryLink } from './session-list'
+import { useSessionController } from './session-controller'
+import { Plus, Loader2, Bot, ChevronDown, History } from 'lucide-react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useAgentBus } from '@/shared/agent-bus'
 import { isMainConversationMessage } from '@/shared/types'
 import { api } from '@/shared/api-client'
-import { cn, confirmAction } from '@/shared/utils'
+import { cn } from '@/shared/utils'
 import { useT } from '@/shared/i18n'
 
 interface AgentOption {
@@ -127,9 +127,9 @@ function AgentSelector() {
   )
 }
 
-/** Session sidebar open/closed — a global preference (unlike the per-project
- *  `halo_session_${projectId}` current-session keys). */
-const SIDEBAR_OPEN_KEY = 'halo_session_sidebar_open'
+/** Session list sidebar visibility + load pipeline live in the session
+ *  controller (shared with the full-height right panel rendered by
+ *  workspace-layout — see session-controller.ts). */
 
 /** Render window over the in-memory log, counted in exchanges (user turns).
  *  Opening a long session used to mount every exchange at once (one
@@ -142,59 +142,18 @@ const WINDOW_STEP_TURNS = 30
 
 export function ChatPanel() {
   const t = useT()
-  const { messages, sendMessage, isStreaming, clearSession, deleteSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
+  const { messages, sendMessage, isStreaming, clearSession, stopGeneration, interruptGeneration, pendingMessages, removePendingMessage, handleCommand, sessionId } = useChat()
   const scrollRef = useRef<HTMLDivElement>(null)
   const activeProject = useProjectStore((s) => s.activeProject)
-  // Session whose WS subscribe is in flight — cleared when the matching
-  // `state:snapshot` arrives (see effect below). Doubles as the loading flag.
-  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
-  // Bumped on every loadSession call (including a Retry of the same sid) so
-  // the snapshot-wait effect re-arms its 30s slow-network timer.
-  const [loadAttempt, setLoadAttempt] = useState(0)
-  const [slowLoading, setSlowLoading] = useState(false)
-  // Session list sidebar visibility — global preference, not per-project.
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    if (typeof window === 'undefined') return true
-    return localStorage.getItem(SIDEBAR_OPEN_KEY) !== 'false'
-  })
-  const { sessions, remove: removeSession, loadMore: loadMoreSessions, hasMore: hasMoreSessions, loadingMore: loadingMoreSessions } = useExplorerSessions()
-
-  const setSidebar = useCallback((open: boolean) => {
-    setSidebarOpen(open)
-    if (typeof window !== 'undefined') localStorage.setItem(SIDEBAR_OPEN_KEY, String(open))
-  }, [])
-
-  const loadSession = useCallback((sid: string) => {
-    if (!activeProject) return
-    setLoadingSessionId(sid)
-    setSlowLoading(false)
-    setLoadAttempt((n) => n + 1)
-    useChatStore.getState().setSessionId(sid)
-    useChatStore.getState().setMessages([])
-    wsClient.send({ type: 'subscribe', sessionId: sid, projectId: activeProject.id })
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(`halo_session_${activeProject.id}`, sid)
-    }
-  }, [activeProject])
-
-  // Real load completion: the server answers every subscribe with a
-  // `state:snapshot` (even for empty sessions — recentMessages: []), which is
-  // why we key off the snapshot instead of "messages arrived". Only a snapshot
-  // for the sid we're loading clears the state, so a late snapshot from a
-  // previous switch can't wipe a newer load. Past 30s we surface a slow-network
-  // hint + Retry, but keep waiting — the snapshot still clears everything.
-  useEffect(() => {
-    if (!loadingSessionId) return
-    const off = wsClient.on('state:snapshot', (data) => {
-      const snap = (data as { snapshot?: { sessionId?: string } }).snapshot
-      if (snap?.sessionId === loadingSessionId) {
-        setLoadingSessionId(null)
-        setSlowLoading(false)
-      }
-    })
-    const timer = setTimeout(() => setSlowLoading(true), 30_000)
-    return () => { off(); clearTimeout(timer) }
-  }, [loadingSessionId, loadAttempt])
+  // Session load pipeline + right-panel visibility — shared with the
+  // full-height SessionRightPanel via the controller store.
+  const loadingSessionId = useSessionController((s) => s.loadingSessionId)
+  const slowLoading = useSessionController((s) => s.slowLoading)
+  const loadSession = useSessionController((s) => s.loadSession)
+  const clearLoading = useSessionController((s) => s.clearLoading)
+  const sidebarOpen = useSessionController((s) => s.sidebarOpen)
+  const setSidebar = useSessionController((s) => s.setSidebar)
+  const { sessions } = useExplorerSessions()
 
   // Seed the goal banner / input lock on mount + project switch — live
   // updates ride the `goal:changed` WS push (state-handlers re-fetches).
@@ -205,20 +164,12 @@ export function ChatPanel() {
   const handleNew = useCallback(() => {
     // Drop any in-flight load — its snapshot (matched by sid) can't collide
     // with the fresh session, but the spinner must not linger over it.
-    setLoadingSessionId(null)
-    setSlowLoading(false)
+    clearLoading()
     clearSession()
     // Session lists refresh on the server's `session:cleared` reply (bus bump
     // in chat-handlers) — it lands after the cleared session is persisted, so
     // no timer guess is needed here.
-  }, [clearSession])
-
-  const handleDeleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!(await confirmAction('Delete this session? Its history cannot be recovered.'))) return
-    deleteSession(sid)
-    await removeSession(sid)
-  }, [deleteSession, removeSession])
+  }, [clearLoading, clearSession])
 
   // No streaming-completion refresh here: the server broadcasts
   // `session:changed` when a root turn settles (after its final persist —
@@ -418,17 +369,27 @@ export function ChatPanel() {
               )}
             </div>
           ) : mainMessages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <div className="rounded-full bg-[var(--secondary)] p-3">
-                <MessageSquare className="h-6 w-6 text-[var(--muted-foreground)]" />
-              </div>
+            /* WorkBuddy-style greeting: big title + hint + suggestion chips
+               that send immediately, replacing the old icon placeholder. */
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
               <div>
-                <p className="text-sm font-medium text-[var(--foreground)]">
-                  Start a conversation
+                <p className="text-xl font-semibold text-[var(--foreground)]">
+                  {t('chat.greeting')}
                 </p>
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Describe what you want to build, and agents will work together to deliver it.
+                <p className="mt-1.5 text-xs text-[var(--muted-foreground)]">
+                  {t('chat.greetingHint')}
                 </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {(['chat.suggest1', 'chat.suggest2', 'chat.suggest3'] as const).map((key) => (
+                  <button
+                    key={key}
+                    onClick={() => sendMessage(t(key))}
+                    className="rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:text-[var(--foreground)]"
+                  >
+                    {t(key)}
+                  </button>
+                ))}
               </div>
               <SessionHistoryLink count={sessions.length} onClick={() => setSidebar(true)} />
             </div>
@@ -492,21 +453,6 @@ export function ChatPanel() {
           />
         </div>
       </div>
-
-      {/* Right sidebar — session list */}
-      {sidebarOpen && (
-        <SessionSidebar
-          sessions={sessions}
-          currentSessionId={sessionId}
-          loadingSessionId={loadingSessionId}
-          onSelect={loadSession}
-          onDelete={handleDeleteSession}
-          onNew={handleNew}
-          onLoadMore={loadMoreSessions}
-          hasMore={hasMoreSessions}
-          loadingMore={loadingMoreSessions}
-        />
-      )}
     </div>
   )
 }

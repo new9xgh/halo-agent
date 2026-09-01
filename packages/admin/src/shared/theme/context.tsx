@@ -11,12 +11,14 @@ function isTheme(v: unknown): v is Theme {
 }
 
 /** Stamp the theme onto <html> so globals.css's [data-theme="…"] variable
- *  sets take effect. Mirrors the pre-paint inline script in layout.tsx —
- *  dark is the :root default, so the attribute is dropped rather than set. */
+ *  sets take effect. Mirrors the pre-paint inline script in layout.tsx. The
+ *  attribute is always set (light included): :root already carries the light
+ *  values as the attribute-less default, but the `[data-theme="light"]`
+ *  selectors in globals.css (status-color remap, prose-invert redirect) need
+ *  the attribute present to match. */
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return
-  if (theme === 'dark') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = theme
+  document.documentElement.dataset.theme = theme
 }
 
 const ThemeContext = createContext<{
@@ -44,13 +46,13 @@ export function useTheme() {
  * and overwrites the cache.
  */
 function detectInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'dark'
+  if (typeof window === 'undefined') return 'light'
   const stored = localStorage.getItem('halo_theme')
-  return isTheme(stored) ? stored : 'dark'
+  return isTheme(stored) ? stored : 'light'
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('dark')
+  const [theme, setThemeState] = useState<Theme>('light')
 
   // Initial mount: localStorage cache so the login page renders in the right
   // theme before auth. applyTheme is normally a no-op here (the layout.tsx
@@ -71,7 +73,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const generalSection = schema.sections.find((s) => s.namespaceId === 'general')
       const themeField = generalSection?.fields.find((f) => f.key === 'theme')
       const value = themeField?.value ?? themeField?.default ?? null
-      const next = isTheme(value) ? value : 'dark'
+      const next = isTheme(value) ? value : 'light'
       setThemeState(next)
       applyTheme(next)
       if (typeof window !== 'undefined') {

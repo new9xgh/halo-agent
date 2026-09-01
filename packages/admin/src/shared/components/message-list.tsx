@@ -13,7 +13,7 @@ import { useSessionViewStore } from '@/features/agents/agent-sessions-sidebar'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { wsClient } from '@/shared/ws-client'
 import { useT } from '@/shared/i18n'
-import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle } from 'lucide-react'
+import { Loader2, Copy, Check, ChevronDown, ChevronRight, Trash2, AlertTriangle, Bot } from 'lucide-react'
 
 /**
  * Resolve which (sessionId, projectId) a rendered message belongs to. MessageList
@@ -135,7 +135,7 @@ const ExchangeRow = memo(function ExchangeRow({
 }: { user: ChatMessage; responses: ChatMessage[]; debugMode?: boolean; userOrdinal: number; deletable: boolean }) {
   const deleted = !!user.deleted
   return (
-    <div className={cn('border-b border-[var(--border)]/50 last:border-b-0', deleted && 'opacity-50')}>
+    <div className={cn('pb-1', deleted && 'opacity-50')}>
       {user.role === 'user' ? (
         parseSubAgentReport(user.content) ? (
           <SubAgentReport content={user.content} userOrdinal={userOrdinal} deleted={deleted} messageId={user.id} deletable={deletable} />
@@ -334,8 +334,22 @@ function ExchangeResponses({ responses, debugMode }: { responses: ChatMessage[];
     return map
   }, [debugMode, responses])
 
+  // WorkBuddy-style agent header — shown once per exchange above the first
+  // assistant turn (pure notification groups get no header).
+  const firstAssistant = responses.find((m) => inferMessageType(m) === 'assistant')
+
   return (
-    <div className="px-3 py-2">
+    <div className="px-4 py-2">
+      {firstAssistant && (
+        <div className="flex items-center gap-2 pb-1.5 pt-1">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--secondary)]">
+            <Bot className="h-3.5 w-3.5 text-[var(--primary)]" />
+          </div>
+          <span className="text-sm font-medium text-[var(--foreground)]">
+            {firstAssistant.agentName ?? '元轴'}
+          </span>
+        </div>
+      )}
       {responses.map((msg) => (
         <MessageItem key={msg.id} message={msg} debugMode={debugMode} usages={usagesByMessage.get(msg.id)} />
       ))}
@@ -450,39 +464,79 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   if (hasBlocks) {
     const blocks = message.contentBlocks!
-    let toolSeen = 0
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i]
-      if (block.type === 'thinking' && block.text.trim() && debugMode) {
-        elements.push(<ThinkingBlock key={`b${i}`} text={block.text} />)
-      } else if (block.type === 'text' && block.text.trim()) {
-        elements.push(<TextBlock key={`b${i}`} text={block.text} />)
-      } else if (block.type === 'tool_call') {
-        toolSeen++
-        elements.push(<InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />)
-      }
-      // Insert usage badge at end of each turn (when next block has different turnId, or this is last block)
-      if (usageByTurn && block.turnId) {
-        const nextTurnId = blocks[i + 1]?.turnId
-        if (!nextTurnId || nextTurnId !== block.turnId) {
-          const u = usageByTurn.get(block.turnId)
-          if (u) elements.push(<UsageLine key={`u${block.turnId}`} message={u} />)
-        }
+    // WorkBuddy-style process collapse: once the turn settles, thinking +
+    // tool calls (and any text interleaved between them) fold into a single
+    // "已完成 <耗时> ⌄" row and only the trailing answer text stays visible.
+    // Streaming turns stay fully expanded; debug mode keeps the flat layout
+    // (its usage badges interleave per turn and don't fit the split).
+    let lastProcessIdx = -1
+    if (isAssistant && !message.streaming && !debugMode) {
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i]
+        if (b.type === 'tool_call' || (b.type === 'thinking' && b.text.trim())) lastProcessIdx = i
       }
     }
-    // Fallback: usages scoped to this message but whose turnId didn't match any block
-    if (usageByTurn) {
-      const rendered = new Set(blocks.map((b) => b.turnId).filter(Boolean))
-      for (const [turnId, u] of usageByTurn) {
-        if (!rendered.has(turnId)) elements.push(<UsageLine key={`u${turnId}`} message={u} />)
+    if (lastProcessIdx >= 0) {
+      const processEls: React.ReactNode[] = []
+      const answerEls: React.ReactNode[] = []
+      let toolSeen = 0
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i]
+        let el: React.ReactNode = null
+        if (block.type === 'thinking' && block.text.trim()) {
+          el = <ThinkingBlock key={`b${i}`} text={block.text} />
+        } else if (block.type === 'text' && block.text.trim()) {
+          el = <TextBlock key={`b${i}`} text={block.text} />
+        } else if (block.type === 'tool_call') {
+          toolSeen++
+          el = <InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />
+        }
+        if (el) (i <= lastProcessIdx ? processEls : answerEls).push(el)
+      }
+      elements.push(
+        <ProcessCollapse key="process" durationMs={message.durationMs}>{processEls}</ProcessCollapse>,
+        ...answerEls,
+      )
+    } else {
+      let toolSeen = 0
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i]
+        if (block.type === 'thinking' && block.text.trim() && debugMode) {
+          elements.push(<ThinkingBlock key={`b${i}`} text={block.text} />)
+        } else if (block.type === 'text' && block.text.trim()) {
+          elements.push(<TextBlock key={`b${i}`} text={block.text} />)
+        } else if (block.type === 'tool_call') {
+          toolSeen++
+          elements.push(<InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />)
+        }
+        // Insert usage badge at end of each turn (when next block has different turnId, or this is last block)
+        if (usageByTurn && block.turnId) {
+          const nextTurnId = blocks[i + 1]?.turnId
+          if (!nextTurnId || nextTurnId !== block.turnId) {
+            const u = usageByTurn.get(block.turnId)
+            if (u) elements.push(<UsageLine key={`u${block.turnId}`} message={u} />)
+          }
+        }
+      }
+      // Fallback: usages scoped to this message but whose turnId didn't match any block
+      if (usageByTurn) {
+        const rendered = new Set(blocks.map((b) => b.turnId).filter(Boolean))
+        for (const [turnId, u] of usageByTurn) {
+          if (!rendered.has(turnId)) elements.push(<UsageLine key={`u${turnId}`} message={u} />)
+        }
       }
     }
   } else {
     // Legacy: no contentBlocks
     if (isAssistant && message.toolCalls && message.toolCalls.length > 0) {
-      message.toolCalls.forEach((tc, i) => {
-        elements.push(<InlineToolCall key={`tc${i}`} call={tc} isStreaming={message.streaming} isLast={i === message.toolCalls!.length - 1} />)
-      })
+      const calls = message.toolCalls.map((tc, i) => (
+        <InlineToolCall key={`tc${i}`} call={tc} isStreaming={message.streaming} isLast={i === message.toolCalls!.length - 1} />
+      ))
+      if (!message.streaming && !debugMode) {
+        elements.push(<ProcessCollapse key="process" durationMs={message.durationMs}>{calls}</ProcessCollapse>)
+      } else {
+        elements.push(...calls)
+      }
     }
     // Legacy: render usages scoped to this message (already partitioned by ExchangeResponses)
     if (usageByTurn) {
@@ -519,6 +573,39 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
 const PROSE_CLS = 'prose prose-sm prose-invert max-w-none prose-p:my-1.5 prose-headings:my-2 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-code:text-amber-300 prose-code:before:content-none prose-code:after:content-none prose-pre:bg-[var(--secondary)] prose-pre:border prose-pre:border-[var(--border)] prose-a:text-[var(--primary)] prose-code:bg-[var(--secondary)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-th:border prose-th:border-[var(--border)] prose-th:px-2 prose-th:py-1 prose-th:bg-[var(--secondary)] prose-td:border prose-td:border-[var(--border)] prose-td:px-2 prose-td:py-1'
 
+/** Turn duration in WorkBuddy's compact form: "4s" / "2m56s". Empty when the
+ *  message carries no durationMs (older persisted turns). */
+function formatProcessDuration(ms?: number): string {
+  if (ms == null) return ''
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m${s % 60}s`
+}
+
+/** Collapsed "已完成 <耗时>" row for a settled turn's process (thinking + tool
+ *  calls + interleaved narration). Default collapsed — click to expand. */
+function ProcessCollapse({ durationMs, children }: { durationMs?: number; children: React.ReactNode }) {
+  const tr = useT()
+  const [open, setOpen] = useState(false)
+  const duration = formatProcessDuration(durationMs)
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+      >
+        <span>{tr('chat.processDone')}{duration && ` ${duration}`}</span>
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+      </button>
+      {open && (
+        <div className="mt-1 border-l-2 border-[var(--border)] pl-3">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ThinkingBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -538,10 +625,9 @@ function ThinkingBlock({ text }: { text: string }) {
   )
 }
 
-/** User exchange header — the sticky text bubble with media chips in a non-sticky row below.
- *  The chips are rendered outside the sticky block so that the next exchange's sticky header
- *  doesn't cover them when scrolled.
- */
+/** User exchange header — WorkBuddy-style right-aligned grey bubble, with media
+ *  chips in a row below. Copy/Delete actions appear on hover at the bubble's
+ *  top-right corner. */
 function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messageId, deletable, sendFailed }: ExchangeActionProps & { content: string; localImages?: string[]; sendFailed?: boolean }) {
   const tr = useT()
   const { text, media } = useMemo(() => parseMediaMarkers(content), [content])
@@ -549,10 +635,8 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
 
   return (
     <>
-      {/* accent bg/fg: on dark these resolve to the old slate-800 bg and a
-          near-identical slate fg; on other themes they follow the palette */}
-      <div className={cn('group sticky top-0 z-10 bg-[var(--accent)] border-b border-[var(--border)] border-l-2 px-4 py-2.5 shadow-sm', deleted || sendFailed ? 'border-l-red-500/60' : 'border-l-blue-500')}>
-        <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5">
+      <div className="group relative flex justify-end px-4 pt-3">
+        <div className="absolute -top-1 right-4 z-20 flex items-center gap-0.5">
           {deleted && <span className={cn('mr-1', DELETED_BADGE_CLS)}>deleted</span>}
           {/* Ack/resend gave up — the server never confirmed this message
               (zombie-socket loss). Make the failure visible on the bubble
@@ -564,29 +648,31 @@ function UserExchangeHeader({ content, localImages, userOrdinal, deleted, messag
           )}
           <ExchangeActions copyText={text} userOrdinal={userOrdinal} deleted={deleted} messageId={messageId} deletable={deletable} />
         </div>
-        <CollapsibleContent maxLines={2} toggleClassName="top-auto bottom-0">
-          <div className={cn('text-xs leading-relaxed whitespace-pre-wrap pr-14', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--accent-foreground)]')}>
-            {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
-          </div>
-        </CollapsibleContent>
+        <div className={cn('max-w-[85%] rounded-2xl rounded-tr-sm bg-[var(--secondary)] px-3.5 py-2 shadow-sm', deleted || sendFailed ? 'ring-1 ring-red-500/40' : '')}>
+          <CollapsibleContent maxLines={4} toggleClassName="top-auto bottom-0">
+            <div className={cn('text-sm leading-relaxed whitespace-pre-wrap', deleted ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--foreground)]')}>
+              {text || (media.length > 0 || localImages?.length ? '(attachment)' : '')}
+            </div>
+          </CollapsibleContent>
+        </div>
       </div>
       {/* Client-only inline previews (e.g. desktop screen captures) — render
           straight from the data URL, click to zoom. */}
       {localImages && localImages.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-4 py-2 border-b border-[var(--border)]/30">
+        <div className="flex flex-wrap justify-end gap-2 px-4 py-2">
           {localImages.map((src, i) => (
             <img
               key={i}
               src={src}
               alt="screenshot"
               onClick={() => setZoom(src)}
-              className="max-h-40 max-w-[240px] cursor-pointer rounded border border-[var(--border)] object-contain hover:ring-1 hover:ring-[var(--primary)]/40"
+              className="max-h-40 max-w-[240px] cursor-pointer rounded-lg border border-[var(--border)] object-contain hover:ring-1 hover:ring-[var(--primary)]/40"
             />
           ))}
         </div>
       )}
       {media.length > 0 && (
-        <div className="px-4 py-2 border-b border-[var(--border)]/30">
+        <div className="flex justify-end px-4 py-2">
           <MediaAttachments media={media} />
         </div>
       )}

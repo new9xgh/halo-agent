@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Halo</title>
+  <title>元轴</title>
   <style>
     /* Match admin UI dark theme — see packages/admin/src/app/globals.css. */
     * { box-sizing: border-box; }
@@ -39,22 +39,11 @@
 </head>
 <body>
   <div class="logo">
-    <svg width="56" height="56" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="core_sp" cx="42%" cy="38%" r="68%"><stop offset="0" stop-color="#d8e6ff"/><stop offset="0.35" stop-color="#8aa6ff"/><stop offset="1" stop-color="#9b6bff"/></radialGradient>
-        <linearGradient id="ring_sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6f9bff"/><stop offset="1" stop-color="#a06bff"/></linearGradient>
-        <linearGradient id="bg_sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e1430"/><stop offset="1" stop-color="#070a16"/></linearGradient>
-        <clipPath id="sq_sp"><rect x="104" y="104" width="816" height="816" rx="182"/></clipPath>
-      </defs>
-      <g clip-path="url(#sq_sp)">
-        <rect x="104" y="104" width="816" height="816" fill="url(#bg_sp)"/>
-        <circle cx="512" cy="512" r="118" fill="none" stroke="url(#ring_sp)" stroke-width="15" opacity="0.34"/>
-        <circle cx="512" cy="512" r="176" fill="none" stroke="url(#ring_sp)" stroke-width="12" opacity="0.20"/>
-        <circle cx="512" cy="512" r="62" fill="url(#core_sp)"/>
-      </g>
-    </svg>
+    <!-- 元轴 brand mark — generated into resources/ by gen-icon.mjs; hidden
+         gracefully when the file isn't there (e.g. unpackaged dev run). -->
+    <img src="../resources/icon.png" width="56" height="56" alt="" onerror="this.style.display='none'">
   </div>
-  <div class="title">Halo</div>
+  <div class="title">元轴</div>
   <div class="bar"></div>
   <div class="status" id="status">Starting up…</div>
   <script>

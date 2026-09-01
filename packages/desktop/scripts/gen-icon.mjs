@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Generate platform-specific app icons from packages/admin/src/app/icon.svg.
+ * Generate platform-specific app icons from packages/admin/src/app/icon.png
+ * (元轴 brand mark, 256×256 source).
  *
  * Output:
  *   resources/icon.icns           — macOS .app/.dmg icon (when on macOS)
@@ -19,9 +20,9 @@ import sharp from 'sharp'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DESKTOP_ROOT = path.resolve(__dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
-const SVG_SRC = path.join(REPO_ROOT, 'packages', 'admin', 'src', 'app', 'icon.svg')
+const IMG_SRC = path.join(REPO_ROOT, 'packages', 'admin', 'src', 'app', 'icon.png')
 const RES_DIR = path.join(DESKTOP_ROOT, 'resources')
-const ICONSET = path.join(RES_DIR, 'Halo.iconset')
+const ICONSET = path.join(RES_DIR, 'yuanzhou.iconset')
 
 const SIZES = [
   ['icon_16x16.png',       16],
@@ -36,8 +37,8 @@ const SIZES = [
   ['icon_512x512@2x.png',1024],
 ]
 
-if (!fs.existsSync(SVG_SRC)) {
-  console.error(`[gen-icon] missing ${SVG_SRC}`)
+if (!fs.existsSync(IMG_SRC)) {
+  console.error(`[gen-icon] missing ${IMG_SRC}`)
   process.exit(1)
 }
 
@@ -45,17 +46,17 @@ fs.mkdirSync(RES_DIR, { recursive: true })
 fs.rmSync(ICONSET, { recursive: true, force: true })
 fs.mkdirSync(ICONSET, { recursive: true })
 
-const svgBuf = fs.readFileSync(SVG_SRC)
+const imgBuf = fs.readFileSync(IMG_SRC)
 
 for (const [name, size] of SIZES) {
-  await sharp(svgBuf, { density: 384 })
+  await sharp(imgBuf)
     .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png()
     .toFile(path.join(ICONSET, name))
 }
 
 // Render a generic 512 PNG too (for non-icns consumers like the alert overlay).
-await sharp(svgBuf, { density: 384 })
+await sharp(imgBuf)
   .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
   .png()
   .toFile(path.join(RES_DIR, 'icon.png'))
@@ -75,7 +76,7 @@ if (process.platform === 'darwin') {
   const icoPngs = []
   for (const sz of icoSizes) {
     const out = path.join(ICONSET, `ico_${sz}.png`)
-    await sharp(svgBuf, { density: 384 })
+    await sharp(imgBuf)
       .resize(sz, sz, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toFile(out)

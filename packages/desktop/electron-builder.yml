@@ -1,5 +1,5 @@
 appId: com.turmind.halo
-productName: Halo
+productName: 元轴
 directories:
   output: dist
 # Skip @electron/rebuild on every build: the desktop package has no native

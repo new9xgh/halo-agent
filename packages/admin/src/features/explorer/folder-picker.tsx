@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/shared/api-client'
 import { Folder, ArrowUp, X, Home } from 'lucide-react'
 import { cn } from '@/shared/utils'
+import { useT } from '@/shared/i18n'
 
 interface FolderPickerProps {
   initialPath?: string
@@ -12,6 +13,7 @@ interface FolderPickerProps {
 }
 
 export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerProps) {
+  const t = useT()
   const [currentPath, setCurrentPath] = useState(initialPath ?? '')
   const [parentPath, setParentPath] = useState('')
   const [entries, setEntries] = useState<Array<{ name: string; path: string }>>([])
@@ -48,7 +50,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
-          <h3 className="text-sm font-medium text-[var(--foreground)]">Open Workspace</h3>
+          <h3 className="text-sm font-medium text-[var(--foreground)]">{t('workspace.openTitle')}</h3>
           <button onClick={onClose} className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)]">
             <X className="h-4 w-4" />
           </button>
@@ -58,7 +60,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
           <button
             onClick={() => loadDir(parentPath)}
             disabled={loading || !parentPath || parentPath === currentPath}
-            title="Parent directory"
+            title={t('workspace.parentDir')}
             className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:opacity-30"
           >
             <ArrowUp className="h-3.5 w-3.5" />
@@ -66,7 +68,7 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
           <button
             onClick={() => api.fs.home().then(({ home }) => loadDir(home))}
             disabled={loading}
-            title="Home directory"
+            title={t('workspace.homeDir')}
             className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:opacity-30"
           >
             <Home className="h-3.5 w-3.5" />
@@ -84,9 +86,9 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           {error && <p className="px-4 py-3 text-xs text-red-400">{error}</p>}
-          {loading && !error && <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">Loading...</p>}
+          {loading && !error && <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">{t('workspace.loading')}</p>}
           {!loading && !error && entries.length === 0 && (
-            <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">(empty)</p>
+            <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">{t('workspace.emptyDir')}</p>
           )}
           {!loading && entries.map((entry) => (
             <button
@@ -111,14 +113,14 @@ export function FolderPicker({ initialPath, onSelect, onClose }: FolderPickerPro
             onClick={onClose}
             className="rounded px-3 py-1 text-xs font-medium text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
           >
-            Cancel
+            {t('workspace.cancel')}
           </button>
           <button
             onClick={() => onSelect(currentPath)}
             disabled={!currentPath}
             className="rounded bg-[var(--primary)] px-3 py-1 text-xs font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-30"
           >
-            Open
+            {t('workspace.open')}
           </button>
         </div>
       </div>

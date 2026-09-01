@@ -8,7 +8,7 @@ import { useRecentWorkspaces } from '@/features/explorer/use-recent-workspaces'
 import { useChatStore } from '@/features/chat/chat-store'
 import { api } from '@/shared/api-client'
 import { cn, promptInput } from '@/shared/utils'
-import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X } from 'lucide-react'
+import { FolderTree, FolderOpen, RefreshCw, FilePlus, FolderPlus, Upload, FolderSearch, History, X, PanelLeftClose } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 
 interface ExplorerSidebarProps {
@@ -18,9 +18,11 @@ interface ExplorerSidebarProps {
   onOpenFolder: () => void
   onOpenPath: (path: string) => void
   activeProject: { name: string; path: string } | null
+  /** Collapse the file-tree column (workspace layout owns the visibility). */
+  onCollapse?: () => void
 }
 
-export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpenFolder, onOpenPath, activeProject }: ExplorerSidebarProps) {
+export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpenFolder, onOpenPath, activeProject, onCollapse }: ExplorerSidebarProps) {
   const t = useT()
   // Agent status light next to the workspace name: amber pulse while streaming
   // (busy), static emerald when idle. Sole state source is chat-store's
@@ -105,12 +107,21 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
         <FolderTree className="h-4 w-4 text-[var(--muted-foreground)]" />
         <span className="ml-2 text-sm font-medium text-[var(--foreground)]">{t('nav.explorer')}</span>
         <div className="flex-1" />
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            title="Hide file tree"
+            className="rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] transition-colors"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+        )}
         {projectId && (
           <button
             onClick={handleRefresh}
             disabled={loading}
             title="Refresh"
-            className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] transition-colors disabled:opacity-50"
+            className="rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] transition-colors disabled:opacity-50"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
           </button>
@@ -131,10 +142,10 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
               else if (e.key === 'Escape') setDropdownOpen(false)
             }}
             placeholder="Enter folder path, press Enter"
-            className="w-full rounded border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]"
           />
           {dropdownOpen && recentMatches.length > 0 && (
-            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] py-1 shadow-lg">
+            <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
               {recentMatches.map((p) => (
                 <div
                   key={p}
@@ -161,7 +172,7 @@ export function ExplorerSidebar({ projectId, pathInput, onPathInputChange, onOpe
         <button
           onClick={() => setShowPicker(true)}
           title="Browse for folder"
-          className="shrink-0 rounded border border-[var(--border)] p-1.5 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+          className="shrink-0 rounded-lg border border-[var(--border)] p-1.5 text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
         >
           <FolderSearch className="h-3.5 w-3.5" />
         </button>

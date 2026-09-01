@@ -23,7 +23,7 @@ export function SkillsMain() {
   // (and never touch the main Explorer's store).
   return (
     <EditorStoreProvider key={`${selected.id}:${selected.scope}`}>
-      <EditorPanel projectId={selected.path} mode="full" showMaximize={false} />
+      <EditorPanel projectId={selected.path} mode="full" showMaximize={false} headerTitle={selected.name} />
     </EditorStoreProvider>
   )
 }

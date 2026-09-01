@@ -315,14 +315,45 @@ export const en: Record<string, string> = {
   'security.logout.desc': 'Sign out on this browser and return to the login page.',
 
   // ── Nav ──
+  'nav.newTask': 'New Task',
+  'nav.switchWorkspace': 'Switch Workspace',
   'nav.explorer': 'Explorer',
   'nav.sourceControl': 'Source Control',
   'nav.sessions': 'Sessions',
-  'nav.channels': 'Channels',
+  'nav.skills': 'Skills',
+  'nav.agents': 'Agents',
+  'nav.channels': 'Assistant',
+  'nav.evolution': 'Evolution',
+  'nav.cron': 'Cron',
   'nav.settings': 'Settings',
   'nav.canvas': 'Canvas',
   'nav.chat': 'CHAT',
   'nav.terminal': 'TERMINAL',
+
+  // ── Canvas views ──
+  'canvas.overview': 'Overview',
+  'canvas.files': 'Workspace Files',
+  'canvas.browser': 'Browser',
+  'canvas.empty': 'Nothing here yet',
+  'canvas.browserPlaceholder': 'Enter a URL, press Enter',
+  'canvas.openExternal': 'Open in external browser',
+  'canvas.taskProgress': 'Task Progress',
+  'canvas.artifacts': 'Artifacts',
+
+  // ── Session right panel ──
+  'sessions.new': 'New Session',
+  'sessions.tasks': 'Tasks',
+  'sessions.collapse': 'Collapse panel',
+  'sessions.expand': 'Expand session panel',
+  'sessions.empty': 'No sessions yet',
+
+  // ── Chat empty state ──
+  'chat.greeting': 'Yuanzhou Agent, at your service',
+  'chat.greetingHint': 'Describe what you want to build, and agents will work together to deliver it.',
+  'chat.suggest1': 'Introduce this project',
+  'chat.suggest2': 'Find and fix an issue',
+  'chat.suggest3': 'Summarize recent changes',
+  'chat.processDone': 'Completed',
 
   // ── Agent status ──
   'status.busy': 'Working…',
@@ -549,13 +580,20 @@ export const en: Record<string, string> = {
   'workspace.unpin': 'Stop keeping on top',
   'workspace.notifyOn': 'Chime when agent finishes (banner too if unfocused) — on',
   'workspace.notifyOff': 'Chime when agent finishes (banner too if unfocused) — off',
+  'workspace.openTitle': 'Open Workspace',
+  'workspace.parentDir': 'Parent directory',
+  'workspace.homeDir': 'Home directory',
+  'workspace.loading': 'Loading...',
+  'workspace.emptyDir': '(empty)',
+  'workspace.cancel': 'Cancel',
+  'workspace.open': 'Open',
 
   // ── Screen capture (desktop) ──
   'capture.button': 'Share a window/screen for the AI to see',
   'capture.bound': 'Sharing: {name} (AI can request a screenshot)',
   'capture.unbind': 'Stop sharing',
   'capture.pickTitle': 'Choose a window or screen to share',
-  'capture.permissionHint': 'Screen Recording permission is needed. Enable Halo under System Settings → Privacy & Security → Screen Recording, then fully quit and reopen Halo.',
+  'capture.permissionHint': 'Screen Recording permission is needed. Enable Yuanzhou under System Settings → Privacy & Security → Screen Recording, then fully quit and reopen Yuanzhou.',
   'capture.openSettings': 'Open Settings',
   'capture.loading': 'Loading sources…',
   'capture.empty': 'No windows or screens found.',
@@ -568,7 +606,7 @@ export const en: Record<string, string> = {
   'capture.cameraPick': 'Choose camera',
   'capture.cameraCurrent': 'current',
   'capture.cameraUse': 'Use this camera',
-  'capture.cameraPermissionHint': 'Camera permission is needed. Enable Halo under System Settings → Privacy & Security → Camera.',
+  'capture.cameraPermissionHint': 'Camera permission is needed. Enable Yuanzhou under System Settings → Privacy & Security → Camera.',
   'capture.cameraLlmPrompt': '[System: the user has turned the camera on for you. When you need to see what the camera is pointed at to answer, output a line containing exactly <<<CAPTURE>>> and the system will take a photo and send it back to you as the next message. Do not output the marker unless you actually need to look.]',
   'capture.dismiss': 'Dismiss',
   // ── The assistant's face (self.html) ──

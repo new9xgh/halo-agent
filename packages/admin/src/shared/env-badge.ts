@@ -32,77 +32,48 @@ export function applyEnvBadge(value: string | null | undefined): void {
   swapFavicon(next.slice(0, 4))
 }
 
-/** Repaint the favicon: the halo mark drawn directly on a canvas (same
- *  palette as app/icon.svg — drawing beats decoding the SVG into an <img>:
- *  synchronous, no network, no cross-browser SVG-in-canvas quirks) with an
- *  orange-red band across the bottom, white bold label. Proportions chosen
- *  to stay legible after the browser downscales 64px → 16px. */
+/** Repaint the favicon: the app icon (app/icon.png, served at /icon.png)
+ *  with an orange-red band across the bottom, white bold label. Async image
+ *  load — if the icon can't be fetched we keep the stock favicon (the title
+ *  prefix still carries the badge). */
 function swapFavicon(label: string): void {
-  const size = 64
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
+  const img = new Image()
+  img.onload = () => {
+    const size = 64
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
 
-  // Rounded-square dark backdrop (≈ icon.svg's squircle + bg gradient).
-  // arcTo path instead of roundRect() — Safari < 16 lacks the latter.
-  const r = size * 0.22
-  ctx.beginPath()
-  ctx.moveTo(r, 0)
-  ctx.arcTo(size, 0, size, size, r)
-  ctx.arcTo(size, size, 0, size, r)
-  ctx.arcTo(0, size, 0, 0, r)
-  ctx.arcTo(0, 0, size, 0, r)
-  ctx.closePath()
-  const bg = ctx.createLinearGradient(0, 0, size, size)
-  bg.addColorStop(0, '#0e1430')
-  bg.addColorStop(1, '#070a16')
-  ctx.fillStyle = bg
-  ctx.fill()
-  ctx.clip() // keep rings and the band inside the rounded square
+    // Icon, shrunk slightly so the band doesn't cover its lower edge.
+    ctx.drawImage(img, 0, 0, size, size * 0.62)
 
-  // Halo rings + glowing core, shifted up into the space above the band.
-  const cx = size / 2
-  const cy = size * 0.33
-  for (const [radius, alpha] of [[size * 0.14, 0.55], [size * 0.21, 0.3]] as const) {
-    ctx.beginPath()
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-    ctx.strokeStyle = `rgba(125, 140, 255, ${alpha})`
-    ctx.lineWidth = size * 0.035
-    ctx.stroke()
-  }
-  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.1)
-  core.addColorStop(0, '#d8e6ff')
-  core.addColorStop(1, '#8aa6ff')
-  ctx.beginPath()
-  ctx.arc(cx, cy, size * 0.1, 0, Math.PI * 2)
-  ctx.fillStyle = core
-  ctx.fill()
-
-  // Bottom band: orange-red under white bold text — at 16×16 the band is
-  // ~7px with ~5px glyphs, still an unmistakable "not prod" stripe.
-  const bandH = size * 0.42
-  ctx.fillStyle = '#e8401c'
-  ctx.fillRect(0, size - bandH, size, bandH)
-  ctx.fillStyle = '#ffffff'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  let font = Math.round(bandH * 0.82)
-  ctx.font = `bold ${font}px system-ui, sans-serif`
-  const maxW = size * 0.92
-  while (font > 8 && ctx.measureText(label).width > maxW) {
-    font -= 1
+    // Bottom band: orange-red under white bold text — at 16×16 the band is
+    // ~7px with ~5px glyphs, still an unmistakable "not prod" stripe.
+    const bandH = size * 0.42
+    ctx.fillStyle = '#e8401c'
+    ctx.fillRect(0, size - bandH, size, bandH)
+    ctx.fillStyle = '#ffffff'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    let font = Math.round(bandH * 0.82)
     ctx.font = `bold ${font}px system-ui, sans-serif`
-  }
-  ctx.fillText(label, size / 2, size - bandH / 2 + 1)
+    const maxW = size * 0.92
+    while (font > 8 && ctx.measureText(label).width > maxW) {
+      font -= 1
+      ctx.font = `bold ${font}px system-ui, sans-serif`
+    }
+    ctx.fillText(label, size / 2, size - bandH / 2 + 1)
 
-  // Replace both stock <link rel="icon"> entries (favicon.ico + icon.svg) —
-  // leaving either would let the browser keep picking the unbadged mark.
-  document.querySelectorAll('link[rel="icon"]').forEach((el) => el.remove())
-  const link = document.createElement('link')
-  link.rel = 'icon'
-  link.type = 'image/png'
-  link.href = canvas.toDataURL('image/png')
-  document.head.appendChild(link)
+    // Replace the stock <link rel="icon"> entries (favicon.ico + icon.png) —
+    // leaving either would let the browser keep picking the unbadged mark.
+    document.querySelectorAll('link[rel="icon"]').forEach((el) => el.remove())
+    const link = document.createElement('link')
+    link.rel = 'icon'
+    link.type = 'image/png'
+    link.href = canvas.toDataURL('image/png')
+    document.head.appendChild(link)
+  }
+  img.src = '/icon.png'
 }

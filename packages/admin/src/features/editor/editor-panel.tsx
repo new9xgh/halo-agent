@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useScopedEditorStore, useEditorStore as useGlobalEditorStore, disposeMonacoModels, monacoModelPath } from '@/shared/stores/editor-store'
+import { useScopedEditorStore, disposeMonacoModels, monacoModelPath } from '@/shared/stores/editor-store'
 import { useFileTree, loadFileTree } from '@/features/explorer/use-file-tree'
 import { FileTree, setPathExpanded, isPathExpanded, collectVisiblePaths, type FileContextInfo } from '@/features/explorer/file-tree'
 import { FileContextMenu, type ContextMenuAction } from '@/features/explorer/file-context-menu'
@@ -73,9 +73,15 @@ interface EditorPanelProps {
   /** Show the maximize button in the header. Defaults true. Skills pass false
    *  since it's a nested editor where fullscreen makes no sense. */
   showMaximize?: boolean
+  /** Hide the panel header (title / file meta / maximize). The workspace
+   *  canvas column renders its own view-switcher header instead. */
+  hideHeader?: boolean
+  /** Override the header title (defaults to the generic "画布"/Canvas label).
+   *  Skills pass the selected skill's name. */
+  headerTitle?: string
 }
 
-export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: EditorPanelProps) {
+export function EditorPanel({ projectId, mode = 'full', showMaximize = true, hideHeader = false, headerTitle }: EditorPanelProps) {
   const t = useT()
   const useEditorStore = useScopedEditorStore()
   const tabs = useEditorStore((s) => s.tabs)
@@ -549,7 +555,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
     async (action: ContextMenuAction) => {
       if (!projectId) return
 
-      // Resolve the parent dir for new-file / new-folder / open-terminal.
+      // Resolve the parent dir for new-file / new-folder.
       // Mirrors VSCode's openExplorerAndCreate logic:
       //   1. Right-click on a folder        → that folder.
       //   2. Right-click on a file          → its parent dir.
@@ -614,19 +620,6 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           console.error('[EditorPanel] Open to the side failed:', err)
           window.alert(err instanceof Error ? err.message : 'Open to the side failed')
         }
-        return
-      }
-
-      if (action.type === 'open-terminal') {
-        // Spawn a terminal at <projectRoot>/<dir>. If the user right-clicked
-        // a file, open in its parent dir; if a folder, open in that folder.
-        // Use the global singleton (the bottom panel + TerminalPanel both
-        // bind there); the scoped store would route the request to a side
-        // panel like Skills editor, which has no terminal of its own.
-        if (!workspaceRoot) return
-        const cwd = parentDir ? `${workspaceRoot}/${parentDir}` : workspaceRoot
-        useGlobalEditorStore.getState().requestTerminalSpawn(cwd)
-        useGlobalEditorStore.getState().setBottomTab('terminal')
         return
       }
 
@@ -953,6 +946,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
   return (
     <div className="flex h-full flex-col bg-[var(--background)]">
       {/* Panel header */}
+      {!hideHeader && (
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--border)] px-3">
         <div className="flex items-center gap-2">
           {mode === 'full' && (
@@ -968,7 +962,7 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
             </button>
           )}
           <Code2 className="h-4 w-4 text-[var(--muted-foreground)]" />
-          <span className="text-sm font-medium text-[var(--foreground)]">{t('nav.canvas')}</span>
+          <span className="text-sm font-medium text-[var(--foreground)]">{headerTitle ?? t('nav.canvas')}</span>
           {activeFile && (activeFile.size != null || activeFile.mtime != null) && (
             <span className="text-[10px] text-[var(--muted-foreground)]">
               ({[
@@ -987,13 +981,14 @@ export function EditorPanel({ projectId, mode = 'full', showMaximize = true }: E
           <button
             onClick={() => useEditorStore.getState().toggleMaximized()}
             title={maximized ? 'Exit full screen' : 'Maximize editor'}
-            className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+            className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
           >
             {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
           )}
         </div>
       </div>
+      )}
 
       {/* Content area */}
       <PanelGroup direction="horizontal" autoSaveId={showTreeSidebar ? 'halo-editor-tree' : undefined}>

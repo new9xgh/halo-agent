@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Plus, Trash2, Pencil, Loader2 } from 'lucide-react'
+import { Trash2, Pencil, Loader2 } from 'lucide-react'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useSessionList } from '@/shared/use-session-list'
 import { SessionHistoryLink } from '@/shared/components/session-list-dropdown'
@@ -26,16 +26,15 @@ interface SessionSidebarProps {
   loadingSessionId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string, e: React.MouseEvent) => void
-  onNew: () => void
   onLoadMore: () => void
   hasMore: boolean
   loadingMore: boolean
 }
 
 /**
- * Fixed right sidebar listing the workspace's root sessions for the explorer
- * chat panel. Styling mirrors the terminal panel's right-hand terminal list;
- * item content mirrors the shared SessionListDropdown (🎯 badge, meta line,
+ * Scrollable session list body for the full-height right session panel
+ * (SessionRightPanel provides the chrome: header, collapse, New Session).
+ * Item content mirrors the shared SessionListDropdown (🎯 badge, meta line,
  * hover actions). Inline rename interaction mirrors agent-sessions-sidebar.
  */
 export function SessionSidebar({
@@ -44,7 +43,6 @@ export function SessionSidebar({
   loadingSessionId,
   onSelect,
   onDelete,
-  onNew,
   onLoadMore,
   hasMore,
   loadingMore,
@@ -113,11 +111,11 @@ export function SessionSidebar({
   }, [onLoadMore, sessions.length])
 
   return (
-    <div className="flex w-[200px] shrink-0 flex-col border-l border-[var(--border)] bg-[var(--card)]">
-      <div className="flex-1 overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 overflow-y-auto py-1">
         {sessions.length === 0 ? (
-          <div className="px-3 py-4 text-center text-[10px] text-[var(--muted-foreground)]">
-            No sessions yet
+          <div className="px-3 py-4 text-center text-xs text-[var(--muted-foreground)]">
+            {t('sessions.empty')}
           </div>
         ) : (
           sessions.map((s) => (
@@ -125,8 +123,8 @@ export function SessionSidebar({
               key={s.id}
               onClick={() => onSelect(s.id)}
               className={cn(
-                'group flex items-center gap-1.5 px-2 py-1.5 cursor-pointer select-none transition-colors',
-                currentSessionId === s.id ? 'bg-[var(--secondary)]' : 'hover:bg-[var(--secondary)]/50',
+                'group mx-1.5 my-0.5 flex cursor-pointer select-none items-center gap-1.5 rounded-lg px-2 py-1.5 transition-colors',
+                currentSessionId === s.id ? 'bg-[var(--secondary)]' : 'hover:bg-[var(--secondary)]/60',
               )}
             >
               <div className="min-w-0 flex-1">
@@ -141,20 +139,21 @@ export function SessionSidebar({
                       else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
                     }}
                     onBlur={() => commitRename(s.id)}
-                    className="w-full rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-[11px] text-[var(--foreground)] outline-none focus:border-blue-500"
+                    className="w-full rounded border border-[var(--border)] bg-[var(--background)] px-1 py-0.5 text-xs text-[var(--foreground)] outline-none focus:border-blue-500"
                   />
                 ) : (
-                  <p className="text-[11px] text-[var(--foreground)] truncate">
-                    {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
-                    {s.title}
-                  </p>
+                  /* WorkBuddy-style row: title on the left, relative time on
+                     the right — no message-count / model meta line. */
+                  <div className="flex items-center gap-2">
+                    <p className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)]">
+                      {s.goalSessionId && <span title="Goal-bound worker session" className="mr-1">🎯</span>}
+                      {s.title}
+                    </p>
+                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
+                      {formatRelativeTime(s.updatedAt, t)}
+                    </span>
+                  </div>
                 )}
-                <p className="text-[9px] text-[var(--muted-foreground)]">
-                  {s.exchangeCount} msgs · {formatRelativeTime(s.updatedAt, t)}
-                  {typeof s.agentSnapshot?.model === 'string' && (
-                    <span className="ml-1 opacity-60">· {s.agentSnapshot.model.split('.').pop()}</span>
-                  )}
-                </p>
               </div>
               {loadingSessionId === s.id ? (
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[var(--muted-foreground)]" />
@@ -180,7 +179,7 @@ export function SessionSidebar({
           ))
         )}
         {hasMore && (
-          <div ref={sentinelRef} className="flex items-center justify-center py-2 text-[9px] text-[var(--muted-foreground)]">
+          <div ref={sentinelRef} className="flex items-center justify-center py-2 text-[10px] text-[var(--muted-foreground)]">
             {loadingMore ? (
               <><Loader2 className="h-2.5 w-2.5 animate-spin mr-1" /> Loading…</>
             ) : (
@@ -189,14 +188,6 @@ export function SessionSidebar({
           </div>
         )}
       </div>
-      <button
-        onClick={onNew}
-        title="New session"
-        className="flex shrink-0 items-center gap-1.5 border-t border-[var(--border)] px-2 py-1.5 text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--secondary)]/50 hover:text-[var(--foreground)]"
-      >
-        <Plus className="h-3 w-3" />
-        <span>New Session</span>
-      </button>
     </div>
   )
 }

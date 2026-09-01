@@ -970,9 +970,10 @@ export function MessageInput({ onSend, disabled, isStreaming, onStop, onInterrup
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden"
         onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
 
-      {/* Unified input container */}
+      {/* Unified input container — white card with a soft shadow (WorkBuddy
+          composer style); --card tracks every theme, dark included. */}
       <div className={cn(
-        'rounded-2xl border border-[var(--border)] bg-[var(--secondary)] transition-colors',
+        'rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-colors',
         'focus-within:border-[var(--primary)] focus-within:ring-1 focus-within:ring-[var(--primary)]',
       )}>
         {/* Textarea */}

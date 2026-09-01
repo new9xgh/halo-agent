@@ -222,7 +222,7 @@ export const zh: Record<string, string> = {
   'link.down': '连接已断开',
 
   // ── Agent management ──
-  'agent.agents': 'Agents',
+  'agent.agents': '专家',
   'agent.selectToEdit': '选择一个 Agent 进行编辑',
   'agent.back': '返回',
   'agent.test': '测试',
@@ -254,7 +254,7 @@ export const zh: Record<string, string> = {
   'agent.noSkills': '暂无可用 Skills。请先创建。',
 
   // ── Skills ──
-  'skill.skills': 'Skills',
+  'skill.skills': '技能',
   'skill.noSkills': '暂无 Skills。点击分组旁的 + 创建。',
 
   // ── Settings ──
@@ -315,14 +315,45 @@ export const zh: Record<string, string> = {
   'security.logout.desc': '在此浏览器上退出登录并返回登录页。',
 
   // ── Nav ──
+  'nav.newTask': '新建任务',
+  'nav.switchWorkspace': '切换空间',
   'nav.explorer': '文件',
   'nav.sourceControl': '源代码管理',
   'nav.sessions': '会话',
-  'nav.channels': '渠道',
+  'nav.skills': '技能',
+  'nav.agents': '专家',
+  'nav.channels': '助理',
+  'nav.evolution': '进化',
+  'nav.cron': '定时',
   'nav.settings': '设置',
   'nav.canvas': '画布',
   'nav.chat': '对话',
   'nav.terminal': '终端',
+
+  // ── Canvas views ──
+  'canvas.overview': '概览',
+  'canvas.files': '工作空间文件',
+  'canvas.browser': '浏览器',
+  'canvas.empty': '暂无内容',
+  'canvas.browserPlaceholder': '输入网址，回车打开',
+  'canvas.openExternal': '在外部浏览器打开',
+  'canvas.taskProgress': '任务进程',
+  'canvas.artifacts': '产物',
+
+  // ── Session right panel ──
+  'sessions.new': '新建会话',
+  'sessions.tasks': '任务',
+  'sessions.collapse': '收起面板',
+  'sessions.expand': '展开会话面板',
+  'sessions.empty': '暂无会话',
+
+  // ── Chat empty state ──
+  'chat.greeting': '元轴Agent，我帮你',
+  'chat.greetingHint': '描述你想做的东西，agents 会协作完成。',
+  'chat.suggest1': '介绍一下这个项目',
+  'chat.suggest2': '排查并修复一个问题',
+  'chat.suggest3': '总结最近的改动',
+  'chat.processDone': '已完成',
 
   // ── Agent status ──
   'status.busy': '运行中…',
@@ -549,13 +580,20 @@ export const zh: Record<string, string> = {
   'workspace.unpin': '取消置顶',
   'workspace.notifyOn': '完成回复时响提示音(失焦时另弹通知)—— 已开',
   'workspace.notifyOff': '完成回复时响提示音(失焦时另弹通知)—— 已关',
+  'workspace.openTitle': '切换空间',
+  'workspace.parentDir': '上级目录',
+  'workspace.homeDir': '主目录',
+  'workspace.loading': '加载中…',
+  'workspace.emptyDir': '（空目录）',
+  'workspace.cancel': '取消',
+  'workspace.open': '打开',
 
   // ── 屏幕捕获（桌面端）──
   'capture.button': '共享一个窗口/屏幕给 AI 查看',
   'capture.bound': '正在共享：{name}（AI 可主动截图查看）',
   'capture.unbind': '停止共享',
   'capture.pickTitle': '选择要共享的窗口或屏幕',
-  'capture.permissionHint': '需要「屏幕录制」权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里勾选 Halo，然后彻底退出并重新打开 Halo。',
+  'capture.permissionHint': '需要「屏幕录制」权限。请在 系统设置 → 隐私与安全性 → 屏幕录制 里勾选 元轴，然后彻底退出并重新打开 元轴。',
   'capture.openSettings': '打开系统设置',
   'capture.loading': '正在加载来源…',
   'capture.empty': '未找到窗口或屏幕。',
@@ -568,7 +606,7 @@ export const zh: Record<string, string> = {
   'capture.cameraPick': '选择摄像头',
   'capture.cameraCurrent': '当前',
   'capture.cameraUse': '使用此摄像头',
-  'capture.cameraPermissionHint': '需要「摄像头」权限。请在 系统设置 → 隐私与安全性 → 摄像头 里勾选 Halo。',
+  'capture.cameraPermissionHint': '需要「摄像头」权限。请在 系统设置 → 隐私与安全性 → 摄像头 里勾选 元轴。',
   'capture.cameraLlmPrompt': '[系统：用户已为你开启摄像头。当你需要查看摄像头当前画面来回答时，单独输出一行 <<<CAPTURE>>>，系统会自动拍一张照片并作为下一条消息发给你。不需要查看时不要输出该标记。]',
   'capture.dismiss': '关闭',
   // ── AI 的面孔（self.html）──

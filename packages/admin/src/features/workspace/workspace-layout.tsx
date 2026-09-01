@@ -3,16 +3,15 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelGroupHandle } from 'react-resizable-panels'
-import { EditorPanel } from '@/features/editor/editor-panel'
 import { BottomPanel } from '@/features/workspace/bottom-panel'
 import { FloatingBottomPanel } from '@/features/workspace/floating-bottom-panel'
-import { QuickOpen } from '@/features/explorer/quick-open'
-import { ExplorerSidebar } from '@/features/explorer/explorer-sidebar'
-import { AgentSessionsSidebar } from '@/features/agents/agent-sessions-sidebar'
+import { CanvasOverview } from '@/features/workspace/canvas-overview'
+import { FolderPicker } from '@/features/explorer/folder-picker'
 import { AgentManagementMain } from '@/features/agents/agent-management-main'
 import { SkillsSidebar } from '@/features/skills/skills-sidebar'
 import { SkillsMain } from '@/features/skills/skills-main'
-import { SessionChatPanel } from '@/features/agents/session-chat-panel'
+import { SessionNavSection } from '@/features/chat/session-nav-section'
+import { useSessionController } from '@/features/chat/session-controller'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
@@ -20,7 +19,7 @@ import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
 import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
-import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
+import { cn, confirmAction } from '@/shared/utils'
 import { SettingsMain } from '@/features/settings/settings-main'
 import { ChannelsSidebar } from '@/features/channels/channels-sidebar'
 import { ChannelsMain } from '@/features/channels/channels-main'
@@ -30,14 +29,14 @@ import { CronMain } from '@/features/cron/cron-main'
 import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
-import { FolderTree, Bot, MessageSquare, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff } from 'lucide-react'
+import { FolderTree, Bot, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff, PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus, Menu, Check, Globe, RefreshCw, ExternalLink, ArrowLeftRight } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
 
-type SidebarTab = 'explorer' | 'source-control' | 'sessions' | 'management' | 'skills' | 'channels' | 'evolution' | 'cron' | 'settings'
+type SidebarTab = 'explorer' | 'source-control' | 'skills' | 'management' | 'channels' | 'evolution' | 'cron' | 'settings'
 
-const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'sessions', 'skills', 'channels', 'evolution', 'cron']
+const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'skills', 'channels', 'evolution', 'cron']
 
 // Short two-note "ding-dong" chime synthesized on the fly, so there's no audio
 // file to bundle/serve. Reuses one lazily-created AudioContext (browsers cap the
@@ -69,6 +68,54 @@ function playChime() {
   } catch { /* WebAudio unavailable/blocked — no sound, no crash */ }
 }
 
+/** Activity-bar icon button — rounded tile, soft-fill active state. Used by
+ *  the collapsed left rail; the expanded left column uses NavMenuItem. */
+function ActivityBarButton({ active, onClick, title, children }: {
+  active?: boolean
+  onClick: () => void
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex h-9 w-9 items-center justify-center rounded-xl transition-colors',
+        active
+          ? 'bg-[var(--secondary)] text-[var(--primary)]'
+          : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Left-column menu item with icon + label (WorkBuddy-style nav). */
+function NavMenuItem({ icon: Icon, label, active, onClick }: {
+  icon: typeof FolderTree
+  label: string
+  active?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors',
+        active
+          ? 'bg-[var(--secondary)] font-medium text-[var(--foreground)]'
+          : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
+
 interface WorkspaceLayoutProps {
   linkState: LinkState
 }
@@ -84,14 +131,43 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const sessionId = useChatStore((s) => s.sessionId)
   const [activeTab, setActiveTab] = useState<SidebarTab>(() => {
     if (typeof window === 'undefined') return 'explorer'
-    return (localStorage.getItem('halo_sidebar_tab') as SidebarTab) || 'explorer'
+    const stored = localStorage.getItem('halo_sidebar_tab')
+    // 'sessions' was removed from the nav (replaced by the always-on session
+    // list + 新建任务) — land returning users on the workspace home.
+    if (!stored || stored === 'sessions') return 'explorer'
+    return stored as SidebarTab
   })
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true
     return localStorage.getItem('halo_sidebar_open') !== 'false'
   })
-  const [pathInput, setPathInput] = useState('')
-  const [showQuickOpen, setShowQuickOpen] = useState(false)
+  // Left navigation column (menu + session list) — visibility lives in the
+  // shared session controller so the chat composer's History button toggles
+  // the same column.
+  const leftNavOpen = useSessionController((s) => s.sidebarOpen)
+  const setLeftNavOpen = useSessionController((s) => s.setSidebar)
+  // Right canvas column collapse — local pref, collapsed by default (the chat
+  // is the main surface; the canvas opens on demand via the rail).
+  const [canvasOpen, setCanvasOpen] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('halo_canvas_open') === 'true'
+  })
+  const toggleCanvas = useCallback((open: boolean) => {
+    setCanvasOpen(open)
+    try { localStorage.setItem('halo_canvas_open', String(open)) } catch { /* ignore */ }
+  }, [])
+  // Canvas view — overview (task progress + artifacts) / browser.
+  const [canvasView, setCanvasView] = useState<'overview' | 'browser'>(() => {
+    if (typeof window === 'undefined') return 'overview'
+    const v = localStorage.getItem('halo_canvas_view')
+    return v === 'browser' ? 'browser' : 'overview'
+  })
+  const changeCanvasView = useCallback((v: 'overview' | 'browser') => {
+    setCanvasView(v)
+    try { localStorage.setItem('halo_canvas_view', v) } catch { /* ignore */ }
+  }, [])
+  // 切换空间 — same folder-picker flow the old Explorer sidebar offered.
+  const [showSpacePicker, setShowSpacePicker] = useState(false)
 
   // Always-on-top toggle — only present in the desktop shell (preload injects
   // window.haloPin). null = not desktop → button hidden. See preload.cjs.
@@ -145,11 +221,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const prevSessionIdRef = useRef(sessionId)
   useEffect(() => {
     const name = activeProject?.name
-    // No workspace open → bare "Halo"; otherwise prefix a solid dot while busy.
+    // No workspace open → bare "元轴"; otherwise prefix a solid dot while busy.
     // em dash (U+2014) matches the desktop window/title style. The env-badge
     // prefix ("[DEV] ") must be re-stamped here — this rewrite would
     // otherwise clobber what applyEnvBadge put on the initial title.
-    document.title = envBadgeTitlePrefix() + (name ? `${isStreaming ? '● ' : ''}Halo — ${name}` : 'Halo')
+    document.title = envBadgeTitlePrefix() + (name ? `${isStreaming ? '● ' : ''}元轴 — ${name}` : '元轴')
 
     // Busy→idle falling edge → notify the user their agent finished, but only
     // when this window is unfocused (focused → they can see it) AND the session
@@ -174,7 +250,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       // gesture, which the bell toggle click already satisfied.
       playChime()
       if (!document.hasFocus()) {
-        const title = name ? `Halo — ${name}` : 'Halo'
+        const title = name ? `元轴 — ${name}` : '元轴'
         const body = t('status.notifyBody')
         const notify = (window as unknown as {
           haloNotify?: { notify: (p: { title: string; body: string }) => void }
@@ -199,7 +275,6 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       try {
         const ws = await api.fs.resolveWorkspace(target)
         openFolder(ws.path, ws.id)
-        setPathInput(ws.path)
         loadFileTree(ws.path)
         // Remember the opened folder so a launch without ?folder (the desktop
         // app's normal case) reopens here instead of bouncing to home.
@@ -252,69 +327,19 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [])
 
-  // Close the active editor tab (confirming unsaved changes); returns false
-  // when there was no tab to close. Shared by Alt+W (browser) and the desktop
-  // shell's Cmd/Ctrl+W bridge.
-  const closeActiveTab = useCallback((): boolean => {
-    const store = useEditorStore.getState()
-    const activeTab = store.activeTab
-    if (!activeTab) return false
-    const tab = store.tabs.find((t) => t.path === activeTab)
-    // confirmAction is async (Electron can't block on a native dialog);
-    // callers run in a sync keyboard path, so defer confirm + close into a
-    // microtask.
-    void (async () => {
-      if (tab?.modified) {
-        if (!(await confirmAction(`"${tab.path.split('/').pop()}" has unsaved changes. Close anyway?`))) return
-      }
-      store.closeTab(activeTab)
-    })()
-    return true
-  }, [])
-
-  // Global keyboard shortcuts
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      // Ctrl/Cmd + P → Quick Open
-      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
-        e.preventDefault()
-        setShowQuickOpen((v) => !v)
-      }
-      // Ctrl/Cmd + ` → Switch to terminal tab
-      if ((e.metaKey || e.ctrlKey) && e.key === '`') {
-        e.preventDefault()
-        const store = useEditorStore.getState()
-        store.setBottomTab(store.bottomTab === 'terminal' ? 'chat' : 'terminal')
-      }
-      // Alt/Option + W → Close active editor tab (Cmd+W can't be overridden
-      // in browsers). Match on e.code (physical key): on macOS Option+W types
-      // '∑', so an e.key === 'w' check never fires there.
-      if (e.altKey && e.code === 'KeyW' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        closeActiveTab()
-      }
-    }
-    // Use capture phase to intercept Cmd+W before Monaco or browser handles it
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [closeActiveTab])
-
   // Desktop shell Cmd/Ctrl+W: main.cjs swallows the native accelerator in
   // before-input-event and forwards over IPC (window.haloCloseShortcut,
-  // preload-injected). Close the active editor tab; with none open, restore
-  // the platform-standard meaning and close the window. Undefined in a plain
-  // browser — there Alt+W applies (browsers reserve Cmd+W for the tab).
+  // preload-injected). There are no editor tabs to close anymore, so it
+  // always means "close the window". Undefined in a plain browser.
   useEffect(() => {
     const bridge = (window as unknown as {
       haloCloseShortcut?: { onTrigger: (fn: () => void) => void; closeWindow: () => void }
     }).haloCloseShortcut
     if (!bridge) return
-    bridge.onTrigger(() => {
-      if (!closeActiveTab()) bridge.closeWindow()
-    })
-  }, [closeActiveTab])
+    bridge.onTrigger(() => bridge.closeWindow())
+  }, [])
 
-  // ESC exits editor maximize — skip when focus is in Monaco / inputs / QuickOpen so they can handle ESC first
+  // ESC exits editor maximize — skip when focus is in Monaco / inputs so they can handle ESC first
   useEffect(() => {
     function handleEsc(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
@@ -325,12 +350,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) return
         if (el.closest('.monaco-editor')) return
       }
-      if (showQuickOpen) return
       useEditorStore.getState().setMaximized(false)
     }
     window.addEventListener('keydown', handleEsc)
     return () => window.removeEventListener('keydown', handleEsc)
-  }, [showQuickOpen])
+  }, [])
 
   // Listen for cross-component navigation events (e.g. "Test" button in agent management)
   useEffect(() => {
@@ -375,6 +399,20 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
       setSidebarOpen(true)
     }
   }
+
+  // Back to the workspace home (chat + canvas) — used by 新建任务 and by
+  // clicking a session in the left list while on another tab.
+  const goHome = useCallback(() => {
+    if (useEditorStore.getState().maximized) useEditorStore.getState().setMaximized(false)
+    setActiveTab('explorer')
+  }, [])
+
+  // 新建任务: start a fresh session and land on the workspace home.
+  const newSession = useSessionController((s) => s.newSession)
+  const handleNewTask = useCallback(() => {
+    newSession()
+    goHome()
+  }, [newSession, goHome])
 
   // One jump at a time: a second call (Enter auto-repeat / double-fire,
   // double-click on a recent entry) while the first is validating or already
@@ -424,39 +462,13 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
     window.location.href = url.toString()
   }
 
-  function handleOpenFolder() {
-    openFolderPath(pathInput)
-  }
-
-  const handleQuickOpenSelect = useCallback(
-    async (filePath: string) => {
-      const projectId = activeProject?.id
-      if (!projectId) return
-      const existing = useEditorStore.getState().tabs.find((t) => t.path === filePath)
-      if (existing) {
-        useEditorStore.getState().setActiveTab(filePath)
-        return
-      }
-      try {
-        const data = await api.files.read(filePath, projectId)
-        const language = getLanguageFromPath(filePath)
-        useEditorStore.getState().openFile(filePath, data.content, language)
-      } catch (err) {
-        console.error('[QuickOpen] Failed to read file:', err)
-      }
-    },
-    [activeProject],
-  )
-
   const tabs: { id: SidebarTab; icon: typeof FolderTree; label: string; position?: 'bottom' }[] = [
-    { id: 'explorer', icon: FolderTree, label: t('nav.explorer') },
     { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
-    { id: 'sessions', icon: MessageSquare, label: t('nav.sessions') },
-    { id: 'skills', icon: Zap, label: 'Skills' },
-    { id: 'management', icon: Bot, label: 'Agents' },
+    { id: 'skills', icon: Zap, label: t('nav.skills') },
+    { id: 'management', icon: Bot, label: t('nav.agents') },
     { id: 'channels', icon: MessageCircle, label: t('nav.channels') },
-    { id: 'evolution', icon: Sparkles, label: 'Evolution' },
-    { id: 'cron', icon: Clock, label: 'Cron' },
+    { id: 'evolution', icon: Sparkles, label: t('nav.evolution') },
+    { id: 'cron', icon: Clock, label: t('nav.cron') },
     { id: 'settings', icon: Settings2, label: t('nav.settings'), position: 'bottom' },
   ]
 
@@ -477,8 +489,7 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const maximized = useEditorStore((s) => s.maximized)
   const bottomFloating = useEditorStore((s) => s.bottomFloating)
   const bottomMaximized = useEditorStore((s) => s.bottomMaximized)
-  // Explorer's sidebar follows sidebarOpen; non-Explorer tabs use sidebarOpen + their own tab-has-sidebar flag
-  const explorerSidebarVisible = sidebarOpen && !maximized
+  // Non-Explorer tabs use sidebarOpen + their own tab-has-sidebar flag
   const nonExplorerHasSidebar = TABS_WITH_SIDEBAR.includes(activeTab) && sidebarOpen && activeTab !== 'explorer'
   const isExplorer = activeTab === 'explorer'
 
@@ -518,100 +529,180 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
 
   return (
     <div className="flex h-full">
-      {/* Activity Bar — hidden when maximized */}
-      <div className={cn('flex w-12 shrink-0 flex-col items-center border-r border-[var(--border)] bg-[var(--card)] py-2', maximized && 'hidden')}>
-        {topTabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => handleTabClick(tab.id)}
-              title={tab.label}
-              className={cn(
-                'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-                isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
+      {/* Left navigation column — menu (icon + label) + session list, WorkBuddy
+          style. Collapses to an icon rail. Hidden when the editor is maximized. */}
+      {leftNavOpen ? (
+        <div className={cn('flex w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--card)]', maximized && 'hidden')}>
+          <nav className="shrink-0 space-y-0.5 p-2">
+            <NavMenuItem
+              icon={ArrowLeftRight}
+              label={t('nav.switchWorkspace')}
+              onClick={() => setShowSpacePicker(true)}
+            />
+            <NavMenuItem
+              icon={Plus}
+              label={t('nav.newTask')}
+              onClick={handleNewTask}
+            />
+            {topTabs.map((tab) => (
+              <NavMenuItem
+                key={tab.id}
+                icon={tab.icon}
+                label={tab.label}
+                active={activeTab === tab.id}
+                onClick={() => handleTabClick(tab.id)}
+              />
+            ))}
+          </nav>
+          {/* Session ("任务/对话") list — always on, WorkBuddy-style */}
+          <div className="flex min-h-0 flex-1 flex-col border-t border-[var(--border)]">
+            <SessionNavSection onOpenSession={goHome} />
+          </div>
+          <div className="shrink-0 border-t border-[var(--border)] p-2">
+            <div className="flex items-center gap-0.5 px-0.5">
+              {bottomTabs.map((tab) => {
+                const Icon = tab.icon
+                return (
+                  <ActivityBarButton
+                    key={tab.id}
+                    active={activeTab === tab.id}
+                    onClick={() => handleTabClick(tab.id)}
+                    title={tab.label}
+                  >
+                    <Icon className="h-4.5 w-4.5" />
+                  </ActivityBarButton>
+                )
+              })}
+              {pinned !== null && (
+                <ActivityBarButton
+                  active={pinned}
+                  onClick={togglePin}
+                  title={pinned ? t('workspace.unpin') : t('workspace.pin')}
+                >
+                  {pinned ? <Pin className="h-4.5 w-4.5" /> : <PinOff className="h-4.5 w-4.5" />}
+                </ActivityBarButton>
               )}
-            >
-              {isActive && (
-                <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
+              {notifyAvailable && (
+                <ActivityBarButton
+                  active={notifyOnFinish}
+                  onClick={() => void toggleNotify()}
+                  title={notifyOnFinish ? t('workspace.notifyOn') : t('workspace.notifyOff')}
+                >
+                  {notifyOnFinish ? <Bell className="h-4.5 w-4.5" /> : <BellOff className="h-4.5 w-4.5" />}
+                </ActivityBarButton>
               )}
-              <Icon className="h-5 w-5" />
-            </button>
-          )
-        })}
-        <div className="flex-1" />
-        {bottomTabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = activeTab === tab.id
-          return (
-            <button
-              key={tab.id}
-              onClick={() => handleTabClick(tab.id)}
-              title={tab.label}
-              className={cn(
-                'relative flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-                isActive ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)]',
-              )}
-            >
-              {isActive && (
-                <div className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[var(--primary)]" />
-              )}
-              <Icon className="h-5 w-5" />
-            </button>
-          )
-        })}
-        {pinned !== null && (
-          <button
-            onClick={togglePin}
-            title={pinned ? t('workspace.unpin') : t('workspace.pin')}
-            className={cn(
-              'flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-              pinned ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]',
-            )}
-          >
-            {pinned ? <Pin className="h-5 w-5" /> : <PinOff className="h-5 w-5" />}
-          </button>
-        )}
-        {notifyAvailable && (
-          <button
-            onClick={toggleNotify}
-            title={notifyOnFinish ? t('workspace.notifyOn') : t('workspace.notifyOff')}
-            className={cn(
-              'flex h-12 w-full items-center justify-center transition-colors hover:text-[var(--foreground)]',
-              notifyOnFinish ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]',
-            )}
-          >
-            {notifyOnFinish ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
-          </button>
-        )}
-        {/* Tri-state link light. Green used to mean only "last known state
-            was open" — a zombie socket kept it green while sends vanished
-            (see .halo/tmp/idle-reconnect-msg-loss.md). Now: green = inbound
-            traffic is fresh, amber = OPEN but silent past the stale window
-            (probing), red = down/reconnecting. */}
-        <div className="pb-2" title={t(`link.${linkState}`)}>
-          {linkState === 'fresh' ? <Wifi className="h-4 w-4 text-emerald-400" />
-            : linkState === 'stale' ? <Wifi className="h-4 w-4 text-amber-400 animate-pulse" />
-              : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
+              {/* Tri-state link light: green = inbound traffic fresh, amber =
+                  OPEN but silent (probing), red = down/reconnecting. */}
+              <div className="flex h-9 w-9 items-center justify-center" title={t(`link.${linkState}`)}>
+                {linkState === 'fresh' ? <Wifi className="h-4 w-4 text-emerald-400" />
+                  : linkState === 'stale' ? <Wifi className="h-4 w-4 text-amber-400 animate-pulse" />
+                    : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
+              </div>
+              <div className="flex-1" />
+              <ActivityBarButton onClick={() => setLeftNavOpen(false)} title={t('sessions.collapse')}>
+                <PanelLeftClose className="h-4.5 w-4.5" />
+              </ActivityBarButton>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className={cn('flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border)] bg-[var(--card)] py-2', maximized && 'hidden')}>
+          <ActivityBarButton onClick={() => setLeftNavOpen(true)} title={t('sessions.expand')}>
+            <PanelLeftOpen className="h-5 w-5" />
+          </ActivityBarButton>
+          <ActivityBarButton onClick={() => setShowSpacePicker(true)} title={t('nav.switchWorkspace')}>
+            <ArrowLeftRight className="h-5 w-5" />
+          </ActivityBarButton>
+          <ActivityBarButton onClick={handleNewTask} title={t('nav.newTask')}>
+            <Plus className="h-5 w-5" />
+          </ActivityBarButton>
+          {topTabs.map((tab) => {
+            const Icon = tab.icon
+            return (
+              <ActivityBarButton
+                key={tab.id}
+                active={activeTab === tab.id}
+                onClick={() => handleTabClick(tab.id)}
+                title={tab.label}
+              >
+                <Icon className="h-5 w-5" />
+              </ActivityBarButton>
+            )
+          })}
+          <div className="flex-1" />
+          {bottomTabs.map((tab) => {
+            const Icon = tab.icon
+            return (
+              <ActivityBarButton
+                key={tab.id}
+                active={activeTab === tab.id}
+                onClick={() => handleTabClick(tab.id)}
+                title={tab.label}
+              >
+                <Icon className="h-5 w-5" />
+              </ActivityBarButton>
+            )
+          })}
+          {pinned !== null && (
+            <ActivityBarButton
+              active={pinned}
+              onClick={togglePin}
+              title={pinned ? t('workspace.unpin') : t('workspace.pin')}
+            >
+              {pinned ? <Pin className="h-5 w-5" /> : <PinOff className="h-5 w-5" />}
+            </ActivityBarButton>
+          )}
+          {notifyAvailable && (
+            <ActivityBarButton
+              active={notifyOnFinish}
+              onClick={() => void toggleNotify()}
+              title={notifyOnFinish ? t('workspace.notifyOn') : t('workspace.notifyOff')}
+            >
+              {notifyOnFinish ? <Bell className="h-5 w-5" /> : <BellOff className="h-5 w-5" />}
+            </ActivityBarButton>
+          )}
+          {/* Tri-state link light (see expanded column above). */}
+          <div className="pb-1" title={t(`link.${linkState}`)}>
+            {linkState === 'fresh' ? <Wifi className="h-4 w-4 text-emerald-400" />
+              : linkState === 'stale' ? <Wifi className="h-4 w-4 text-amber-400 animate-pulse" />
+                : <WifiOff className="h-4 w-4 text-[var(--destructive)]" />}
+          </div>
+        </div>
+      )}
 
-      {/* Explorer — always mounted so CanvasPanel/Monaco/file tree survive activity-tab switches and maximize.
-          Visibility controlled by CSS (hidden when not active). Maximized = covers the viewport.
-          The PanelGroup stays mounted; sidebar Panel collapses to 0 when hidden to avoid remounts. */}
+      {/* Explorer (workspace home) — chat center + right canvas column. Always
+          mounted so the chat panel survives tab switches. */}
       <div className={cn(
         'flex min-w-0 flex-1',
         !isExplorer && 'hidden',
         maximized && 'fixed inset-0 z-40 bg-[var(--background)]',
       )}>
-        <ExplorerRootPanelGroup
-          showSidebar={explorerSidebarVisible}
-          sidebar={
-            <ExplorerSidebar projectId={projectId} pathInput={pathInput} onPathInputChange={setPathInput} onOpenFolder={handleOpenFolder} onOpenPath={openFolderPath} activeProject={activeProject} />
+        <ExplorerSplitGroup
+          showCenter={!bottomFloating && !maximized}
+          showCanvas={canvasOpen}
+          center={<div ref={setDockedBottomSlot} className="h-full" />}
+          canvas={
+            <div className="flex h-full flex-col bg-[var(--background)]">
+              <CanvasHeader
+                view={canvasView}
+                onViewChange={changeCanvasView}
+                onCollapse={() => toggleCanvas(false)}
+              />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {canvasView === 'overview' && <CanvasOverview />}
+                {canvasView === 'browser' && <CanvasBrowserView />}
+              </div>
+            </div>
           }
-          main={<ExplorerMainArea projectId={projectId} showBottom={!bottomFloating && !maximized} bottomSlotRef={setDockedBottomSlot} />}
         />
+        {/* Collapsed canvas rail — one click to bring the canvas back. */}
+        {!canvasOpen && (
+          <div className="flex w-11 shrink-0 flex-col items-center border-l border-[var(--border)] bg-[var(--card)] py-2">
+            <ActivityBarButton onClick={() => toggleCanvas(true)} title={t('nav.canvas')}>
+              <PanelRightOpen className="h-4 w-4" />
+            </ActivityBarButton>
+          </div>
+        )}
       </div>
 
       {/* Other tabs — keep the original conditional-render behavior (they get destroyed/rebuilt on switch) */}
@@ -621,7 +712,6 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
             <Panel defaultSize={22} minSize={15} maxSize={40}>
               <div className="h-full overflow-hidden">
                 {activeTab === 'source-control' && <SourceControlSidebar />}
-                {activeTab === 'sessions' && <AgentSessionsSidebar />}
                 {activeTab === 'skills' && <SkillsSidebar />}
                 {activeTab === 'channels' && <ChannelsSidebar />}
                 {activeTab === 'evolution' && <EvolutionSidebar />}
@@ -640,9 +730,13 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
         )
       )}
 
-      {/* Quick Open (Ctrl+P) */}
-      {showQuickOpen && (
-        <QuickOpen onSelect={handleQuickOpenSelect} onClose={() => setShowQuickOpen(false)} />
+      {/* 切换空间 — folder picker (same dialog the old Explorer sidebar used) */}
+      {showSpacePicker && (
+        <FolderPicker
+          initialPath={activeProject?.path}
+          onSelect={(p) => { setShowSpacePicker(false); openFolderPath(p) }}
+          onClose={() => setShowSpacePicker(false)}
+        />
       )}
 
       {/* Floating Chat + Terminal panel — the panel itself is portaled into
@@ -670,72 +764,50 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   )
 }
 
-/** Horizontal PanelGroup that always renders — sidebar Panel collapses to 0 when hidden.
- *  Keeps the main area (and its CanvasPanel) stable across sidebar toggles / maximize. */
-function ExplorerRootPanelGroup({ showSidebar, sidebar, main }: { showSidebar: boolean; sidebar: React.ReactNode; main: React.ReactNode }) {
+/** Horizontal split: center (chat/terminal) + right canvas. The PanelGroup
+ *  always renders; hidden columns collapse to 0 so the visible one takes the
+ *  full width without remounting either side (keeps the docked bottom-panel
+ *  slot alive). Center hides while the bottom panel floats or the editor is maximized; canvas
+ *  hides via its collapse button. */
+function ExplorerSplitGroup({ showCenter, showCanvas, center, canvas }: {
+  showCenter: boolean
+  showCanvas: boolean
+  center: React.ReactNode
+  canvas: React.ReactNode
+}) {
   const groupRef = useRef<ImperativePanelGroupHandle | null>(null)
-  const lastSplitRef = useRef<[number, number]>([22, 78])
+  // Remember the last center/canvas split so restoring it feels natural —
+  // the canvas is a secondary panel, so it defaults to ~1/4 of the width.
+  const lastSplitRef = useRef<[number, number]>([76, 24])
 
   useEffect(() => {
     const group = groupRef.current
     if (!group) return
-    if (showSidebar) {
+    if (showCenter && showCanvas) {
       group.setLayout(lastSplitRef.current)
-    } else {
-      const current = group.getLayout() as [number, number]
-      if (current[0] > 0) lastSplitRef.current = current
-      group.setLayout([0, 100])
+      return
     }
-  }, [showSidebar])
+    // Capture the current split before collapsing (only a real two-column
+    // split is worth restoring).
+    const current = group.getLayout() as [number, number]
+    if (current[0] > 0 && current[1] > 0) lastSplitRef.current = current
+    if (!showCenter && !showCanvas) return // transient — leave layout as-is
+    group.setLayout(showCenter ? [100, 0] : [0, 100])
+  }, [showCenter, showCanvas])
+
+  const handleHidden = !showCenter || !showCanvas
 
   return (
-    <PanelGroup ref={groupRef} direction="horizontal" autoSaveId="halo-h-sidebar" className="flex-1">
-      <Panel defaultSize={22} minSize={0} maxSize={40} collapsible>
-        <div className={cn('h-full overflow-hidden', !showSidebar && 'hidden')}>{sidebar}</div>
+    <PanelGroup ref={groupRef} direction="horizontal" autoSaveId="halo-h-canvas" className="flex-1">
+      <Panel defaultSize={76} minSize={0} collapsible>
+        <div className={cn('h-full', !showCenter && 'hidden')}>{center}</div>
       </Panel>
       <PanelResizeHandle className={cn(
         'w-px bg-[var(--border)] hover:w-1 hover:bg-[var(--primary)] transition-colors',
-        !showSidebar && 'pointer-events-none opacity-0',
+        handleHidden && 'pointer-events-none opacity-0',
       )} />
-      <Panel defaultSize={78} minSize={40}>
-        {main}
-      </Panel>
-    </PanelGroup>
-  )
-}
-
-/** Explorer's canvas + bottom panel. CanvasPanel stays mounted across tab switches and maximize
- *  toggles. The PanelGroup always renders; when the bottom panel is hidden, we collapse its Panel
- *  to 0 so the canvas takes the full height. */
-function ExplorerMainArea({ projectId, showBottom, bottomSlotRef }: { projectId: string | null; showBottom: boolean; bottomSlotRef: (el: HTMLDivElement | null) => void }) {
-  const groupRef = useRef<ImperativePanelGroupHandle | null>(null)
-  // Remember the last editor/bottom split so restoring it feels natural
-  const lastSplitRef = useRef<[number, number]>([65, 35])
-
-  useEffect(() => {
-    const group = groupRef.current
-    if (!group) return
-    if (showBottom) {
-      group.setLayout(lastSplitRef.current)
-    } else {
-      // Capture current split before collapsing, then give everything to the editor
-      const current = group.getLayout() as [number, number]
-      if (current[1] > 0) lastSplitRef.current = current
-      group.setLayout([100, 0])
-    }
-  }, [showBottom])
-
-  return (
-    <PanelGroup ref={groupRef} direction="vertical" autoSaveId="halo-v-editor" className="h-full">
-      <Panel defaultSize={65} minSize={20}>
-        <EditorPanel projectId={projectId} mode="editor-only" />
-      </Panel>
-      <PanelResizeHandle className={cn(
-        'h-px bg-[var(--border)] hover:h-1 hover:bg-[var(--primary)] transition-colors',
-        !showBottom && 'pointer-events-none opacity-0',
-      )} />
-      <Panel defaultSize={35} minSize={0} collapsible>
-        <div ref={bottomSlotRef} className={cn('h-full', !showBottom && 'hidden')} />
+      <Panel defaultSize={24} minSize={0} collapsible>
+        <div className={cn('h-full', !showCanvas && 'hidden')}>{canvas}</div>
       </Panel>
     </PanelGroup>
   )
@@ -744,7 +816,6 @@ function ExplorerMainArea({ projectId, showBottom, bottomSlotRef }: { projectId:
 /** Non-explorer tabs keep their original conditional-render behavior — destroyed/rebuilt each switch. */
 function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
   if (activeTab === 'source-control') return <SourceControlMain />
-  if (activeTab === 'sessions') return <SessionChatPanel />
   if (activeTab === 'management') return <AgentManagementMain />
   if (activeTab === 'skills') return <SkillsMain />
   if (activeTab === 'channels') return <ChannelsMain />
@@ -752,6 +823,133 @@ function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
   if (activeTab === 'cron') return <CronMain />
   if (activeTab === 'settings') return <SettingsMain />
   return null
+}
+
+type CanvasView = 'overview' | 'browser'
+
+/** Canvas column header — WorkBuddy-style ☰ view switcher （概览 / 浏览器)
+ *  plus the panel collapse control. */
+function CanvasHeader({ view, onViewChange, onCollapse }: {
+  view: CanvasView
+  onViewChange: (v: CanvasView) => void
+  onCollapse: () => void
+}) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const views: { id: CanvasView; label: string }[] = [
+    { id: 'overview', label: t('canvas.overview') },
+    { id: 'browser', label: t('canvas.browser') },
+  ]
+  const current = views.find((v) => v.id === view)
+
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--card)] px-2">
+      <div ref={ref} className="relative">
+        <button
+          onClick={() => setOpen(!open)}
+          title={t('nav.canvas')}
+          className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
+        {open && (
+          <div className="absolute left-0 top-full z-30 mt-1 min-w-[160px] rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
+            {views.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => { onViewChange(v.id); setOpen(false) }}
+                className={cn(
+                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
+                  v.id === view ? 'text-[var(--foreground)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]',
+                )}
+              >
+                <span className="flex-1">{v.label}</span>
+                {v.id === view && <Check className="h-3.5 w-3.5 text-[var(--primary)]" />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <span className="text-sm font-medium text-[var(--foreground)]">{current?.label}</span>
+      <div className="flex-1" />
+      <button
+        onClick={onCollapse}
+        title={t('sessions.collapse')}
+        className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+      >
+        <PanelRightClose className="h-4 w-4" />
+      </button>
+    </div>
+  )
+}
+
+/** Simple browser view: address bar + iframe. Sites that send
+ *  X-Frame-Options / frame-ancestors will refuse to render — the external
+ *  button covers those. Last URL persists in localStorage. */
+function CanvasBrowserView() {
+  const t = useT()
+  const [url, setUrl] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    try { return localStorage.getItem('halo_canvas_browser_url') ?? '' } catch { return '' }
+  })
+  const [input, setInput] = useState(url)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  const navigate = (target: string) => {
+    let u = target.trim()
+    if (!u) return
+    if (!/^https?:\/\//i.test(u)) u = `https://${u}`
+    setUrl(u)
+    setInput(u)
+    try { localStorage.setItem('halo_canvas_browser_url', u) } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] p-2">
+        <button
+          onClick={() => { if (iframeRef.current && url) iframeRef.current.src = url }}
+          title="Reload"
+          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+        </button>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) navigate(input) }}
+          placeholder={t('canvas.browserPlaceholder')}
+          className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs text-[var(--foreground)] placeholder-[var(--muted-foreground)] outline-none focus:border-[var(--primary)]"
+        />
+        <button
+          onClick={() => { if (url) window.open(url, '_blank', 'noopener') }}
+          title={t('canvas.openExternal')}
+          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {url ? (
+        <iframe ref={iframeRef} src={url} title={t('canvas.browser')} className="min-h-0 flex-1 border-0 bg-white" />
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-[var(--muted-foreground)]">
+          <Globe className="h-8 w-8" />
+          <span className="text-xs">{t('canvas.browserPlaceholder')}</span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 

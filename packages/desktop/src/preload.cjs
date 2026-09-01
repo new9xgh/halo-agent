@@ -14,7 +14,9 @@
 // glow-free variant of the brand mark (pulse rings + core) because the real
 // icon's feGaussianBlur would smear at 36px and its gradient/filter ids could
 // collide with page SVGs. Unique id suffix `_bvo` avoids any clash.
-const HALO_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><defs><radialGradient id="core_bvo" cx="42%" cy="38%" r="68%"><stop offset="0" stop-color="#d8e6ff"/><stop offset="0.35" stop-color="#8aa6ff"/><stop offset="1" stop-color="#9b6bff"/></radialGradient><linearGradient id="ring_bvo" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6f9bff"/><stop offset="1" stop-color="#a06bff"/></linearGradient><linearGradient id="bg_bvo" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0e1430"/><stop offset="1" stop-color="#070a16"/></linearGradient><clipPath id="sq_bvo"><rect x="104" y="104" width="816" height="816" rx="182"/></clipPath></defs><g clip-path="url(#sq_bvo)"><rect x="104" y="104" width="816" height="816" fill="url(#bg_bvo)"/><circle cx="512" cy="512" r="118" fill="none" stroke="url(#ring_bvo)" stroke-width="15" opacity="0.34"/><circle cx="512" cy="512" r="176" fill="none" stroke="url(#ring_bvo)" stroke-width="12" opacity="0.20"/><circle cx="512" cy="512" r="62" fill="url(#core_bvo)"/></g></svg>`
+// 元轴 brand mark — the overlays live on the admin page, so the app's own
+// /icon.png (served by Next from app/icon.png) is directly usable.
+const BRAND_ICON_IMG = '<img src="/icon.png" width="36" height="36" alt="" style="display:block">'
 
 function showOverlay(message, kind /* 'alert' | 'confirm' */, onConfirm) {
   const overlay = document.createElement('div')
@@ -23,21 +25,21 @@ function showOverlay(message, kind /* 'alert' | 'confirm' */, onConfirm) {
     display: flex; align-items: center; justify-content: center;
     font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
   `
-  // Dark card to match admin UI theme (--background: #0a0a0a in globals.css).
+  // Light card to match the admin UI default theme (--card: #ffffff in globals.css).
   const card = document.createElement('div')
   card.style.cssText = `
-    min-width: 320px; max-width: 480px; background: #18181b; color: #ededed;
-    border: 1px solid #2a2a2a;
-    border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); padding: 16px 20px;
+    min-width: 320px; max-width: 480px; background: #ffffff; color: #1c1c1a;
+    border: 1px solid #e8e8e6;
+    border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.15); padding: 16px 20px;
   `
   const header = document.createElement('div')
   header.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 10px;'
   const iconWrap = document.createElement('div')
   iconWrap.style.cssText = 'flex: none; width: 36px; height: 36px;'
-  iconWrap.innerHTML = HALO_ICON_SVG.replace('width="32" height="32"', 'width="36" height="36"')
+  iconWrap.innerHTML = BRAND_ICON_IMG
   header.appendChild(iconWrap)
   const title = document.createElement('div')
-  title.textContent = 'Halo'
+  title.textContent = '元轴'
   title.style.cssText = 'font-weight: 600;'
   header.appendChild(title)
 
@@ -55,7 +57,7 @@ function showOverlay(message, kind /* 'alert' | 'confirm' */, onConfirm) {
   if (kind === 'confirm') {
     const cancelBtn = document.createElement('button')
     cancelBtn.textContent = 'Cancel'
-    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #2a2a2a; background: #27272a; color: #ededed; cursor: pointer;'
+    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e8e8e6; background: #f0f0ee; color: #1c1c1a; cursor: pointer;'
     cancelBtn.onclick = () => { document.body.removeChild(overlay); onConfirm(false) }
     actions.appendChild(cancelBtn)
   }
@@ -84,18 +86,18 @@ window.haloPrompt = function (message, defaultValue) {
     `
     const card = document.createElement('div')
     card.style.cssText = `
-      min-width: 360px; max-width: 520px; background: #18181b; color: #ededed;
-      border: 1px solid #2a2a2a;
-      border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); padding: 16px 20px;
+      min-width: 360px; max-width: 520px; background: #ffffff; color: #1c1c1a;
+      border: 1px solid #e8e8e6;
+      border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.15); padding: 16px 20px;
     `
     const header = document.createElement('div')
     header.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 10px;'
     const iconWrap = document.createElement('div')
     iconWrap.style.cssText = 'flex: none; width: 36px; height: 36px;'
-    iconWrap.innerHTML = HALO_ICON_SVG.replace('width="32" height="32"', 'width="36" height="36"')
+    iconWrap.innerHTML = BRAND_ICON_IMG
     header.appendChild(iconWrap)
     const title = document.createElement('div')
-    title.textContent = 'Halo'
+    title.textContent = '元轴'
     title.style.cssText = 'font-weight: 600;'
     header.appendChild(title)
 
@@ -108,7 +110,7 @@ window.haloPrompt = function (message, defaultValue) {
     input.value = defaultValue == null ? '' : String(defaultValue)
     input.style.cssText = `
       width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 6px 10px;
-      background: #0a0a0a; color: #ededed; border: 1px solid #2a2a2a; border-radius: 4px;
+      background: #f7f7f5; color: #1c1c1a; border: 1px solid #e8e8e6; border-radius: 6px;
       font: inherit; outline: none;
     `
 
@@ -119,7 +121,7 @@ window.haloPrompt = function (message, defaultValue) {
 
     const cancelBtn = document.createElement('button')
     cancelBtn.textContent = 'Cancel'
-    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #2a2a2a; background: #27272a; color: #ededed; cursor: pointer;'
+    cancelBtn.style.cssText = 'padding: 4px 14px; border-radius: 4px; border: 1px solid #e8e8e6; background: #f0f0ee; color: #1c1c1a; cursor: pointer;'
     cancelBtn.onclick = () => finish(null)
 
     const okBtn = document.createElement('button')

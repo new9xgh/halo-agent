@@ -44,6 +44,11 @@ function removeStoredSessionId(projectId: string): void {
   }
 }
 
+// Plain (non-hook) helpers for the session controller — useChat itself
+// registers WS subscriptions, so components that only need to start/delete
+// a session (the right session panel) must not instantiate a second copy.
+export { getStoredSessionId, removeStoredSessionId }
+
 export function useChat() {
   const t = useT()
   const messages = useChatStore((s) => s.messages)
