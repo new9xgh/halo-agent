@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-09-01
+
+### Added
+
+- Cron: per-job configurable max run time (`timeout_sec`, 60–21600s, default 3600) — replaces the hard-coded one-hour cap for every job; settable via API, admin job form, and the cron skill's `--timeout-sec`.
+
 ## [1.1.2] - 2026-08-19
 
 ### Added
@@ -382,7 +388,8 @@ Initial public release.
 - Bubblewrap sandbox with `full` / `workspace` / `readonly` access levels.
 - "Express Self" particle face driven by runtime `<<<SHOW>>>` markers.
 
-[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/turmind/halo-agent/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/turmind/halo-agent/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/turmind/halo-agent/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/turmind/halo-agent/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/turmind/halo-agent/compare/v1.0.3...v1.1.0
