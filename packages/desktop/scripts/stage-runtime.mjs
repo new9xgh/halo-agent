@@ -15,7 +15,7 @@
  * portable node_modules, so the dmg is self-contained at runtime
  * (system node is still required — node binary itself is not bundled yet).
  */
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -656,8 +656,14 @@ function smokeTestNativeAddons() {
     const pkg = path.join(rt, 'node_modules', 'better-sqlite3')
     if (!fs.existsSync(pkg)) continue
     try {
-      execSync(
-        `"${NODE_BIN_DST_FILE}" -e "const D=require('${pkg}'); new D(':memory:').prepare('select 1').get()"`,
+      // execFileSync (no shell) + JSON.stringify for the path: on Windows
+      // hosts the pkg path contains backslashes, which a shell-interpolated
+      // single-quoted JS string would eat (`\r` → CR, `\n` → LF) and the
+      // require() then misses with a mangled path. The Linux/mac build
+      // hosts never hit this; args-array exec sidesteps it entirely.
+      execFileSync(
+        NODE_BIN_DST_FILE,
+        ['-e', `const D=require(${JSON.stringify(pkg)}); new D(':memory:').prepare('select 1').get()`],
         { stdio: 'pipe' },
       )
       console.log(`[stage] ✓ better-sqlite3 loads on bundled node (${path.basename(rt)})`)
