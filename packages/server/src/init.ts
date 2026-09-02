@@ -132,6 +132,7 @@ const BUNDLED_DOCS = [
   'guide/skills.md',
   'guide/testing-agents-and-skills.md',
   'guide/secrets-and-credentials.md',
+  'guide/mcp.md',
   'dev/tools.md',
   'dev/add-model-provider.md',
   'dev/add-channel.md',
@@ -483,6 +484,11 @@ export function ensureHaloHome(haloHome: string): void {
   // models/ — model registry
   forceCopyDir(path.join(TEMPLATES_DIR, 'models'), path.join(globalDir, 'models'))
 
+  // mcp/ — user-declared MCP servers. Nothing seeded (halo ships no default
+  // servers); the dir just needs to exist so users have a place to drop
+  // `<id>.yaml` files. See .halo/docs/guide/mcp.md.
+  fs.mkdirSync(path.join(globalDir, 'mcp'), { recursive: true })
+
   // Built-in agents — overwrite each id from the BUILTIN_AGENT_IDS set, but
   // preserve the user's `model:` block (the admin UI lets users change it).
   // Agents not in the set (user-added globals) are left alone entirely.
@@ -574,7 +580,7 @@ export function ensureWorkspaceHalo(workspaceRoot: string): void {
   // `canvas/` holds the agent's visual face (self.html), force-copied below.
   // Created up-front so the first /note doesn't race on mkdir.
   const dirs = [
-    'sessions', 'agents', 'skills', 'logs', 'memory', 'canvas',
+    'sessions', 'agents', 'skills', 'logs', 'memory', 'canvas', 'mcp',
     'evo/runs', 'evo/applies', 'evo/history',
   ]
   for (const dir of dirs) {

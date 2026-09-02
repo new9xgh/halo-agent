@@ -3,9 +3,10 @@ import type { ToolDef } from './bedrock-agent.js'
 import { createModelRuntime, type ModelRuntime } from './model-runtime.js'
 import { createWorkspaceTools } from '../tools/workspace-tools.js'
 import { createDraftTool } from '../tools/draft-tool.js'
+import { createMcpTools } from '../tools/mcp-tools.js'
 import { loadSystemPrompts } from '../prompts/system-prompts.js'
 import { loadAllMdContents, composeMdPrompt, resolveMdPaths, loadScopeBody } from '../prompts/md-loader.js'
-import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity } from '../config.js'
+import { config, modelSupportsImage, resolveApiKey, resolveAwsCredentials, resolveContextWindow, resolveThinkingMode, resolveVerbosity, loadMcpServers } from '../config.js'
 import {
   loadAgentYaml, loadSkillMetadata, buildSkillPrompt, createSkillTool, filterTools,
   scanAvailableAgents, isTeamMember, canDelegate, agentSourceDir,
@@ -79,10 +80,11 @@ export class SessionAgentBuilder {
     const { modelId, endpoint, providerId } = this.validateAgentModelConfig(agentId, yamlConfig)
 
     // Resolve tools the agent is allowed to use (workspace tools filtered by
-    // yaml `tools:` whitelist + matching session tools). Skill tools come
-    // later inside `composeSystemPrompt` so the prompt and tool set both
-    // pick up the same allowed skill list.
-    const { workspaceTools, sessionTools, allowedNamespaces, draftReset } = this.resolveBaseToolSet({
+    // yaml `tools:` whitelist + matching session tools + MCP tools from
+    // user-declared servers). Skill tools come later inside
+    // `composeSystemPrompt` so the prompt and tool set both pick up the same
+    // allowed skill list.
+    const { workspaceTools, sessionTools, mcpTools, allowedNamespaces, draftReset } = await this.resolveBaseToolSet({
       agentId, sessionId, modelId, accessLevel, yamlConfig,
     })
 
@@ -93,6 +95,7 @@ export class SessionAgentBuilder {
       agentId, isRoot, workingDir, yamlConfig, accessLevel,
       workspaceToolNames: workspaceTools.map((t) => t.name),
       sessionToolNames: sessionTools.map((t) => t.name),
+      mcpToolNames: mcpTools.map((t) => t.name),
     })
     const { systemPrompt, skillTools, mdContents, systemPrompts } = promptResult
     void allowedNamespaces  // namespaces are consumed inside resolveBaseToolSet via createWorkspaceTools
@@ -101,12 +104,13 @@ export class SessionAgentBuilder {
     // prompt-caching, credentials).
     const { agent, thinkingEffort, contextConfig } = this.buildModelRuntime({
       yamlConfig, modelId, endpoint, providerId, sessionId, systemPrompt,
-      tools: [...workspaceTools, ...sessionTools, ...skillTools],
+      tools: [...workspaceTools, ...sessionTools, ...skillTools, ...mcpTools],
     })
 
     const allToolNames = [
       ...workspaceTools.map((t) => t.name),
       ...sessionTools.map((t) => t.name),
+      ...mcpTools.map((t) => t.name),
     ]
     const meta = this.collectAgentMeta({
       agentId, isRoot, yamlConfig, mdContents, systemPrompts, allToolNames,
@@ -143,20 +147,21 @@ export class SessionAgentBuilder {
 
   /**
    * Resolve the agent's "base" tools — workspace tools (filtered by the
-   * yaml `tools:` whitelist) and session tools (only those explicitly
-   * named in `tools:`, no auto-inject).
+   * yaml `tools:` whitelist), session tools (only those explicitly
+   * named in `tools:`, no auto-inject), and MCP tools (from user-declared
+   * servers, bypassing the whitelist like session tools).
    *
    * Skill tools are NOT included here — they're produced by
    * `composeSystemPrompt` so the prompt text and tool list pick up the
    * same skill metadata.
    */
-  private resolveBaseToolSet(args: {
+  private async resolveBaseToolSet(args: {
     agentId: string
     sessionId: string
     modelId: string
     accessLevel: 'readonly' | 'workspace' | null
     yamlConfig: AgentYamlConfig | null
-  }): { workspaceTools: ToolDef[]; sessionTools: ToolDef[]; allowedNamespaces: Set<string>; draftReset: (() => void) | null } {
+  }): Promise<{ workspaceTools: ToolDef[]; sessionTools: ToolDef[]; mcpTools: ToolDef[]; allowedNamespaces: Set<string>; draftReset: (() => void) | null }> {
     const { agentId, sessionId, modelId, accessLevel, yamlConfig } = args
 
     // Build the namespace whitelist for shell_exec param substitution:
@@ -206,7 +211,25 @@ export class SessionAgentBuilder {
       draftReset = reset
     }
 
-    return { workspaceTools, sessionTools, allowedNamespaces, draftReset }
+    // MCP tools come from user-declared servers (`mcp/<id>.yaml`, global +
+    // workspace overlay) and bypass the yaml `tools:` whitelist — same
+    // all-or-nothing treatment as the session-tool bundle. Internal agents
+    // (evo/score/apply) are platform tooling and never get them. Readonly
+    // sessions keep only tools the server annotated `readOnlyHint`; MCP
+    // tools are external side effects halo can't sandbox, so unannotated
+    // ones are withheld rather than trusted.
+    let mcpTools: ToolDef[] = []
+    if (!yamlConfig?.internal) {
+      const mcpServers = loadMcpServers(this.host.workspaceRoot)
+      if (mcpServers.length > 0) {
+        const mcp = await createMcpTools(this.host.workspaceRoot, mcpServers)
+        mcpTools = accessLevel === 'readonly'
+          ? mcp.tools.filter((t) => mcp.readOnlyNames.has(t.name))
+          : mcp.tools
+      }
+    }
+
+    return { workspaceTools, sessionTools, mcpTools, allowedNamespaces, draftReset }
   }
 
   /**
@@ -223,13 +246,14 @@ export class SessionAgentBuilder {
     accessLevel: 'readonly' | 'workspace' | null
     workspaceToolNames: string[]
     sessionToolNames: string[]
+    mcpToolNames: string[]
   }): Promise<{
     systemPrompt: string
     skillTools: ToolDef[]
     mdContents: Awaited<ReturnType<typeof loadAllMdContents>>
     systemPrompts: Awaited<ReturnType<typeof loadSystemPrompts>>
   }> {
-    const { agentId, isRoot, workingDir, yamlConfig, accessLevel, workspaceToolNames, sessionToolNames } = args
+    const { agentId, isRoot, workingDir, yamlConfig, accessLevel, workspaceToolNames, sessionToolNames, mcpToolNames } = args
 
     const [mdContents, systemPrompts] = await Promise.all([
       loadAllMdContents(agentId, this.host.workspaceRoot),
@@ -348,7 +372,7 @@ export class SessionAgentBuilder {
 
     // Tail-append the explicit tool list so the model can see the legal set
     // at a glance.
-    const allToolNames = [...workspaceToolNames, ...sessionToolNames]
+    const allToolNames = [...workspaceToolNames, ...sessionToolNames, ...mcpToolNames]
     if (allToolNames.length > 0) {
       systemPrompt += `\n\nYour available tools: ${allToolNames.join(', ')}. Only use tools in this list.`
     }

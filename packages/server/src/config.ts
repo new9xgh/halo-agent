@@ -59,6 +59,106 @@ function modelsRegistry(): { providers: Array<Record<string, unknown>> } {
   if (!_modelsRegistryCache) _modelsRegistryCache = loadModelsRegistry()
   return _modelsRegistryCache
 }
+
+// ── MCP server registry ──────────────────────────────────────────────
+
+/** One declared MCP server, from `mcp/<id>.yaml` (global or workspace). */
+export interface McpServerConfig {
+  id: string
+  enabled: boolean
+  transport: 'stdio' | 'http'
+  /** stdio: executable to spawn. */
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  /** http: streamable-HTTP endpoint URL. */
+  url?: string
+  headers?: Record<string, string>
+  description?: string
+}
+
+/**
+ * Validate an already-parsed MCP server object (from YAML.parse) into a
+ * normalized McpServerConfig. Returns null for invalid shapes. `source`
+ * is only used in log messages. `<<ENV>>` placeholders inside env/headers
+ * values are expanded against process.env.
+ * Exported for the admin routes (routes/mcp.ts) which reuse the same
+ * validation on PUT.
+ */
+export function parseMcpServerConfig(parsed: unknown, source: string): McpServerConfig | null {
+  const obj = parsed as Record<string, unknown> | null
+  if (!obj || typeof obj !== 'object' || typeof obj.id !== 'string' || !obj.id) {
+    console.log(`[config] Skipping MCP server ${source}: missing server id`)
+    return null
+  }
+  const transport = obj.transport === 'http' ? ('http' as const) : ('stdio' as const)
+  if (transport === 'stdio' && typeof obj.command !== 'string') {
+    console.log(`[config] Skipping MCP server ${obj.id}: stdio transport requires 'command'`)
+    return null
+  }
+  if (transport === 'http' && typeof obj.url !== 'string') {
+    console.log(`[config] Skipping MCP server ${obj.id}: http transport requires 'url'`)
+    return null
+  }
+  const expandMap = (v: unknown): Record<string, string> | undefined => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
+    const out: Record<string, string> = {}
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = expandEnv(String(val))
+    return out
+  }
+  return {
+    id: obj.id,
+    enabled: obj.enabled !== false,
+    transport,
+    command: typeof obj.command === 'string' ? obj.command : undefined,
+    args: Array.isArray(obj.args) ? obj.args.map(String) : undefined,
+    env: expandMap(obj.env),
+    url: typeof obj.url === 'string' ? obj.url : undefined,
+    headers: expandMap(obj.headers),
+    description: typeof obj.description === 'string' ? obj.description : undefined,
+  }
+}
+
+/** Parse + validate one `mcp/<id>.yaml` file. Returns null (with a log
+ *  line) for unreadable/invalid files. */
+export function parseMcpServerFile(filePath: string): McpServerConfig | null {
+  let parsed: Record<string, unknown> | null
+  try {
+    parsed = YAML.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown> | null
+  } catch (err) {
+    console.log(`[config] Failed to load MCP server ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
+  return parseMcpServerConfig(parsed, filePath)
+}
+
+/**
+ * Load declared MCP servers: `~/.halo/global/mcp/<id>.yaml` overlaid by
+ * `<ws>/.halo/mcp/<id>.yaml` — a workspace file replaces the global one
+ * with the same filename (same overlay rule as the models registry).
+ *
+ * Read fresh on every call (session build): no cache, so dropping in a new
+ * yaml takes effect on the next session without a restart.
+ * `<<ENV_NAME>>` placeholders inside env/headers values are expanded against
+ * process.env at load time. `globalDirOverride` exists for tests.
+ */
+export function loadMcpServers(workspaceRoot: string, globalDirOverride?: string): McpServerConfig[] {
+  const byFile = new Map<string, McpServerConfig>()
+  const scan = (dir: string) => {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch { return } // dir missing — no servers declared there
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.yaml')) continue
+      const cfg = parseMcpServerFile(path.join(dir, entry.name))
+      if (cfg) byFile.set(entry.name, cfg)
+    }
+  }
+  scan(globalDirOverride ?? path.join(HALO_GLOBAL_DIR, 'mcp'))
+  scan(path.join(workspaceRoot, '.halo', 'mcp'))
+  return [...byFile.values()].filter((c) => c.enabled)
+}
 /** Mtime-watched like getSettings() below. config.yaml used to be read once
  *  at module load, but POST /api/auth/change-password rewrites
  *  `server.password` at runtime — a frozen snapshot would keep accepting the

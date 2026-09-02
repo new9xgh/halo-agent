@@ -1,5 +1,18 @@
 import type { ChatMessage } from '@/shared/types'
 
+/** One MCP server as the admin list sees it (mirrors the server's list route). */
+export interface McpServerListItem {
+  id: string
+  transport: 'stdio' | 'http'
+  description?: string
+  enabled: boolean
+  scope: 'global' | 'workspace'
+  /** global entry shadowed by a same-id workspace file. */
+  overridden?: boolean
+  /** tool count from the live pool; absent when not connected. */
+  toolCount?: number
+}
+
 const API_BASE = '/api'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -607,6 +620,49 @@ export const api = {
       if (opts?.projectId) params.set('projectId', opts.projectId)
       const qs = params.toString() ? `?${params}` : ''
       return request<{ ok: boolean; disabled: boolean }>(`/skills/${id}/toggle${qs}`, { method: 'PATCH' })
+    },
+  },
+
+  mcp: {
+    list(projectId?: string) {
+      const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+      return request<{ servers: McpServerListItem[] }>(`/mcp-servers${qs}`)
+    },
+    create(data: { id: string; transport: 'stdio' | 'http'; scope: 'global' | 'workspace'; projectId?: string; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; description?: string }) {
+      return request<{ server: McpServerListItem; conflictScope?: string }>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) })
+    },
+    getYaml(id: string, opts?: { scope?: string; projectId?: string }) {
+      const params = new URLSearchParams()
+      if (opts?.scope) params.set('scope', opts.scope)
+      if (opts?.projectId) params.set('projectId', opts.projectId)
+      const qs = params.toString() ? `?${params}` : ''
+      return request<{ yaml: string }>(`/mcp-servers/${encodeURIComponent(id)}/yaml${qs}`)
+    },
+    saveYaml(id: string, yaml: string, opts?: { scope?: string; projectId?: string }) {
+      return request<{ server: McpServerListItem }>(`/mcp-servers/${encodeURIComponent(id)}/yaml`, {
+        method: 'PUT',
+        body: JSON.stringify({ yaml, scope: opts?.scope, projectId: opts?.projectId }),
+      })
+    },
+    remove(id: string, opts?: { scope?: string; projectId?: string }) {
+      const params = new URLSearchParams()
+      if (opts?.scope) params.set('scope', opts.scope)
+      if (opts?.projectId) params.set('projectId', opts.projectId)
+      const qs = params.toString() ? `?${params}` : ''
+      return request<{ ok: boolean }>(`/mcp-servers/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' })
+    },
+    toggle(id: string, opts?: { scope?: string; projectId?: string }) {
+      const params = new URLSearchParams()
+      if (opts?.scope) params.set('scope', opts.scope)
+      if (opts?.projectId) params.set('projectId', opts.projectId)
+      const qs = params.toString() ? `?${params}` : ''
+      return request<{ ok: boolean; enabled: boolean }>(`/mcp-servers/${encodeURIComponent(id)}/toggle${qs}`, { method: 'PATCH' })
+    },
+    probe(id: string, opts?: { scope?: string; projectId?: string }) {
+      return request<{ ok: boolean; toolCount?: number; tools?: Array<{ name: string; readOnly: boolean }>; error?: string }>(
+        `/mcp-servers/${encodeURIComponent(id)}/probe`,
+        { method: 'POST', body: JSON.stringify({ scope: opts?.scope, projectId: opts?.projectId }) },
+      )
     },
   },
 

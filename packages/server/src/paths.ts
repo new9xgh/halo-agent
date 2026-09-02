@@ -82,6 +82,12 @@ export function wsSkillDir(workspacePath: string, skillId: string): string {
   return path.join(wsSkillsDir(workspacePath), skillId)
 }
 
+/** `<ws>/.halo/mcp` — workspace MCP server declarations (`<id>.yaml`,
+ *  file-level override of the global ones). */
+export function wsMcpDir(workspacePath: string): string {
+  return path.join(wsHaloDir(workspacePath), 'mcp')
+}
+
 /** `<ws>/.halo/sessions` — per-agent session JSON dir root. */
 export function wsSessionsDir(workspacePath: string): string {
   return path.join(wsHaloDir(workspacePath), 'sessions')
@@ -217,6 +223,11 @@ export function globalPromptsDir(): string {
 /** `~/.halo/global/models`. */
 export function globalModelsDir(): string {
   return path.join(globalDir(), 'models')
+}
+
+/** `~/.halo/global/mcp` — global MCP server declarations (`<id>.yaml`). */
+export function globalMcpDir(): string {
+  return path.join(globalDir(), 'mcp')
 }
 
 /** `~/.halo/global/builtin` — server self-knowledge docs. */

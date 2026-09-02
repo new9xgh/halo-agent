@@ -296,6 +296,17 @@ Get an agent's full details: AGENT.md, model config, tools, skills. Use it befor
 
 Returns: full SKILL.md content (body + resource files list). For progressive disclosure — the system prompt only contains skill metadata (name + description); the agent calls this tool on demand.
 
+## MCP tools
+
+File: `packages/server/src/tools/mcp-tools.ts`
+
+**Auto-injected — not declared in `agent.yaml tools`.** Bridges user-declared MCP servers (see [guide/mcp.md](../guide/mcp.md)): each server's tools become `mcp__<serverId>__<toolName>` ToolDefs, injected into every non-internal agent's tool set at session build (`SessionAgentBuilder.resolveBaseToolSet`). One pooled client per (workspace, server); 10s connect/list timeout; a failing server is skipped with a log line, never blocking session creation.
+
+- `inputSchema` passes through verbatim (MCP schemas are already JSON Schema).
+- Tool results: text content is flattened to a string; image content maps to base64 image blocks; `isError` results and exceptions come back with the `__TOOL_ERROR__` marker.
+- Readonly sessions keep only tools the server annotated `readOnlyHint: true`.
+- stdio children run with the workspace as cwd and the halo process env minus its auth secrets (`cleanChildEnv`), overlaid with the yaml-declared `env`.
+
 ## Goal tools
 
 Injected **only** for the built-in `goal` agent (G) — `session-agent-builder` swaps in this set (`buildGoalTools`, `agents/goal-mode.ts`) instead of the standard session bundle when the session's agent is `GOAL_AGENT_ID`. Every callback re-reads goal state from the workspace db (never a cached copy), so a halt / pause / clear that landed while G was mid-turn is enforced on its next tool call. See [design/goal-mode.md](../design/goal-mode.md).

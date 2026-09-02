@@ -18,6 +18,8 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 │   │   └── AGENT.md                   # Agent personality
 │   ├── models/                        # Model registry — one file per provider, scanned at startup
 │   │   └── <providerId>.yaml          # e.g. aws-bedrock-claude-invoke.yaml
+│   ├── mcp/                           # MCP server declarations — one file per server (guide/mcp.md)
+│   │   └── <serverId>.yaml            # stdio (command/args/env) or http (url/headers); created empty, nothing seeded
 │   ├── skills/<id>/
 │   │   └── SKILL.md                   # Skill definition (frontmatter + body)
 │   ├── internal-sessions/<agentId>/   # Internal-agent sessions (`__evo_agent__`, `__score__`, `__apply_agent__`)
@@ -41,6 +43,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 ├── INSTRUCTIONS.md                    # Project-level instructions (overrides global INSTRUCTIONS.md)
 ├── INDEX.md                            # Project overview + doc index (always injected)
 ├── agents/<id>/                       # Workspace agent (overrides same-id global)
+├── mcp/<serverId>.yaml                # Workspace MCP server declaration (file-level override of the same-name global file)
 ├── skills/<id>/
 ├── prompts/                            # System prompts (directory-level override of global)
 │   ├── bootstrap/                     # Overrides ~/.halo/global/prompts/bootstrap/ if present
@@ -63,7 +66,7 @@ Defines the persisted-data format for every Halo surface. Format changes must re
 └── docs/                               # Project docs (requirements/design/dev/test/plans)
 ```
 
-Precedence: workspace > global, **at folder granularity**. For the same id, a workspace `agents/<id>/` or `skills/<id>/` folder entirely replaces the global one — every file in it, no per-file fallback to global (a workspace agent folder with only `AGENT.md` loses the global `agent.yaml`). Same whole-folder rule for `prompts/{bootstrap,all,root}/` (workspace scope directory replaces the global one). INSTRUCTIONS.md is the single-file exception: workspace root suppresses global.
+Precedence: workspace > global, **at folder granularity**. For the same id, a workspace `agents/<id>/` or `skills/<id>/` folder entirely replaces the global one — every file in it, no per-file fallback to global (a workspace agent folder with only `AGENT.md` loses the global `agent.yaml`). Same whole-folder rule for `prompts/{bootstrap,all,root}/` (workspace scope directory replaces the global one). INSTRUCTIONS.md is the single-file exception: workspace root suppresses global. `mcp/<serverId>.yaml` overrides at **file granularity**: a workspace file replaces only the same-name global file, other global servers still apply.
 
 ### Path constructors
 

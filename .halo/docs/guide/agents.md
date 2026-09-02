@@ -79,6 +79,8 @@ team:                 # a non-empty team is what enables delegation
 
 **Session tools**: `start_session / session_list / query_session / interrupt_session / stop_session / archive_session / get_session_output / query_agent` — **not** listed under `tools`. The whole bundle is granted automatically the moment an agent declares a non-empty `team`; an empty/absent `team` means no delegation (no session tools, no roster). To let a sub-agent delegate further, give it its own `team`. Add the agent's own id to its `team` to enable parallel self-spawn.
 
+**MCP tools**: `mcp__<serverId>__<toolName>` — auto-injected from user-declared MCP servers (`~/.halo/global/mcp/<id>.yaml`, workspace-overridable), bypassing the `tools:` whitelist. Readonly sessions keep only `readOnlyHint`-annotated tools; internal agents get none. See [mcp.md](mcp.md).
+
 Form view lets you check workspace tools on/off and pick the team; there's no separate session-tools checklist — delegation rides entirely on the team.
 
 ## Skill mounting

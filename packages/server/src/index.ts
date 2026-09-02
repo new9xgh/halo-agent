@@ -18,6 +18,7 @@ import { createDataPreviewRoutes } from './routes/data-preview.js'
 import { createGitRoutes } from './routes/git.js'
 import { createAgentConfigRoutes } from './routes/agent-configs.js'
 import { createSkillRoutes } from './routes/skills.js'
+import { createMcpRoutes } from './routes/mcp.js'
 import { createSettingsRoutes, onSettingsChange } from './routes/settings.js'
 import { createEvolutionRoutes } from './routes/evolution.js'
 import { createSessionRoutes } from './routes/sessions.js'
@@ -371,6 +372,9 @@ app.route('/api', agentConfigRoutes)
 
 const skillRoutes = createSkillRoutes()
 app.route('/api', skillRoutes)
+
+const mcpRoutes = createMcpRoutes()
+app.route('/api', mcpRoutes)
 
 const settingsRoutes = createSettingsRoutes()
 app.route('/api', settingsRoutes)

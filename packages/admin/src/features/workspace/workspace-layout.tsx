@@ -10,6 +10,7 @@ import { EditorPanel } from '@/features/editor/editor-panel'
 import { registeredExtensions } from '@/features/editor/previews/FilePreview'
 import { FolderPicker } from '@/features/explorer/folder-picker'
 import { AgentManagementMain } from '@/features/agents/agent-management-main'
+import { McpMain } from '@/features/mcp/mcp-main'
 import { SkillsSidebar } from '@/features/skills/skills-sidebar'
 import { SkillsMain } from '@/features/skills/skills-main'
 import { SessionNavSection } from '@/features/chat/session-nav-section'
@@ -19,7 +20,7 @@ import { useChatStore } from '@/features/chat/chat-store'
 import { useEditorStore } from '@/shared/stores/editor-store'
 import { loadFileTree } from '@/features/explorer/use-file-tree'
 import { addRecentWorkspace } from '@/features/explorer/use-recent-workspaces'
-import { useGitDecorationsSync, useIsRepo } from '@/features/explorer/git-decorations'
+import { useGitDecorationsSync } from '@/features/explorer/git-decorations'
 import { api } from '@/shared/api-client'
 import { getLanguageFromPath, cn, confirmAction } from '@/shared/utils'
 import { SettingsMain } from '@/features/settings/settings-main'
@@ -31,12 +32,12 @@ import { CronMain } from '@/features/cron/cron-main'
 import { CronSidebar } from '@/features/cron/cron-sidebar'
 import { SourceControlSidebar } from '@/features/source-control/source-control-sidebar'
 import { SourceControlMain } from '@/features/source-control/source-control-main'
-import { FolderTree, Bot, Settings2, Zap, MessageCircle, Sparkles, Clock, GitBranch, Wifi, WifiOff, Pin, PinOff, Bell, BellOff, PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus, Menu, Check, Globe, RefreshCw, ExternalLink, ArrowLeftRight } from 'lucide-react'
+import { FolderTree, Bot, Settings2, Zap, MessageCircle, Sparkles, Clock, Wifi, WifiOff, Pin, PinOff, Bell, BellOff, PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus, Menu, Check, Globe, RefreshCw, ExternalLink, ArrowLeftRight, Plug } from 'lucide-react'
 import { useT } from '@/shared/i18n'
 import { envBadgeTitlePrefix } from '@/shared/env-badge'
 import type { LinkState } from '@/shared/use-websocket'
 
-type SidebarTab = 'explorer' | 'source-control' | 'skills' | 'management' | 'channels' | 'evolution' | 'cron' | 'settings'
+type SidebarTab = 'explorer' | 'source-control' | 'skills' | 'management' | 'mcp' | 'channels' | 'evolution' | 'cron' | 'settings'
 
 const TABS_WITH_SIDEBAR: SidebarTab[] = ['explorer', 'source-control', 'skills', 'channels', 'evolution', 'cron']
 
@@ -467,9 +468,9 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   }
 
   const tabs: { id: SidebarTab; icon: typeof FolderTree; label: string; position?: 'bottom' }[] = [
-    { id: 'source-control', icon: GitBranch, label: t('nav.sourceControl') },
     { id: 'skills', icon: Zap, label: t('nav.skills') },
     { id: 'management', icon: Bot, label: t('nav.agents') },
+    { id: 'mcp', icon: Plug, label: t('nav.mcp') },
     { id: 'channels', icon: MessageCircle, label: t('nav.channels') },
     { id: 'evolution', icon: Sparkles, label: t('nav.evolution') },
     { id: 'cron', icon: Clock, label: t('nav.cron') },
@@ -505,16 +506,11 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   }, [projectId, toggleCanvas, changeCanvasView])
   // Keep the Explorer's git status decorations in sync for the active workspace.
   useGitDecorationsSync(projectId)
-  // Hide the Source Control entry for non-git workspaces (spares non-developer
-  // users a panel that doesn't apply). Three-state: show while 'unknown' (no
-  // first-paint flicker) and when true (incl. a clean repo with no changes);
-  // hide only on a confirmed non-repo. Reuses useGitDecorationsSync's status
-  // call — no extra fetch.
-  const isRepo = useIsRepo(projectId)
+  // The Source Control entry is hidden from the nav (product decision — this
+  // deployment doesn't surface git UI); the tab type/main-area branch stay so
+  // a persisted activeTab can't break anything (redirect below).
 
-  const topTabs = tabs
-    .filter((t) => t.position !== 'bottom')
-    .filter((t) => t.id !== 'source-control' || isRepo !== false)
+  const topTabs = tabs.filter((t) => t.position !== 'bottom')
   const bottomTabs = tabs.filter((t) => t.position === 'bottom')
   const maximized = useEditorStore((s) => s.maximized)
   const activeFileTab = useEditorStore((s) => s.activeTab)
@@ -524,14 +520,12 @@ export function WorkspaceLayout({ linkState }: WorkspaceLayoutProps) {
   const nonExplorerHasSidebar = TABS_WITH_SIDEBAR.includes(activeTab) && sidebarOpen && activeTab !== 'explorer'
   const isExplorer = activeTab === 'explorer'
 
-  // localStorage can restore activeTab='source-control' into a non-git
-  // workspace, where the entry is now hidden — leaving the main area on the SC
-  // panel with no matching activity-bar icon. Fall back to Explorer, but only
-  // on a confirmed non-repo (never 'unknown', so an in-flight status check
-  // can't kick the user off the tab).
+  // localStorage can restore activeTab='source-control', but the entry is no
+  // longer in the nav — that would leave the main area on the SC panel with
+  // no matching activity-bar icon. Fall back to Explorer immediately.
   useEffect(() => {
-    if (isRepo === false && activeTab === 'source-control') setActiveTab('explorer')
-  }, [isRepo, activeTab])
+    if (activeTab === 'source-control') setActiveTab('explorer')
+  }, [activeTab])
 
   // Bottom panel single-render: docked / maximized / floating used to each
   // render their own <BottomPanel> at a different React-tree position, so
@@ -861,6 +855,7 @@ function ExplorerSplitGroup({ showCenter, showCanvas, center, canvas }: {
 function NonExplorerMainArea({ activeTab }: { activeTab: SidebarTab }) {
   if (activeTab === 'source-control') return <SourceControlMain />
   if (activeTab === 'management') return <AgentManagementMain />
+  if (activeTab === 'mcp') return <McpMain />
   if (activeTab === 'skills') return <SkillsMain />
   if (activeTab === 'channels') return <ChannelsMain />
   if (activeTab === 'evolution') return <EvolutionMain />
