@@ -341,6 +341,20 @@ function ExchangeResponses({ responses, debugMode }: { responses: ChatMessage[];
   // assistant turn (pure notification groups get no header).
   const firstAssistant = responses.find((m) => inferMessageType(m) === 'assistant')
 
+  // Merge the whole exchange's process (thinking + tool calls across ALL
+  // assistant messages) into ONE "已完成 <耗时> ⌄" row — per-message collapse
+  // rows stacked up one per tool call, which read as noise. Only when the
+  // exchange has settled; streaming keeps the flat per-message layout.
+  const hasProcess = (m: ChatMessage) => inferMessageType(m) === 'assistant' && (
+    (m.contentBlocks?.some((b) => b.type === 'tool_call' || (b.type === 'thinking' && b.text.trim()))) ||
+    (!m.contentBlocks?.length && (m.toolCalls?.length ?? 0) > 0)
+  )
+  const anyStreaming = responses.some((m) => m.streaming)
+  const useMerged = !debugMode && !anyStreaming && responses.some(hasProcess)
+  const totalDuration = useMerged
+    ? responses.reduce((n, m) => n + (hasProcess(m) ? (m.durationMs ?? 0) : 0), 0)
+    : 0
+
   return (
     <div className="px-4 py-2">
       {firstAssistant && (
@@ -353,9 +367,22 @@ function ExchangeResponses({ responses, debugMode }: { responses: ChatMessage[];
           </span>
         </div>
       )}
-      {responses.map((msg) => (
-        <MessageItem key={msg.id} message={msg} debugMode={debugMode} usages={usagesByMessage.get(msg.id)} />
-      ))}
+      {useMerged ? (
+        <>
+          <ProcessCollapse durationMs={totalDuration || undefined}>
+            {responses.map((msg) => (
+              <MessageItem key={msg.id} message={msg} renderPart="process" />
+            ))}
+          </ProcessCollapse>
+          {responses.map((msg) => (
+            <MessageItem key={msg.id} message={msg} renderPart="answer" />
+          ))}
+        </>
+      ) : (
+        responses.map((msg) => (
+          <MessageItem key={msg.id} message={msg} debugMode={debugMode} usages={usagesByMessage.get(msg.id)} />
+        ))
+      )}
     </div>
   )
 }
@@ -396,8 +423,11 @@ function UsageLine({ message }: { message: ChatMessage }) {
   )
 }
 
-/** Render a single message — debug mode adds usage/context/agent badges inline */
-function MessageItem({ message, debugMode, usages }: { message: ChatMessage; debugMode?: boolean; usages?: ChatMessage[] }) {
+/** Render a single message — debug mode adds usage/context/agent badges inline.
+ *  `renderPart` splits an assistant message for ExchangeResponses' merged
+ *  process collapse: 'process' renders only thinking/tool blocks (bare, no
+ *  collapse wrapper), 'answer' only the trailing content. */
+function MessageItem({ message, debugMode, usages, renderPart }: { message: ChatMessage; debugMode?: boolean; usages?: ChatMessage[]; renderPart?: 'process' | 'answer' }) {
   const tr = useT()
   const t = inferMessageType(message)
   const isAssistant = t === 'assistant'
@@ -413,6 +443,10 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
 
   // tool_call / tool_result: always hidden (already shown inline in assistant messages)
   if (t === 'tool_call' || t === 'tool_result') return null
+
+  // Internal guard-rail warnings (the repeated-tool-call loop detector) are
+  // server-side debugging noise — never render them in the chat flow.
+  if (t === 'notification' && /called repeatedly with identical input/.test(message.content)) return null
 
   // usage: interleaved into assistant messages via turnId matching
   if (t === 'usage') return null
@@ -446,6 +480,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
   // convergeStaleStreaming). Show an explicit interrupted note instead of
   // rendering nothing (an empty settled bubble).
   if (message.interrupted && !message.content && !message.toolCalls?.length) {
+    if (renderPart === 'process') return null
     return (
       <div className="flex items-center gap-1.5 py-1">
         <AlertTriangle className="h-3 w-3 text-amber-400" />
@@ -455,6 +490,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
   }
 
   if (message.streaming && !message.content && !message.toolCalls?.length) {
+    if (renderPart === 'process') return null
     return (
       <div className="flex items-center gap-1.5 py-1">
         <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" />
@@ -464,6 +500,10 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
   }
 
   const elements: React.ReactNode[] = []
+  // Settled assistant process — kept OUT of `elements` so the merged
+  // (per-exchange) and legacy (per-message) collapse paths can both wrap it.
+  let processNodes: React.ReactNode[] | null = null
+  let answerNodes: React.ReactNode[] | null = null
 
   if (hasBlocks) {
     const blocks = message.contentBlocks!
@@ -486,20 +526,24 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
       for (let i = 0; i < blocks.length; i++) {
         const block = blocks[i]
         let el: React.ReactNode = null
+        let isProcessBlock = false
         if (block.type === 'thinking' && block.text.trim()) {
           el = <ThinkingBlock key={`b${i}`} text={block.text} />
+          isProcessBlock = true
         } else if (block.type === 'text' && block.text.trim()) {
+          // Narration text (including text interleaved BETWEEN tool calls)
+          // stays visible — only thinking + tool calls fold into the
+          // process collapse.
           el = <TextBlock key={`b${i}`} text={block.text} />
         } else if (block.type === 'tool_call') {
           toolSeen++
           el = <InlineToolCall key={`b${i}`} call={block.toolCall} isStreaming={message.streaming} isLast={toolSeen === blockToolCallCount} />
+          isProcessBlock = true
         }
-        if (el) (i <= lastProcessIdx ? processEls : answerEls).push(el)
+        if (el) (isProcessBlock ? processEls : answerEls).push(el)
       }
-      elements.push(
-        <ProcessCollapse key="process" durationMs={message.durationMs}>{processEls}</ProcessCollapse>,
-        ...answerEls,
-      )
+      processNodes = processEls
+      answerNodes = answerEls
     } else {
       let toolSeen = 0
       for (let i = 0; i < blocks.length; i++) {
@@ -529,6 +573,12 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
         }
       }
     }
+    // Safety net: blocks carry no text at all but `content` does (odd server
+    // payloads) — render the content so the reply never goes missing.
+    const anyTextBlock = blocks.some((b) => b.type === 'text' && b.text.trim())
+    if (!anyTextBlock && message.content?.trim()) {
+      (answerNodes ?? elements).push(<TextBlock key="txt-fallback" text={message.content} />)
+    }
   } else {
     // Legacy: no contentBlocks
     if (isAssistant && message.toolCalls && message.toolCalls.length > 0) {
@@ -536,7 +586,7 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
         <InlineToolCall key={`tc${i}`} call={tc} isStreaming={message.streaming} isLast={i === message.toolCalls!.length - 1} />
       ))
       if (!message.streaming && !debugMode) {
-        elements.push(<ProcessCollapse key="process" durationMs={message.durationMs}>{calls}</ProcessCollapse>)
+        processNodes = calls
       } else {
         elements.push(...calls)
       }
@@ -565,7 +615,25 @@ function MessageItem({ message, debugMode, usages }: { message: ChatMessage; deb
     }
   }
 
-  if (message.plan) elements.push(<div key="plan" className="mt-2"><TaskPlanCard plan={message.plan} /></div>)
+  if (message.plan) (answerNodes ?? elements).push(<div key="plan" className="mt-2"><TaskPlanCard plan={message.plan} /></div>)
+
+  // Split render for ExchangeResponses' merged process collapse.
+  if (renderPart === 'process') {
+    return processNodes ? <div className="py-0.5">{processNodes}</div> : null
+  }
+  if (renderPart === 'answer') {
+    const nodes = isAssistant ? (answerNodes ?? elements) : elements
+    return nodes.length > 0 ? <div className="py-1">{nodes}</div> : null
+  }
+
+  if (processNodes) {
+    return (
+      <div className="py-1">
+        <ProcessCollapse durationMs={message.durationMs}>{processNodes}</ProcessCollapse>
+        {answerNodes}
+      </div>
+    )
+  }
 
   return <div className="py-1">{elements}</div>
 }

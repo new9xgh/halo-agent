@@ -1,21 +1,19 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Circle, Loader2, XCircle, SkipForward, ChevronDown, ChevronRight, FileText, Download } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileText, Download } from 'lucide-react'
 import { useChatStore } from '@/features/chat/chat-store'
 import { useProjectStore } from '@/shared/stores/project-store'
 import { api } from '@/shared/api-client'
 import { useSessionBus } from '@/shared/session-bus'
-import type { ChatMessage, TaskNodeStatus } from '@/shared/types'
-import { cn } from '@/shared/utils'
+import type { ChatMessage } from '@/shared/types'
 import { useT } from '@/shared/i18n'
 
 /**
- * Canvas 概览 view (WorkBuddy-style): 任务进程 — the current session's latest
- * task plan as a checklist; 产物 — files the session produced, collected from
- * plan task results (filesChanged) and file_write/file_edit tool calls.
- * Clicking an artifact opens it in the canvas preview view (onOpenArtifact);
- * the download button stays as a secondary action.
+ * Canvas 概览 view: 产物 — files the current session produced, collected from
+ * plan task results (filesChanged) and write-ish tool calls. Clicking an
+ * artifact opens it in the canvas preview view (onOpenArtifact); the download
+ * button stays as a secondary action.
  */
 export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: string) => void }) {
   const t = useT()
@@ -28,19 +26,38 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
 
   // The in-memory chat log only holds the recent tail (older turns load on
   // scroll / were never in the subscribe snapshot) — computed from it alone,
-  // plans and artifacts from earlier turns vanish after a session switch.
-  // The overview therefore pulls the FULL active log itself; refetch on
-  // session switch and whenever a turn settles (session bus bump).
+  // artifacts from earlier turns vanish after a session switch. The overview
+  // therefore pulls the FULL log itself: the active log PLUS every archived
+  // segment (auto-compact moves older turns — often exactly the file-writing
+  // ones — into archive segments, which is why a page refresh used to empty
+  // the panel). Refetch on session switch and whenever a turn settles
+  // (session bus bump).
   useEffect(() => {
-    if (!sessionId || !projectPath) { setLogMessages([]); return }
+    if (!sessionId || !projectPath || !projectId) { setLogMessages([]); return }
     let cancelled = false
-    api.sessionLogs.get(sessionId, projectPath)
-      .then((res) => {
-        if (!cancelled) setLogMessages((res as { messages?: ChatMessage[] }).messages ?? [])
-      })
-      .catch(() => { if (!cancelled) setLogMessages([]) })
+    void (async () => {
+      try {
+        const res = await api.sessionLogs.get(sessionId, projectPath) as { messages?: ChatMessage[]; archiveCount?: number }
+        const archiveCount = typeof res.archiveCount === 'number' ? res.archiveCount : 0
+        const all: ChatMessage[] = []
+        if (archiveCount > 0) {
+          const segments = await Promise.all(
+            Array.from({ length: archiveCount }, (_, i) =>
+              api.sessionLogs.archiveSegment(sessionId, i + 1, projectId)
+                .then((r) => (r as { messages?: ChatMessage[] }).messages ?? [])
+                .catch(() => [] as ChatMessage[]),
+            ),
+          )
+          for (const seg of segments) all.push(...seg)
+        }
+        all.push(...(res.messages ?? []))
+        if (!cancelled) setLogMessages(all)
+      } catch {
+        if (!cancelled) setLogMessages([])
+      }
+    })()
     return () => { cancelled = true }
-  }, [sessionId, projectPath, busVersion])
+  }, [sessionId, projectPath, projectId, busVersion])
 
   // Full log + live tail (live wins by id — it covers turns after the fetch).
   const allMessages = useMemo(() => {
@@ -49,14 +66,6 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
     return [...logMessages.filter((m) => !liveIds.has(m.id)), ...messages]
   }, [logMessages, messages])
 
-  // Latest plan wins — plans revise as the agent works.
-  const plan = useMemo(() => {
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      if (allMessages[i].plan) return allMessages[i].plan
-    }
-    return null
-  }, [allMessages])
-
   const artifacts = useMemo(() => {
     const paths: string[] = []
     const seen = new Set<string>()
@@ -64,12 +73,17 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
     // MCP tools / doc generators), so instead of an exact allowlist we match
     // write-ish tool names and accept any input field that looks like a file
     // path (has an extension). Read-only tools (file_read etc.) are excluded
-    // by the name filter.
+    // by the name filter. NOTE: some tools pass the path as the RAW input
+    // string (not JSON) — the catch branch covers those.
     const WRITEISH = /write|edit|create|patch|save|export|generate|render|build|make/i
     const PATH_KEYS = new Set(['path', 'file', 'filePath', 'file_path', 'filename', 'output', 'outputPath', 'output_path', 'target'])
+    const wsRoot = projectPath?.replace(/\\/g, '/')
     const add = (v: unknown) => {
       if (typeof v !== 'string') return
-      const s = v.trim()
+      // Normalize: forward slashes, and strip the workspace root so the
+      // preview/download APIs (workspace-relative) work on absolute paths.
+      let s = v.trim().replace(/\\/g, '/')
+      if (wsRoot && s.startsWith(`${wsRoot}/`)) s = s.slice(wsRoot.length + 1)
       if (!s || s.length > 200 || !/\.[a-z0-9]{1,8}$/i.test(s)) return
       if (seen.has(s)) return
       seen.add(s)
@@ -86,7 +100,7 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
     }
     const addToolInput = (name: string, input: string) => {
       if (!WRITEISH.test(name)) return
-      try { scanValue(JSON.parse(input)) } catch { /* non-JSON input — skip */ }
+      try { scanValue(JSON.parse(input)) } catch { add(input) }
     }
     for (const m of allMessages) {
       if (m.plan) {
@@ -100,9 +114,9 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
       for (const tc of m.toolCalls ?? []) addToolInput(tc.name, tc.input)
     }
     return paths
-  }, [allMessages])
+  }, [allMessages, projectPath])
 
-  if (!plan && artifacts.length === 0) {
+  if (artifacts.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-[var(--muted-foreground)]">
         <FileText className="h-8 w-8" />
@@ -113,59 +127,33 @@ export function CanvasOverview({ onOpenArtifact }: { onOpenArtifact?: (path: str
 
   return (
     <div className="flex flex-col py-1">
-      <Section title={t('canvas.taskProgress')} count={plan?.tasks.length}>
-        {plan ? (
-          <div className="flex flex-col gap-0.5 px-2 pb-2">
-            {plan.tasks.map((task) => (
-              <div key={task.id} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
-                <TaskStatusIcon status={task.status} />
-                <span className={cn(
-                  'min-w-0 flex-1 text-xs leading-relaxed',
-                  task.status === 'completed' || task.status === 'skipped'
-                    ? 'text-[var(--muted-foreground)]'
-                    : 'text-[var(--foreground)]',
-                )}>
-                  {task.name}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="px-5 pb-2 text-[11px] text-[var(--muted-foreground)]">{t('canvas.empty')}</p>
-        )}
-      </Section>
-
       <Section title={t('canvas.artifacts')} count={artifacts.length}>
-        {artifacts.length > 0 ? (
-          <div className="flex flex-col gap-0.5 px-2 pb-2">
-            {artifacts.map((p) => (
-              <div
-                key={p}
-                onClick={() => onOpenArtifact?.(p)}
-                className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--secondary)]"
-                title={p}
-              >
-                <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
-                <span className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)]">
-                  {p.split('/').pop()}
-                </span>
-                {projectId && (
-                  <a
-                    href={api.files.downloadUrl(p, projectId)}
-                    download={p.split('/').pop()}
-                    title={t('ui.download')}
-                    onClick={(e) => e.stopPropagation()}
-                    className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:text-[var(--foreground)] group-hover:opacity-100"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </a>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="px-5 pb-2 text-[11px] text-[var(--muted-foreground)]">{t('canvas.empty')}</p>
-        )}
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {artifacts.map((p) => (
+            <div
+              key={p}
+              onClick={() => onOpenArtifact?.(p)}
+              className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--secondary)]"
+              title={p}
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)]">
+                {p.split('/').pop()}
+              </span>
+              {projectId && (
+                <a
+                  href={api.files.downloadUrl(p, projectId)}
+                  download={p.split('/').pop()}
+                  title={t('ui.download')}
+                  onClick={(e) => e.stopPropagation()}
+                  className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:text-[var(--foreground)] group-hover:opacity-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
       </Section>
     </div>
   )
@@ -186,19 +174,4 @@ function Section({ title, count, children }: { title: string; count?: number; ch
       {open && children}
     </div>
   )
-}
-
-function TaskStatusIcon({ status }: { status: TaskNodeStatus }) {
-  switch (status) {
-    case 'completed':
-      return <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-    case 'running':
-      return <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />
-    case 'failed':
-      return <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
-    case 'skipped':
-      return <SkipForward className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
-    default:
-      return <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
-  }
 }
